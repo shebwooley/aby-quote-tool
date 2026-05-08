@@ -162,18 +162,19 @@
   }
 
   // -------------------------------------------------------------
-  // Effective date dropdown — next 18 first-of-month dates
+  // Effective date dropdown — date-aware
+  // - Lists the 1st of each month from the current month through MAX_EFFECTIVE_DATE.
+  // - A past 1st-of-month drops off 15 days after the effective date
+  //   (e.g. June 1 disappears on June 16 — June 15 is still valid).
+  // - To extend past the current cap, just update MAX_EFFECTIVE_DATE below.
   // -------------------------------------------------------------
+
+  // YEAR-END NOTE: update this date once a year (e.g. to '2027-12-01' after Dec 2026).
+  var MAX_EFFECTIVE_DATE = '2026-12-01';
 
   function buildEffectiveDateOptions() {
     if (!dateSelectEl) return;
     dateSelectEl.innerHTML = '';
-
-    var today = new Date();
-    var year = today.getFullYear();
-    var month = today.getMonth();
-    if (today.getDate() !== 1) month += 1;
-    if (month > 11) { month = 0; year += 1; }
 
     var placeholder = document.createElement('option');
     placeholder.value = '';
@@ -184,16 +185,31 @@
 
     var monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
-    for (var i = 0; i < 18; i++) {
-      var m = month + i;
-      var y = year;
-      while (m > 11) { m -= 12; y += 1; }
-      var iso = y + '-' + String(m + 1).padStart(2, '0') + '-01';
-      var label = monthNames[m] + ' 1, ' + y;
-      var opt = document.createElement('option');
-      opt.value = iso;
-      opt.textContent = label;
-      dateSelectEl.appendChild(opt);
+    var now = new Date();
+    var todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    var endParts = MAX_EFFECTIVE_DATE.split('-');
+    var endDate = new Date(Number(endParts[0]), Number(endParts[1]) - 1, Number(endParts[2]));
+
+    // Iterate from the 1st of the current month forward
+    var iter = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    while (iter <= endDate) {
+      // Cutoff: this 1st-of-month is valid up to and including the 15th
+      // (i.e. drop it once today >= the 16th of that month)
+      var cutoff = new Date(iter.getFullYear(), iter.getMonth(), 16);
+      if (todayMidnight < cutoff) {
+        var y = iter.getFullYear();
+        var m = iter.getMonth();
+        var iso = y + '-' + String(m + 1).padStart(2, '0') + '-01';
+        var label = monthNames[m] + ' 1, ' + y;
+        var opt = document.createElement('option');
+        opt.value = iso;
+        opt.textContent = label;
+        dateSelectEl.appendChild(opt);
+      }
+      // Advance to next month (Date handles year rollover)
+      iter.setMonth(iter.getMonth() + 1);
     }
   }
 
@@ -267,14 +283,52 @@
 
     outputEl.innerHTML =
       '<div class="output-toolbar no-print">' +
-      '  <button type="button" class="print" id="printBtn">Print / Save as PDF</button>' +
+      '  <button type="button" class="primary" id="pdfBtn">Download PDF</button>' +
+      '  <button type="button" class="secondary" id="printBtn">Print</button>' +
       '</div>' +
       '<div class="quote">' + html + '</div>';
 
     var printBtn = document.getElementById('printBtn');
     if (printBtn) printBtn.addEventListener('click', function () { window.print(); });
 
+    var pdfBtn = document.getElementById('pdfBtn');
+    if (pdfBtn) pdfBtn.addEventListener('click', function () { downloadQuoteAsPdf(form, quoteNumber); });
+
     outputEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // -------------------------------------------------------------
+  // Download PDF (via html2pdf — no browser print headers/footers)
+  // -------------------------------------------------------------
+
+  function downloadQuoteAsPdf(form, quoteNumber) {
+    if (typeof html2pdf === 'undefined') {
+      alert('PDF library is loading — please try again in a moment.');
+      return;
+    }
+    var element = outputEl.querySelector('.quote');
+    if (!element) return;
+
+    var clientPart = (form.clientName || 'Quote').replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, ' ');
+    var filename = clientPart + ' - ' + quoteNumber + '.pdf';
+
+    // Hide internal-only elements (warning banner) from the PDF output
+    var hiddenEls = element.querySelectorAll('.no-print');
+    hiddenEls.forEach(function (el) { el.style.display = 'none'; });
+
+    var opt = {
+      margin:       [0.4, 0.5, 0.5, 0.5],
+      filename:     filename,
+      image:        { type: 'jpeg', quality: 0.98 },
+      html2canvas:  { scale: 2, useCORS: true, logging: false },
+      jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' },
+      pagebreak:    { mode: ['css', 'legacy'] }
+    };
+
+    html2pdf().set(opt).from(element).save().then(function () {
+      // Restore the hidden elements after PDF generation
+      hiddenEls.forEach(function (el) { el.style.display = ''; });
+    });
   }
 
   function resetForm() {
@@ -288,6 +342,28 @@
     outputEl.innerHTML = '';
   }
 
+
+  // -------------------------------------------------------------
+  // Phone number auto-format: any 10-digit input becomes (XXX) XXX-XXXX
+  // -------------------------------------------------------------
+
+  function formatPhone(raw) {
+    if (!raw) return '';
+    var digits = String(raw).replace(/\D/g, '');
+    if (digits.length === 11 && digits[0] === '1') digits = digits.slice(1);
+    if (digits.length !== 10) return raw; // leave untouched if not 10 digits
+    return '(' + digits.slice(0, 3) + ') ' + digits.slice(3, 6) + '-' + digits.slice(6);
+  }
+
+  function attachPhoneFormatters() {
+    var inputs = formEl.querySelectorAll('input[type="tel"]');
+    inputs.forEach(function (input) {
+      input.addEventListener('blur', function () {
+        input.value = formatPhone(input.value);
+      });
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
     productListEl = document.getElementById('productList');
     formEl = document.getElementById('quoteForm');
@@ -298,6 +374,7 @@
     buildProductList();
     buildRepSelector();
     buildEffectiveDateOptions();
+    attachPhoneFormatters();
 
     formEl.addEventListener('submit', generateQuote);
     var resetBtn = document.getElementById('resetBtn');

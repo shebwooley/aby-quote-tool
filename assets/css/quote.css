@@ -348,14 +348,21 @@
 /* ----- Cross-sell page: "Additional Services ABY Offers" ----- */
 
 .additional-services {
-  margin-top: 32px;
-  padding-top: 24px;
+  margin-top: 24px;
+  padding-top: 0;
 }
 
 .additional-services h2 {
-  text-align: center;
+  text-align: left;
   font-size: 22px;
+  margin-top: 0;
   margin-bottom: 6px;
+}
+
+@media print {
+  .additional-services {
+    margin-top: 0;
+  }
 }
 
 .cross-sell-intro {

@@ -262,7 +262,8 @@ ABYQuote.renderer = (function () {
     if (fees.length === 0) return '';
     var rows = fees.map(function (f) {
       var amt = (f.amount === 0) ? 'Included' : u.money(f.amount);
-      var unit = f.unit ? ' <span class="fee-unit">' + u.escapeHtml(f.unit) + '</span>' : '';
+      // Suppress the "per X" unit when the fee is included at no charge
+      var unit = (f.amount !== 0 && f.unit) ? ' <span class="fee-unit">' + u.escapeHtml(f.unit) + '</span>' : '';
       var mainRow = '<tr class="fee-row"><td>' + u.escapeHtml(f.label) + '</td>' +
                     '<td class="fee-amount">' + amt + unit + '</td></tr>';
       var descRow = '';

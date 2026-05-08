@@ -31,9 +31,9 @@ ABYQuote.pricing = {
     pop: {
       type: 'package',
       packages: {
-        docsOnly: { annualFee: 99,  commissionable: false, description: 'POP plan documents only — no testing' },
-        popHsa:   { setupFee: 350,  renewalFee: 350,       description: 'POP plan documents + annual NDT for POP & HSA' },
-        full:     { setupFee: 550,  renewalFee: 550,       description: 'POP plan documents + annual NDT for POP, FSA, LFSA, DCAP & HSA' }
+        docsOnly: { annualFee: 99,  commissionable: false, description: 'POP plan doc only — no testing' },
+        popHsa:   { setupFee: 350,  renewalFee: 350,       description: 'POP plan doc + annual NDT for POP & HSA' },
+        full:     { setupFee: 550,  renewalFee: 550,       description: 'POP plan doc + annual NDT for POP, FSA, LFSA, DCAP & HSA' }
       },
       additionalFees: [
         { label: 'Additional NDT (after first set per year)', amount: 250, unit: 'per additional test', description: '' },
@@ -204,9 +204,9 @@ ABYQuote.pricing = {
     pop: {
       type: 'package',
       packages: {
-        docsOnly: { annualFee: 99,  commissionable: false, description: 'POP plan documents only — no testing' },
-        popHsa:   { setupFee: 325,  renewalFee: 325,       description: 'POP plan documents + annual NDT for POP & HSA' },
-        full:     { setupFee: 500,  renewalFee: 500,       description: 'POP plan documents + annual NDT for POP, FSA, LFSA, DCAP & HSA' }
+        docsOnly: { annualFee: 99,  commissionable: false, description: 'POP plan doc only — no testing' },
+        popHsa:   { setupFee: 325,  renewalFee: 325,       description: 'POP plan doc + annual NDT for POP & HSA' },
+        full:     { setupFee: 500,  renewalFee: 500,       description: 'POP plan doc + annual NDT for POP, FSA, LFSA, DCAP & HSA' }
       },
       additionalFees: [
         { label: 'Additional NDT (after first set per year)', amount: 250, unit: 'per additional test', description: '' },
