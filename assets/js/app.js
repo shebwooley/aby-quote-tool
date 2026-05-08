@@ -306,29 +306,40 @@
       alert('PDF library is loading — please try again in a moment.');
       return;
     }
-    var element = outputEl.querySelector('.quote');
-    if (!element) return;
+    var liveQuote = outputEl.querySelector('.quote');
+    if (!liveQuote) return;
+
+    // Clone the quote element so modifications don't affect the live preview.
+    // Working on a clone also avoids html2pdf measurement quirks that produce
+    // blank pages at the start when display:none toggles happen on live DOM.
+    var element = liveQuote.cloneNode(true);
+
+    // Remove (not just hide) elements that shouldn't appear in the PDF.
+    var hiddenEls = element.querySelectorAll('.no-print');
+    hiddenEls.forEach(function (el) { el.parentNode && el.parentNode.removeChild(el); });
+
+    // Strip screen-only chrome — these were creating phantom spacing that
+    // html2pdf misread as a full blank page at the top.
+    element.style.boxShadow = 'none';
+    element.style.border = 'none';
+    element.style.borderRadius = '0';
+    element.style.padding = '0';
+    element.style.margin = '0';
+    element.style.background = '#fff';
 
     var clientPart = (form.clientName || 'Quote').replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, ' ');
     var filename = clientPart + ' - ' + quoteNumber + '.pdf';
 
-    // Hide internal-only elements (warning banner) from the PDF output
-    var hiddenEls = element.querySelectorAll('.no-print');
-    hiddenEls.forEach(function (el) { el.style.display = 'none'; });
-
     var opt = {
-      margin:       [0.4, 0.5, 0.5, 0.5],
+      margin:       [0.5, 0.5, 0.5, 0.5],
       filename:     filename,
       image:        { type: 'jpeg', quality: 0.98 },
-      html2canvas:  { scale: 2, useCORS: true, logging: false },
+      html2canvas:  { scale: 2, useCORS: true, logging: false, scrollY: 0 },
       jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' },
-      pagebreak:    { mode: ['css', 'legacy'] }
+      pagebreak:    { mode: ['css', 'legacy'], before: '.page-break-before' }
     };
 
-    html2pdf().set(opt).from(element).save().then(function () {
-      // Restore the hidden elements after PDF generation
-      hiddenEls.forEach(function (el) { el.style.display = ''; });
-    });
+    html2pdf().set(opt).from(element).save();
   }
 
   function resetForm() {
