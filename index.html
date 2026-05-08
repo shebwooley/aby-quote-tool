@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ABY Quote Tool — Texas</title>
+  <link rel="stylesheet" href="assets/css/app.css">
+  <link rel="stylesheet" href="assets/css/quote.css">
+  <link rel="stylesheet" href="assets/css/print.css" media="print">
+</head>
+<body>
+
+<div class="app-shell">
+
+  <header class="app-header">
+    <div>
+      <h1>ABY Quote Tool <span class="state-tag">Texas</span></h1>
+      <div class="subtitle">Generate a client-ready proposal</div>
+    </div>
+  </header>
+
+  <form id="quoteForm">
+
+    <!-- ============== Client + effective date ============== -->
+    <section class="form-section">
+      <h2>Client</h2>
+      <div class="field-grid">
+        <label class="field">
+          Client name <span class="required-mark">*</span>
+          <input type="text" name="clientName" required placeholder="ACME Corporation">
+        </label>
+        <label class="field">
+          Effective date <span class="required-mark">*</span>
+          <select name="effectiveDate" id="effectiveDateSelect" required>
+            <!-- populated by app.js with the next 18 first-of-month dates -->
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <!-- ============== Broker ============== -->
+    <section class="form-section">
+      <h2>Broker</h2>
+      <div class="field-grid">
+        <label class="field">
+          Broker name
+          <input type="text" name="brokerName" placeholder="Jane Smith">
+        </label>
+        <label class="field">
+          Agency name
+          <input type="text" name="brokerAgency" placeholder="A Benefit Source">
+        </label>
+        <label class="field">
+          Phone
+          <input type="tel" name="brokerPhone" placeholder="(555) 123-4567">
+        </label>
+        <label class="field">
+          Email
+          <input type="email" name="brokerEmail" placeholder="jane@brokerage.com">
+        </label>
+        <label class="field">
+          Broker logo (optional)
+          <input type="file" name="brokerLogo" accept="image/*">
+          <span class="helper-text">Appears top-right of the quote.</span>
+        </label>
+      </div>
+    </section>
+
+    <!-- ============== ABY rep ============== -->
+    <section class="form-section">
+      <h2>ABY Sales Representative</h2>
+      <div class="rep-selector" id="repSelector">
+        <!-- populated by app.js from ABYQuote.salesReps -->
+      </div>
+      <div class="field-grid three" style="margin-top: 12px;">
+        <label class="field">
+          Name
+          <input type="text" name="repName" id="repName">
+        </label>
+        <label class="field">
+          Phone
+          <input type="tel" name="repPhone" id="repPhone">
+        </label>
+        <label class="field">
+          Email
+          <input type="email" name="repEmail" id="repEmail">
+        </label>
+      </div>
+      <div class="helper-text">Pick a rep above to auto-fill these fields. You can still edit them manually.</div>
+    </section>
+
+    <!-- ============== Products ============== -->
+    <section class="form-section">
+      <h2>Products</h2>
+      <div id="productList" class="product-list">
+        <!-- populated by app.js from ABYQuote.products -->
+      </div>
+    </section>
+
+    <!-- ============== Commission toggle ============== -->
+    <section class="form-section">
+      <div class="commission-toggle">
+        <div class="toggle-row">
+          <input type="checkbox" id="commissionIncluded" name="commissionIncluded" checked>
+          <label for="commissionIncluded">Include broker commission in quote</label>
+        </div>
+        <div class="helper-text">
+          When checked, quoted prices include standard commission. Uncheck to use no-commission rates (when available).
+          The commission status is encoded in the quote number suffix (-C or -NC) but not explained on the printed quote.
+        </div>
+      </div>
+    </section>
+
+    <!-- ============== Actions ============== -->
+    <div class="actions">
+      <button type="submit" class="primary">Generate Quote</button>
+      <button type="button" class="secondary" id="resetBtn">Reset Form</button>
+    </div>
+  </form>
+
+  <!-- ============== Quote output ============== -->
+  <div id="quoteOutput" class="output-shell"></div>
+
+</div>
+
+<!-- Data, in load order -->
+<script src="assets/js/data/products.js"></script>
+<script src="assets/js/data/pricing.js"></script>
+<script src="assets/js/data/language.js"></script>
+<script src="assets/js/data/reps.js"></script>
+
+<!-- Library, in dependency order -->
+<script src="assets/js/lib/utils.js"></script>
+<script src="assets/js/lib/engine.js"></script>
+<script src="assets/js/lib/renderer.js"></script>
+
+<!-- Controller -->
+<script src="assets/js/app.js"></script>
+
+</body>
+</html>
