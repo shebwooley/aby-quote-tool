@@ -1,0 +1,429 @@
+/* ABY Quote Tool — Quote document styling
+   Used both inside the broker-facing app and (later) for standalone HTML downloads.
+*/
+
+.quote {
+  background: #fff;
+  border: 1px solid var(--aby-border, #d1d5db);
+  border-radius: var(--aby-radius, 10px);
+  padding: 56px 56px 48px;
+  font-family: 'Georgia', 'Cambria', 'Times New Roman', serif;
+  color: #1f2937;
+  line-height: 1.55;
+  font-size: 14.5px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+
+.quote h1, .quote h2, .quote h3, .quote h4 {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #1f4e8b;
+  letter-spacing: -0.01em;
+}
+
+.quote h1 { font-size: 26px; margin: 0 0 8px; font-weight: 600; }
+.quote h2 { font-size: 18px; margin: 28px 0 10px; font-weight: 600; }
+.quote h3 { font-size: 15px; margin: 22px 0 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: #143b6b; }
+.quote h4 { font-size: 14px; margin: 16px 0 6px; font-weight: 600; }
+.quote p { margin: 0 0 10px; }
+.quote ul { margin: 0 0 10px 0; padding-left: 22px; }
+.quote ul li { margin-bottom: 4px; }
+
+/* ----- Quote header ----- */
+
+.quote-header {
+  border-bottom: 1px solid #d1d5db;
+  padding-bottom: 24px;
+  margin-bottom: 24px;
+}
+
+.quote-header .logo-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  min-height: 48px;
+}
+
+.aby-logo img {
+  max-height: 72px;
+  max-width: 240px;
+  object-fit: contain;
+  display: block;
+}
+
+.broker-logo {
+  max-height: 56px;
+  max-width: 200px;
+  object-fit: contain;
+}
+
+.quote-title {
+  text-align: center;
+  margin: 8px 0 14px;
+  font-size: 28px;
+  color: #1f4e8b;
+}
+
+.quote-client {
+  text-align: center;
+  margin: 6px 0 22px;
+}
+
+.quote-client .client-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+  color: #6b7280;
+  font-weight: 600;
+  margin-bottom: 4px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.quote-client .client-name {
+  font-size: 24px;
+  font-weight: 700;
+  color: #143b6b;
+  letter-spacing: -0.01em;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.quote-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 4px 24px;
+  margin-bottom: 18px;
+}
+
+.meta-row { font-size: 14px; text-align: center; }
+.meta-label {
+  color: #6b7280;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: block;
+}
+.meta-value {
+  font-weight: 500;
+  color: #1f2937;
+}
+
+.party-blocks {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-top: 18px;
+}
+
+.party-block {
+  background: #f8fafd;
+  border: 1px solid #e5eaf2;
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 13.5px;
+  text-align: center;
+}
+
+.party-label {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 11px;
+  color: #6b7280;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.party-name {
+  font-weight: 600;
+  color: #1f4e8b;
+  font-size: 15px;
+  margin-bottom: 2px;
+}
+
+/* ----- Proposal contents (TOC) ----- */
+
+.proposal-contents {
+  background: #f8fafd;
+  border: 1px solid #e5eaf2;
+  border-radius: 8px;
+  padding: 14px 18px;
+  margin-bottom: 24px;
+}
+.proposal-contents h2 { margin-top: 0; }
+.proposal-contents ul { margin: 6px 0 0; }
+
+/* ----- About ABY (shaded box, rounded — per spec) ----- */
+
+.boxed {
+  background: #f1f4fa;
+  border-radius: 12px;
+  padding: 22px 26px;
+  margin: 24px 0;
+}
+
+.about-aby h3 {
+  margin-top: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 13px;
+  color: #143b6b;
+}
+
+/* ----- Standard services ----- */
+
+.standard-services { margin: 24px 0; }
+
+/* ----- Per-product blocks ----- */
+
+.product-block {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid #e5eaf2;
+}
+
+.product-block:first-of-type { border-top: none; }
+
+.product-overview h2 { color: #143b6b; }
+
+/* ----- Pricing tables ----- */
+
+.pricing-table-wrap { margin-top: 16px; }
+
+.pricing-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+.pricing-table td {
+  padding: 8px 10px;
+  border-top: 1px solid #e5eaf2;
+  vertical-align: top;
+}
+
+.pricing-table tr:first-child td { border-top: none; }
+
+.pricing-table .row-label {
+  width: 50%;
+  color: #1f2937;
+  font-weight: 500;
+}
+
+.pricing-table .row-value {
+  font-weight: 600;
+  color: #143b6b;
+}
+
+.pricing-table .row-cadence {
+  color: #6b7280;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: right;
+  width: 100px;
+  white-space: nowrap;
+}
+
+.pricing-table .tier-note {
+  font-size: 12.5px;
+  color: #6b7280;
+  font-weight: 400;
+  font-style: italic;
+}
+
+.pricing-table .breakdown-row td {
+  border-top: none;
+  padding-top: 0;
+  color: #6b7280;
+  font-size: 12.5px;
+}
+
+.pricing-table .count-summary-row td {
+  border-top: none;
+  padding-top: 2px;
+  padding-bottom: 8px;
+  color: #143b6b;
+  font-size: 13px;
+}
+
+.product-notes {
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: #f8fafd;
+  border-left: 3px solid #2c7be5;
+  border-radius: 0 6px 6px 0;
+  font-size: 13px;
+  color: #1f2937;
+}
+
+.product-notes p { margin: 0 0 4px; }
+.product-notes p:last-child { margin-bottom: 0; }
+
+/* ----- Additional services fee schedule ----- */
+
+.additional-fees {
+  margin-top: 16px;
+  border: 1px solid #e5eaf2;
+  border-radius: 8px;
+  padding: 0 14px;
+}
+
+.additional-fees summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #143b6b;
+  padding: 12px 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.additional-fees-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 12px;
+  font-size: 13.5px;
+}
+
+.additional-fees-table td {
+  padding: 6px 0;
+  border-top: 1px solid #eef1f7;
+  vertical-align: top;
+}
+
+.additional-fees-table tr:first-child td { border-top: none; }
+
+.additional-fees-table .fee-amount {
+  text-align: right;
+  font-weight: 600;
+  color: #143b6b;
+  white-space: nowrap;
+  width: 200px;
+}
+
+.additional-fees-table .fee-unit {
+  font-weight: 400;
+  color: #6b7280;
+  font-style: italic;
+  font-size: 12.5px;
+  margin-left: 4px;
+}
+
+/* ----- Disclaimer ----- */
+
+.disclaimer {
+  margin-top: 32px;
+  padding-top: 18px;
+  border-top: 1px solid #d1d5db;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.disclaimer h2 {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+  color: #143b6b;
+}
+
+.disclaimer .fee-guarantee {
+  margin-top: 12px;
+  font-size: 14px;
+  color: #1f4e8b;
+}
+
+/* ----- Additional fees: descriptions ----- */
+
+.additional-fees-table .fee-description-row td {
+  padding: 0 0 8px 0;
+  border-top: none;
+  font-size: 12.5px;
+  color: #6b7280;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+/* ----- Cross-sell page: "Additional Services ABY Offers" ----- */
+
+.additional-services {
+  margin-top: 24px;
+  padding-top: 0;
+}
+
+.additional-services h2 {
+  text-align: left;
+  font-size: 22px;
+  margin-top: 0;
+  margin-bottom: 6px;
+}
+
+@media print {
+  .additional-services {
+    margin-top: 0;
+  }
+}
+
+.cross-sell-intro {
+  text-align: left;
+  color: #4b5563;
+  margin: 0 0 22px;
+}
+
+.cross-sell-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.cross-sell-card {
+  background: #f8fafd;
+  border: 1px solid #e5eaf2;
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+
+.cross-sell-card h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: #143b6b;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+}
+
+.cross-sell-card p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #1f2937;
+}
+
+@media (max-width: 640px) {
+  .cross-sell-grid { grid-template-columns: 1fr; }
+}
+
+.page-break-before { page-break-before: always; }
+
+/* ----- Internal warning banner (broker-only) ----- */
+
+.quote-warnings {
+  background: #fff4e5;
+  border: 1px solid #f5c889;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  color: #7c4a00;
+}
+.quote-warnings h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: #7c4a00;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.quote-warnings ul { margin: 0; padding-left: 18px; }
+.quote-warnings li { margin-bottom: 3px; }

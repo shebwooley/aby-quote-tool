@@ -1,0 +1,83 @@
+/* ABY Quote Tool — Print styles
+   When the user prints (Cmd/Ctrl+P or the Print button), only the quote shows.
+   The form, app shell, internal warnings, and toolbars are hidden.
+*/
+
+@media print {
+  @page {
+    size: letter;
+    margin: 0.5in 0.5in 0.5in 0.5in;
+  }
+
+  body {
+    background: #fff;
+    font-size: 11.5pt;
+  }
+
+  /* Hide everything except the quote document */
+  .app-header,
+  form,
+  .output-toolbar,
+  .actions,
+  .commission-toggle,
+  .no-print,
+  .quote-warnings {
+    display: none !important;
+  }
+
+  .app-shell {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .output-shell {
+    margin-top: 0;
+  }
+
+  /* The quote itself: drop the card chrome, fill the page */
+  .quote {
+    box-shadow: none;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    background: transparent;
+    font-size: 11pt;
+    line-height: 1.45;
+  }
+
+  .quote h1 { font-size: 22pt; }
+  .quote h2 { font-size: 14pt; margin-top: 20pt; }
+  .quote h3 { font-size: 11pt; margin-top: 14pt; }
+
+  /* Encourage page breaks at sensible places */
+  .product-block { page-break-inside: avoid; }
+  .pricing-table-wrap { page-break-inside: avoid; }
+  .about-aby { page-break-inside: avoid; }
+  .standard-services { page-break-inside: avoid; }
+  .disclaimer { page-break-inside: avoid; }
+
+  /* Don't break inside tables */
+  .pricing-table, .additional-fees-table {
+    page-break-inside: avoid;
+  }
+
+  /* Open the additional-fees details so they print */
+  .additional-fees[open] summary,
+  .additional-fees summary {
+    list-style: none;
+  }
+  .additional-fees::-webkit-details-marker { display: none; }
+  details { display: block !important; }
+  details > * { display: revert !important; }
+
+  /* Backgrounds need to print */
+  .boxed,
+  .party-block,
+  .proposal-contents,
+  .product-notes,
+  .additional-fees {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
