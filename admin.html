@@ -195,10 +195,33 @@ function detailHTML(q, products) {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
+// Short name lookup — keyed by product id, with optional package sub-lookup
+const PRODUCT_SHORT = {
+  pop: { default: 'POP', packages: { docsOnly: 'POP Docs', popHsa: 'POP + NDT (HSA)', full: 'POP + NDT (FSA/HSA)' } },
+  fsa:              'FSA / DCAP / LFSA',
+  hsa:              'HSA',
+  hra:              'HRA',
+  ichra:            'ICHRA / QSEHRA',
+  cobra:            'COBRA',
+  stateContinuation:'State Continuation',
+  erisa:            'ERISA Wrap',
+  aca:              'ACA Reporting',
+};
+
+function shortProductName(p) {
+  if (typeof p === 'string') return p;
+  const entry = PRODUCT_SHORT[p.id];
+  if (!entry) return p.name || p.id || '?';
+  if (typeof entry === 'string') return entry;
+  // Has package sub-lookup (e.g. POP)
+  const pkgVal = p.inputs && (p.inputs.package || p.inputs[p.id + '-package'] || Object.values(p.inputs)[0]);
+  return (pkgVal && entry.packages[pkgVal]) || entry.default || p.name || p.id;
+}
+
 function parseProducts(raw) {
   try {
     const arr = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
-    return arr.map(p => p.name || p.id || String(p)).filter(Boolean);
+    return arr.map(p => shortProductName(p)).filter(Boolean);
   } catch { return []; }
 }
 
