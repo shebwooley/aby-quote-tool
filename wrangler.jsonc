@@ -11,9 +11,14 @@
   },
 
   // Static assets — "binding" exposes them to the worker as env.ASSETS
+  // run_worker_first: true ensures ALL requests hit the worker's fetch handler
+  // before Cloudflare's asset router can intercept them. Without this, any file
+  // in the assets directory (e.g. admin.html) would be served directly, bypassing
+  // withAuth() entirely.
   "assets": {
     "directory": ".",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    "run_worker_first": true
   },
 
   "compatibility_flags": [
