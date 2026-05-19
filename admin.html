@@ -114,7 +114,7 @@ async function load(q = '') {
     render();
   } catch (e) {
     document.getElementById('tbody').innerHTML =
-      `<tr><td colspan="7" class="loading" style="color:#c0392b">Failed to load quotes. Refresh to try again.</td></tr>`;
+      `<tr><td colspan="7" class="loading" style="color:#c0392b">Failed to load quotes (${e.message}). Refresh to try again.</td></tr>`;
   }
 }
 
