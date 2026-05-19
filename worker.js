@@ -285,8 +285,9 @@ async function withAuth(request, env, handler) {
     return handler();
   }
 
-  // Not logged in — show login page
+  // Not logged in — show login page (401 so admin.html can detect and redirect)
   return new Response(loginHTML(), {
+    status: 401,
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
   });
 }
