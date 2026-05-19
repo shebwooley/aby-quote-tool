@@ -218,9 +218,9 @@ async function sendEmail(env, { quoteNumber, clientName, effectiveDate, brokerNa
   </div>
 </body></html>`;
 
-  // Send to the rep; always CC eric@comedyce.com
-  const repTo  = (repEmail && repEmail.includes('@')) ? repEmail : 'eric@comedyce.com';
-  const ccList = repTo !== 'eric@comedyce.com' ? ['eric@comedyce.com'] : [];
+  // Send to eric@comedyce.com for now — expand once domain is verified in Resend
+  const repTo  = 'eric@comedyce.com';
+  const ccList = [];
 
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
