@@ -30,14 +30,12 @@ export default {
     if (path === '/api/admin/logout')                      return handleLogout();
 
     // ── Admin page ──────────────────────────────────────────────────────────────
-    // Serve admin.html content directly at /admin (no redirect) so auth is always enforced.
+    // Admin HTML is inlined in this worker (like loginHTML) so asset routing can never bypass auth.
     if (path === '/admin' || path === '/admin/') {
-      return withAuth(request, env, () => {
-        const adminReq = new Request(new URL('/admin.html', request.url).toString(), request);
-        return env.ASSETS.fetch(adminReq);
-      });
+      return withAuth(request, env, () =>
+        new Response(adminHTML(), { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
+      );
     }
-    // Block direct access to /admin.html — redirect to /admin so auth is checked.
     if (path === '/admin.html') {
       return Response.redirect(new URL('/admin', request.url).toString(), 302);
     }
@@ -297,11 +295,6 @@ async function withAuth(request, env, handler) {
   });
 }
 
-async function serveAdmin(request, env) {
-  const adminReq = new Request(new URL('/admin.html', request.url).toString());
-  return env.ASSETS.fetch(adminReq);
-}
-
 // ─── Token helpers ─────────────────────────────────────────────────────────────
 
 async function makeToken(password) {
@@ -340,6 +333,228 @@ function jsonResp(data, status = 200) {
 
 function esc(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ─── Admin dashboard HTML (inlined so asset routing cannot bypass auth) ────────
+
+function adminHTML() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ABY Quote Admin</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#f0f4f0;color:#1a1a1a;min-height:100vh}
+header{background:#1a5c3a;color:white;padding:14px 24px;display:flex;align-items:center;gap:12px;
+       position:sticky;top:0;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+header h1{font-size:1.05rem;font-weight:700;flex:1}
+header .logout{color:rgba(255,255,255,.75);font-size:.875rem;cursor:pointer;background:none;
+               border:none;padding:4px 8px;border-radius:4px}
+header .logout:hover{background:rgba(255,255,255,.15);color:white}
+.toolbar{background:white;border-bottom:1px solid #e5e5e5;padding:12px 24px;
+         display:flex;align-items:center;gap:12px}
+.toolbar input{flex:1;max-width:400px;padding:.5rem .75rem;border:1px solid #ddd;
+               border-radius:6px;font-size:.95rem}
+.toolbar input:focus{outline:none;border-color:#1a5c3a}
+.count{color:#888;font-size:.85rem;margin-left:auto;white-space:nowrap}
+main{padding:20px 24px}
+.table-wrap{background:white;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden}
+table{width:100%;border-collapse:collapse}
+thead{background:#f7f9f7}
+th{padding:10px 14px;text-align:left;font-size:.75rem;font-weight:700;color:#555;
+   text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;border-bottom:1px solid #e8e8e8}
+td{padding:11px 14px;font-size:.875rem;border-top:1px solid #f0f0f0;vertical-align:middle}
+tbody tr.data-row{cursor:pointer;transition:background .1s}
+tbody tr.data-row:hover td{background:#f6fbf7}
+tbody tr.data-row.expanded td{background:#f0f8f2;border-top-color:#d4ead9}
+.qnum{font-family:monospace;font-size:.82rem;font-weight:700;color:#1a5c3a;white-space:nowrap}
+.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:.72rem;font-weight:700;letter-spacing:.03em}
+.badge-c{background:#e8f5ee;color:#1a6640}
+.badge-nc{background:#fdf3e8;color:#a85400}
+.date-main{font-size:.875rem}
+.date-time{font-size:.78rem;color:#999}
+.muted{color:#aaa;font-style:italic}
+tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;border-bottom:2px solid #d4ead9}
+.detail-inner{max-width:700px}
+.detail-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:16px}
+.detail-item label{display:block;font-size:.72rem;font-weight:700;color:#888;
+                    text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px}
+.detail-item span{font-size:.875rem;color:#1a1a1a}
+.products-label{font-size:.72rem;font-weight:700;color:#888;text-transform:uppercase;
+                 letter-spacing:.05em;margin-bottom:6px}
+.product-chips{display:flex;flex-wrap:wrap;gap:4px}
+.chip{background:#e8f5ee;color:#1a6640;border-radius:4px;padding:2px 8px;font-size:.8rem;font-weight:600}
+.empty-row td{text-align:center;padding:60px;color:#aaa;font-style:italic}
+.loading{text-align:center;padding:60px;color:#aaa}
+</style>
+</head>
+<body>
+<header>
+  <h1>ABY Quote Admin</h1>
+  <button class="logout" onclick="logout()">Log out</button>
+</header>
+<div class="toolbar">
+  <input type="text" id="search" placeholder="Search by client, broker, agency, or quote number…">
+  <span class="count" id="count"></span>
+</div>
+<main>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date / Time</th><th>Quote #</th><th>Client</th>
+          <th>Broker / Agency</th><th>Rep</th><th>Products</th><th>Comm</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="7" class="loading">Loading quotes…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</main>
+<script>
+let quotes = [];
+let expandedId = null;
+
+async function load(q) {
+  q = q || '';
+  const url = '/api/quotes' + (q ? ('?q=' + encodeURIComponent(q)) : '');
+  try {
+    const res = await fetch(url);
+    if (res.status === 401) { location.href = '/admin'; return; }
+    if (!res.ok) {
+      document.getElementById('tbody').innerHTML =
+        '<tr><td colspan="7" class="loading" style="color:#c0392b">HTTP ' + res.status + ' — refresh to try again.</td></tr>';
+      return;
+    }
+    const data = await res.json();
+    quotes = data.quotes || [];
+    render();
+  } catch (e) {
+    document.getElementById('tbody').innerHTML =
+      '<tr><td colspan="7" class="loading" style="color:#c0392b">Failed to load quotes (' + e.message + ').</td></tr>';
+  }
+}
+
+function render() {
+  const tbody = document.getElementById('tbody');
+  document.getElementById('count').textContent =
+    quotes.length ? (quotes.length + ' quote' + (quotes.length !== 1 ? 's' : '')) : '';
+  if (!quotes.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No quotes found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  for (const q of quotes) {
+    const isC      = !(q.quote_number || '').endsWith('-NC');
+    const products = parseProducts(q.products);
+    const dt       = new Date(q.created_at);
+    const dateStr  = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const timeStr  = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const isExp    = expandedId === q.id;
+
+    const row = document.createElement('tr');
+    row.className = 'data-row' + (isExp ? ' expanded' : '');
+    row.dataset.id = q.id;
+
+    const brokerCell = (q.broker_name ? esc(q.broker_name) : '<span class="muted">—</span>') +
+      (q.broker_agency ? '<br><span style="font-size:.8rem;color:#888">' + esc(q.broker_agency) + '</span>' : '');
+
+    const chipHtml = products.slice(0,3).map(function(p){
+      return '<span class="chip" style="white-space:nowrap">' + esc(p) + '</span>';
+    }).join('') + (products.length > 3 ? '<span style="color:#888;font-size:.78rem;white-space:nowrap">+' + (products.length-3) + ' more</span>' : '');
+
+    row.innerHTML =
+      '<td><div class="date-main">' + dateStr + '</div><div class="date-time">' + timeStr + '</div></td>' +
+      '<td class="qnum">' + esc(q.quote_number) + '</td>' +
+      '<td>' + (esc(q.client_name) || '<span class="muted">—</span>') + '</td>' +
+      '<td>' + brokerCell + '</td>' +
+      '<td>' + (esc(q.rep_name) || '<span class="muted">—</span>') + '</td>' +
+      '<td><div style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">' + chipHtml + '</div></td>' +
+      '<td><span class="badge ' + (isC ? 'badge-c' : 'badge-nc') + '">' + (isC ? 'C' : 'NC') + '</span></td>';
+
+    row.addEventListener('click', function(){ toggleDetail(q.id); });
+    tbody.appendChild(row);
+
+    if (isExp) {
+      const dr = document.createElement('tr');
+      dr.className = 'detail-row';
+      dr.innerHTML = '<td colspan="7">' + detailHTML(q, products) + '</td>';
+      tbody.appendChild(dr);
+    }
+  }
+}
+
+function toggleDetail(id) {
+  expandedId = (expandedId === id) ? null : id;
+  render();
+}
+
+function detailHTML(q, products) {
+  return '<div class="detail-inner">' +
+    '<div class="detail-grid">' +
+      '<div class="detail-item"><label>Effective Date</label><span>' + (esc(q.effective_date) || '—') + '</span></div>' +
+      '<div class="detail-item"><label>Broker Phone</label><span>' + (esc(q.broker_phone) || '—') + '</span></div>' +
+      '<div class="detail-item"><label>Broker Email</label><span>' + (esc(q.broker_email) || '—') + '</span></div>' +
+      '<div class="detail-item"><label>Rep Phone</label><span>' + (esc(q.rep_phone) || '—') + '</span></div>' +
+      '<div class="detail-item"><label>Rep Email</label><span>' + (esc(q.rep_email) || '—') + '</span></div>' +
+      '<div class="detail-item"><label>Commission</label><span>' + (q.commission_included ? 'Included (−C)' : 'Not included (−NC)') + '</span></div>' +
+    '</div>' +
+    '<div class="products-label">Products</div>' +
+    '<div class="product-chips">' +
+      (products.length
+        ? products.map(function(p){ return '<span class="chip">' + esc(p) + '</span>'; }).join('')
+        : '<span style="color:#aaa;font-style:italic;font-size:.875rem">None recorded</span>') +
+    '</div></div>';
+}
+
+const PRODUCT_SHORT = {
+  pop: { def: 'POP', packages: { docsOnly: 'POP Docs', popHsa: 'POP + NDT (HSA)', full: 'POP + NDT (FSA/HSA)' } },
+  fsa: 'FSA / DCAP / LFSA', hsa: 'HSA', hra: 'HRA',
+  ichra: 'ICHRA / QSEHRA', cobra: 'COBRA',
+  stateContinuation: 'State Continuation', erisa: 'ERISA Wrap', aca: 'ACA Reporting',
+};
+
+function shortProductName(p) {
+  if (typeof p === 'string') return p;
+  const entry = PRODUCT_SHORT[p.id];
+  if (!entry) return p.name || p.id || '?';
+  if (typeof entry === 'string') return entry;
+  const pkgVal = p.inputs && (p.inputs.package || p.inputs[p.id + '-package'] || Object.values(p.inputs)[0]);
+  return (pkgVal && entry.packages[pkgVal]) || entry.def || p.name || p.id;
+}
+
+function parseProducts(raw) {
+  try {
+    const arr = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
+    return arr.map(shortProductName).filter(Boolean);
+  } catch(e) { return []; }
+}
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function logout() {
+  await fetch('/api/admin/logout');
+  location.href = '/admin';
+}
+
+let searchTimer;
+document.getElementById('search').addEventListener('input', function(e) {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(function() {
+    expandedId = null;
+    load(e.target.value.trim());
+  }, 300);
+});
+
+load();
+</script>
+</body>
+</html>`;
 }
 
 // ─── Login page HTML (served when not authenticated) ──────────────────────────
