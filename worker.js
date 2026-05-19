@@ -15,13 +15,13 @@
 const COOKIE_NAME = 'aby_admin';
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
 
     // ── API routes ──────────────────────────────────────────────────────────────
-    if (path === '/api/quotes' && method === 'POST')  return handleSaveQuote(request, env);
+    if (path === '/api/quotes' && method === 'POST')  return handleSaveQuote(request, env, ctx);
     if (path === '/api/quotes' && method === 'GET')   return withAuth(request, env, () => handleListQuotes(request, env));
     if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'GET') {
       return withAuth(request, env, () => handleGetQuote(path.split('/').pop(), env));
@@ -55,7 +55,7 @@ export default {
 
 // ─── Quote: save ───────────────────────────────────────────────────────────────
 
-async function handleSaveQuote(request, env) {
+async function handleSaveQuote(request, env, ctx) {
   let body;
   try { body = await request.json(); }
   catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
@@ -97,10 +97,12 @@ async function handleSaveQuote(request, env) {
     return jsonResp({ error: 'Failed to save quote' }, 500);
   }
 
-  // Fire-and-forget email — never block the broker's workflow
+  // Send email — use ctx.waitUntil so Cloudflare keeps the worker alive until it finishes
   const origin = new URL(request.url).origin;
-  sendEmail(env, { id, quoteNumber, clientName, effectiveDate, brokerName, brokerAgency, repName, repEmail, commissionIncluded, products, origin })
-    .catch(err => console.error('Email send failed:', err));
+  ctx.waitUntil(
+    sendEmail(env, { id, quoteNumber, clientName, effectiveDate, brokerName, brokerAgency, repName, repEmail, commissionIncluded, products, origin })
+      .catch(err => console.error('Email send failed:', err))
+  );
 
   return jsonResp({ id, quoteNumber });
 }
