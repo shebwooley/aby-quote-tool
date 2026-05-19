@@ -2,13 +2,35 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "aby-quote-tool",
   "compatibility_date": "2026-05-08",
+
+  // Worker entry point (new — this is what runs server-side)
+  "main": "worker.js",
+
   "observability": {
     "enabled": true
   },
+
+  // Static assets — "binding" exposes them to the worker as env.ASSETS
   "assets": {
-    "directory": "."
+    "directory": ".",
+    "binding": "ASSETS"
   },
+
   "compatibility_flags": [
     "nodejs_compat"
+  ],
+
+  // D1 database — replace database_id after you create the database
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aby-quotes",
+      "database_id": "72b0d610-c55f-4b56-af26-613ab047b592"
+    }
   ]
+
+  // Secrets (set in Cloudflare dashboard, NOT here):
+  //   RESEND_API_KEY  — from resend.com
+  //   ADMIN_PASSWORD  — password for /admin
+  //   FROM_EMAIL      — verified sender address in Resend
 }

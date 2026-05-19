@@ -1,12 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ABY Quote Tool — Texas</title>
-  <link rel="stylesheet" href="assets/css/app.css">
-  <link rel="stylesheet" href="assets/css/quote.css">
-  <link rel="stylesheet" href="assets/css/print.css" media="print">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ABY Quote Tool — Texas</title>
+<link rel="stylesheet" href="assets/css/app.css">
+<link rel="stylesheet" href="assets/css/quote.css">
+<link rel="stylesheet" href="assets/css/print.css" media="print">
 </head>
 <body>
 
@@ -116,6 +116,7 @@
       <button type="submit" class="primary">Generate Quote</button>
       <button type="button" class="secondary" id="resetBtn">Reset Form</button>
     </div>
+
   </form>
 
   <!-- ============== Quote output ============== -->
@@ -139,6 +140,9 @@
 
 <!-- Controller -->
 <script src="assets/js/app.js"></script>
+
+<!-- Backend integration: saves each quote to the database -->
+<script src="save-hook.js"></script>
 
 </body>
 </html>
