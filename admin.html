@@ -108,7 +108,7 @@ async function load(q = '') {
   const url = '/api/quotes' + (q ? `?q=${encodeURIComponent(q)}` : '');
   try {
     const res = await fetch(url);
-    if (res.status === 401) { location.reload(); return; }
+    if (res.status === 401) { location.href = '/admin'; return; }
     const data = await res.json();
     quotes = data.quotes || [];
     render();
