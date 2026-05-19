@@ -39,7 +39,7 @@ tbody tr.data-row:hover td{background:#f6fbf7}
 tbody tr.data-row.expanded td{background:#f0f8f2;border-top-color:#d4ead9}
 
 /* Cells */
-.qnum{font-family:monospace;font-size:.82rem;font-weight:700;color:#1a5c3a}
+.qnum{font-family:monospace;font-size:.82rem;font-weight:700;color:#1a5c3a;white-space:nowrap}
 .badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:.72rem;font-weight:700;letter-spacing:.03em}
 .badge-c{background:#e8f5ee;color:#1a6640}
 .badge-nc{background:#fdf3e8;color:#a85400}
@@ -152,8 +152,7 @@ function render() {
         ${q.broker_agency ? `<br><span style="font-size:.8rem;color:#888">${esc(q.broker_agency)}</span>` : ''}
       </td>
       <td>${esc(q.rep_name) || '<span class="muted">—</span>'}</td>
-      <td>${products.slice(0,3).map(p=>`<span class="chip">${esc(p)}</span>`).join(' ')}
-          ${products.length > 3 ? `<span style="color:#888;font-size:.78rem">+${products.length-3} more</span>` : ''}</td>
+      <td><div style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">${products.slice(0,3).map(p=>`<span class="chip" style="white-space:nowrap">${esc(p)}</span>`).join('')}${products.length > 3 ? `<span style="color:#888;font-size:.78rem;white-space:nowrap">+${products.length-3} more</span>` : ''}</div></td>
       <td><span class="badge ${isC ? 'badge-c' : 'badge-nc'}">${isC ? 'C' : 'NC'}</span></td>
     `;
     row.addEventListener('click', () => toggleDetail(q.id));
