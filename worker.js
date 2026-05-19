@@ -30,11 +30,16 @@ export default {
     if (path === '/api/admin/logout')                      return handleLogout();
 
     // ── Admin page ──────────────────────────────────────────────────────────────
+    // Serve admin.html content directly at /admin (no redirect) so auth is always enforced.
     if (path === '/admin' || path === '/admin/') {
-      // Auth check here; admin.html itself is a public static file (data API is protected)
-      return withAuth(request, env, () =>
-        Response.redirect(new URL('/admin.html', request.url).toString(), 302)
-      );
+      return withAuth(request, env, () => {
+        const adminReq = new Request(new URL('/admin.html', request.url).toString(), request);
+        return env.ASSETS.fetch(adminReq);
+      });
+    }
+    // Block direct access to /admin.html — redirect to /admin so auth is checked.
+    if (path === '/admin.html') {
+      return Response.redirect(new URL('/admin', request.url).toString(), 302);
     }
 
     // ── Diagnostics (temporary) ─────────────────────────────────────────────────
