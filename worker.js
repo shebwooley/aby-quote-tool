@@ -37,6 +37,17 @@ export default {
       );
     }
 
+    // ── Diagnostic (temporary) ──────────────────────────────────────────────────
+    if (path === '/api/debug') {
+      return jsonResp({
+        hasResendKey:      !!env.RESEND_API_KEY,
+        resendKeyPrefix:   env.RESEND_API_KEY ? env.RESEND_API_KEY.slice(0, 6) : 'MISSING',
+        hasAdminPassword:  !!env.ADMIN_PASSWORD,
+        hasFromEmail:      !!env.FROM_EMAIL,
+        fromEmail:         env.FROM_EMAIL || 'MISSING',
+      });
+    }
+
     // ── Static assets ───────────────────────────────────────────────────────────
     return env.ASSETS.fetch(request);
   }
