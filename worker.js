@@ -118,12 +118,13 @@ async function handleSaveQuote(request, env, ctx) {
     return jsonResp({ error: 'Failed to save quote' }, 500);
   }
 
-  // Send email — use ctx.waitUntil so Cloudflare keeps the worker alive until it finishes
+  // Send email synchronously before returning — guarantees it runs
   const origin = new URL(request.url).origin;
-  ctx.waitUntil(
-    sendEmail(env, { id, quoteNumber, clientName, effectiveDate, brokerName, brokerAgency, repName, repEmail, commissionIncluded, products, origin })
-      .catch(err => console.error('Email send failed:', err))
-  );
+  try {
+    await sendEmail(env, { id, quoteNumber, clientName, effectiveDate, brokerName, brokerAgency, repName, repEmail, commissionIncluded, products, origin });
+  } catch (err) {
+    console.error('Email send failed:', err.message);
+  }
 
   return jsonResp({ id, quoteNumber });
 }
