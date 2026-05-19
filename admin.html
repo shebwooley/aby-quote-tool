@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ABY Quote Admin</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#f0f4f0;color:#1a1a1a;min-height:100vh}
+
+/* Header */
+header{background:#1a5c3a;color:white;padding:14px 24px;display:flex;align-items:center;gap:12px;
+       position:sticky;top:0;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+header h1{font-size:1.05rem;font-weight:700;flex:1}
+header .logout{color:rgba(255,255,255,.75);font-size:.875rem;cursor:pointer;background:none;
+               border:none;padding:4px 8px;border-radius:4px}
+header .logout:hover{background:rgba(255,255,255,.15);color:white}
+
+/* Toolbar */
+.toolbar{background:white;border-bottom:1px solid #e5e5e5;padding:12px 24px;
+         display:flex;align-items:center;gap:12px}
+.toolbar input{flex:1;max-width:400px;padding:.5rem .75rem;border:1px solid #ddd;
+               border-radius:6px;font-size:.95rem}
+.toolbar input:focus{outline:none;border-color:#1a5c3a}
+.count{color:#888;font-size:.85rem;margin-left:auto;white-space:nowrap}
+
+/* Main */
+main{padding:20px 24px}
+
+/* Table */
+.table-wrap{background:white;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden}
+table{width:100%;border-collapse:collapse}
+thead{background:#f7f9f7}
+th{padding:10px 14px;text-align:left;font-size:.75rem;font-weight:700;color:#555;
+   text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;border-bottom:1px solid #e8e8e8}
+td{padding:11px 14px;font-size:.875rem;border-top:1px solid #f0f0f0;vertical-align:middle}
+tbody tr.data-row{cursor:pointer;transition:background .1s}
+tbody tr.data-row:hover td{background:#f6fbf7}
+tbody tr.data-row.expanded td{background:#f0f8f2;border-top-color:#d4ead9}
+
+/* Cells */
+.qnum{font-family:monospace;font-size:.82rem;font-weight:700;color:#1a5c3a}
+.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:.72rem;font-weight:700;letter-spacing:.03em}
+.badge-c{background:#e8f5ee;color:#1a6640}
+.badge-nc{background:#fdf3e8;color:#a85400}
+.date-main{font-size:.875rem}
+.date-time{font-size:.78rem;color:#999}
+.muted{color:#aaa;font-style:italic}
+
+/* Detail row */
+tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;border-bottom:2px solid #d4ead9}
+.detail-inner{max-width:700px}
+.detail-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:16px}
+.detail-item label{display:block;font-size:.72rem;font-weight:700;color:#888;
+                    text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px}
+.detail-item span{font-size:.875rem;color:#1a1a1a}
+.products-label{font-size:.72rem;font-weight:700;color:#888;text-transform:uppercase;
+                 letter-spacing:.05em;margin-bottom:6px}
+.product-chips{display:flex;flex-wrap:wrap;gap:4px}
+.chip{background:#e8f5ee;color:#1a6640;border-radius:4px;padding:2px 8px;
+      font-size:.8rem;font-weight:600}
+.empty-row td{text-align:center;padding:60px;color:#aaa;font-style:italic}
+
+/* Loading */
+.loading{text-align:center;padding:60px;color:#aaa}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ABY Quote Admin</h1>
+  <button class="logout" onclick="logout()">Log out</button>
+</header>
+
+<div class="toolbar">
+  <input type="text" id="search" placeholder="Search by client, broker, agency, or quote number…">
+  <span class="count" id="count"></span>
+</div>
+
+<main>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date / Time</th>
+          <th>Quote #</th>
+          <th>Client</th>
+          <th>Broker / Agency</th>
+          <th>Rep</th>
+          <th>Products</th>
+          <th>Comm</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="7" class="loading">Loading quotes…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+let quotes    = [];
+let expandedId = null;
+
+// ── Data loading ───────────────────────────────────────────────────────────────
+
+async function load(q = '') {
+  const url = '/api/quotes' + (q ? `?q=${encodeURIComponent(q)}` : '');
+  try {
+    const res = await fetch(url);
+    if (res.status === 401) { location.reload(); return; }
+    const data = await res.json();
+    quotes = data.quotes || [];
+    render();
+  } catch (e) {
+    document.getElementById('tbody').innerHTML =
+      `<tr><td colspan="7" class="loading" style="color:#c0392b">Failed to load quotes. Refresh to try again.</td></tr>`;
+  }
+}
+
+// ── Rendering ──────────────────────────────────────────────────────────────────
+
+function render() {
+  const tbody = document.getElementById('tbody');
+  document.getElementById('count').textContent =
+    quotes.length ? `${quotes.length} quote${quotes.length !== 1 ? 's' : ''}` : '';
+
+  if (!quotes.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No quotes found.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = '';
+  for (const q of quotes) {
+    const isC      = !(q.quote_number || '').endsWith('-NC');
+    const products = parseProducts(q.products);
+    const dt       = new Date(q.created_at);
+    const dateStr  = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const timeStr  = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const isExp    = expandedId === q.id;
+
+    // Main row
+    const row = document.createElement('tr');
+    row.className = 'data-row' + (isExp ? ' expanded' : '');
+    row.dataset.id = q.id;
+    row.innerHTML = `
+      <td><div class="date-main">${dateStr}</div><div class="date-time">${timeStr}</div></td>
+      <td class="qnum">${esc(q.quote_number)}</td>
+      <td>${esc(q.client_name) || '<span class="muted">—</span>'}</td>
+      <td>
+        ${q.broker_name ? esc(q.broker_name) : '<span class="muted">—</span>'}
+        ${q.broker_agency ? `<br><span style="font-size:.8rem;color:#888">${esc(q.broker_agency)}</span>` : ''}
+      </td>
+      <td>${esc(q.rep_name) || '<span class="muted">—</span>'}</td>
+      <td>${products.slice(0,3).map(p=>`<span class="chip">${esc(p)}</span>`).join(' ')}
+          ${products.length > 3 ? `<span style="color:#888;font-size:.78rem">+${products.length-3} more</span>` : ''}</td>
+      <td><span class="badge ${isC ? 'badge-c' : 'badge-nc'}">${isC ? 'C' : 'NC'}</span></td>
+    `;
+    row.addEventListener('click', () => toggleDetail(q.id));
+    tbody.appendChild(row);
+
+    // Detail row
+    if (isExp) {
+      const dr = document.createElement('tr');
+      dr.className = 'detail-row';
+      dr.innerHTML = `<td colspan="7">${detailHTML(q, products)}</td>`;
+      tbody.appendChild(dr);
+    }
+  }
+}
+
+function toggleDetail(id) {
+  expandedId = (expandedId === id) ? null : id;
+  render();
+}
+
+function detailHTML(q, products) {
+  return `<div class="detail-inner">
+    <div class="detail-grid">
+      <div class="detail-item"><label>Effective Date</label><span>${esc(q.effective_date) || '—'}</span></div>
+      <div class="detail-item"><label>Broker Phone</label><span>${esc(q.broker_phone) || '—'}</span></div>
+      <div class="detail-item"><label>Broker Email</label><span>${esc(q.broker_email) || '—'}</span></div>
+      <div class="detail-item"><label>Rep Phone</label><span>${esc(q.rep_phone) || '—'}</span></div>
+      <div class="detail-item"><label>Rep Email</label><span>${esc(q.rep_email) || '—'}</span></div>
+      <div class="detail-item"><label>Commission</label>
+        <span>${q.commission_included ? 'Included (−C)' : 'Not included (−NC)'}</span></div>
+    </div>
+    <div class="products-label">Products</div>
+    <div class="product-chips">
+      ${products.length
+        ? products.map(p => `<span class="chip">${esc(p)}</span>`).join('')
+        : '<span style="color:#aaa;font-style:italic;font-size:.875rem">None recorded</span>'}
+    </div>
+  </div>`;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function parseProducts(raw) {
+  try {
+    const arr = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
+    return arr.map(p => p.name || p.id || String(p)).filter(Boolean);
+  } catch { return []; }
+}
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function logout() {
+  await fetch('/api/admin/logout');
+  location.href = '/admin';
+}
+
+// ── Search (debounced) ─────────────────────────────────────────────────────────
+
+let searchTimer;
+document.getElementById('search').addEventListener('input', e => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    expandedId = null;
+    load(e.target.value.trim());
+  }, 300);
+});
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+load();
+</script>
+</body>
+</html>

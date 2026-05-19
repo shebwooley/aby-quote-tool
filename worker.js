@@ -31,7 +31,10 @@ export default {
 
     // ── Admin page ──────────────────────────────────────────────────────────────
     if (path === '/admin' || path === '/admin/') {
-      return withAuth(request, env, () => serveAdmin(request, env));
+      // Auth check here; admin.html itself is a public static file (data API is protected)
+      return withAuth(request, env, () =>
+        Response.redirect(new URL('/admin.html', request.url).toString(), 302)
+      );
     }
 
     // ── Static assets ───────────────────────────────────────────────────────────
