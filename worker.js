@@ -37,7 +37,7 @@ export default {
       );
     }
 
-    // ── Diagnostic (temporary) ──────────────────────────────────────────────────
+    // ── Diagnostics (temporary) ─────────────────────────────────────────────────
     if (path === '/api/debug') {
       return jsonResp({
         hasResendKey:      !!env.RESEND_API_KEY,
@@ -46,6 +46,27 @@ export default {
         hasFromEmail:      !!env.FROM_EMAIL,
         fromEmail:         env.FROM_EMAIL || 'MISSING',
       });
+    }
+    if (path === '/api/test-email') {
+      try {
+        const res = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${env.RESEND_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: `ABY Quote Tool <${env.FROM_EMAIL || 'onboarding@resend.dev'}>`,
+            to: ['eric@comedyce.com'],
+            subject: 'ABY Quote Tool — test email',
+            html: '<p>This is a test. If you got this, email notifications are working.</p>',
+          }),
+        });
+        const body = await res.text();
+        return jsonResp({ status: res.status, ok: res.ok, response: body });
+      } catch (err) {
+        return jsonResp({ error: err.message });
+      }
     }
 
     // ── Static assets ───────────────────────────────────────────────────────────
