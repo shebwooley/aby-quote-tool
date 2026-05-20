@@ -69,7 +69,7 @@ ABYQuote.products = [
     id: 'erisa',
     name: 'ERISA Wrap Document & Compliance',
     shortName: 'ERISA Wrap Document',
-    inputType: 'package',
+    inputType: 'multi-package',
     packages: [
       { id: 'basic', name: 'Basic — Electronic Wrap "Legal Text" only' },
       { id: 'buyUp', name: 'Buy-Up — Wrap + Section 125 POP (no NDT testing)' },
