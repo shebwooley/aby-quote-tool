@@ -44,7 +44,7 @@
       window.ABYQuote.products.forEach(function(p) { nameToId[p.name] = p.id; });
     }
 
-    checked.forEach(cb => {
+    checked.forEach(function(cb) {
       // Skip multi-package sub-checkboxes (e.g. individual ERISA package options).
       // These have data-product-input with 3 colon-separated parts like "erisa:package:basic".
       // They are collected below via the item scan, not as top-level product selections.
@@ -54,23 +54,26 @@
       // Walk up to the product container (.product-row wraps both the checkbox head
       // and the options panel; must not stop at .product-row-head which is a child)
       const item = cb.closest('.product-row') || cb.closest('.product-item') || cb.parentElement;
+
       // Name: try a heading, a label sibling, or fall back to the input name/id
       const nameEl = item && item.querySelector('h3,h4,.product-name,[class*="name"],legend,label');
       const name   = (nameEl && nameEl.textContent.trim()) || cb.getAttribute('aria-label') || cb.name || cb.id || '';
+
       // Collect any numeric/select sub-inputs (participant counts, package selects, etc.)
       const inputs = {};
       if (item) {
-        item.querySelectorAll('input:not([type="checkbox"]):not([type="file"]), select').forEach(el => {
+        // Named inputs (participant count number fields that have a name attr)
+        item.querySelectorAll('input:not([type="checkbox"]):not([type="file"]), select').forEach(function(el) {
           if (el.name && el.value) inputs[el.name] = el.value;
         });
-        // Capture package selects that use data-product-input instead of a name attr (e.g. POP)
+        // Capture package selects identified by data-product-input (no name attr, e.g. POP)
         item.querySelectorAll('select[data-product-input]').forEach(function(sel) {
           const parts = (sel.dataset.productInput || '').split(':');
           if (parts.length === 2 && parts[1] === 'package' && sel.value) {
             inputs.package = sel.value;
           }
         });
-        // Capture participant/account count inputs (FSA, HSA, HRA, COBRA, etc.)
+        // Capture participant/account/form count inputs (FSA, HSA, HRA, COBRA, etc.)
         item.querySelectorAll('input[data-product-input]').forEach(function(inp) {
           const parts = (inp.dataset.productInput || '').split(':');
           if (parts.length === 2 && parts[1] === 'count' && inp.value) {
@@ -85,8 +88,10 @@
         });
         if (checkedPkgIds.length > 0) inputs.packageIds = checkedPkgIds.join(',');
       }
-      // Prefer checkbox name/id; fall back to registry lookup; last resort use display name
-      const id = cb.name || cb.id || nameToId[name] || name;
+
+      // Use data-product-checkbox attr first (gives clean IDs like 'pop', 'erisa'),
+      // then fall back to name/id attr, registry lookup, or display name
+      const id = cb.dataset.productCheckbox || cb.name || nameToId[name] || name;
       products.push({ id, name, inputs });
     });
     return products;
@@ -117,7 +122,7 @@
 
     let lastSavedNum = null;
 
-    const observer = new MutationObserver(() => {
+    const observer = new MutationObserver(function() {
       const text = output.textContent || '';
       if (!text.trim()) return;
 

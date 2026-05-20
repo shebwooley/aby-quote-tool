@@ -23,6 +23,9 @@ export default {
     // ── API routes ──────────────────────────────────────────────────────────────
     if (path === '/api/quotes' && method === 'POST')  return handleSaveQuote(request, env, ctx);
     if (path === '/api/quotes' && method === 'GET')   return withAuth(request, env, () => handleListQuotes(request, env));
+    if (/^\/api\/quotes\/[^/]+\/status$/.test(path) && method === 'PATCH') {
+      return withAuth(request, env, () => handleUpdateStatus(path.split('/')[3], request, env));
+    }
     if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'GET') {
       return withAuth(request, env, () => handleGetQuote(path.split('/').pop(), env));
     }
@@ -30,7 +33,6 @@ export default {
     if (path === '/api/admin/logout')                      return handleLogout();
 
     // ── Admin page ──────────────────────────────────────────────────────────────
-    // Admin HTML is inlined in this worker (like loginHTML) so asset routing can never bypass auth.
     if (path === '/admin' || path === '/admin/') {
       return withAuth(request, env, () =>
         new Response(adminHTML(), { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
@@ -121,7 +123,6 @@ async function handleSaveQuote(request, env, ctx) {
     return jsonResp({ error: 'Failed to save quote' }, 500);
   }
 
-  // Send email synchronously before returning — guarantees it runs
   const origin = new URL(request.url).origin;
   try {
     await sendEmail(env, { id, quoteNumber, clientName, effectiveDate, brokerName, brokerAgency, repName, repEmail, commissionIncluded, products, origin });
@@ -146,21 +147,26 @@ async function handleListQuotes(request, env) {
     result = await env.DB.prepare(`
       SELECT id, quote_number, created_at, client_name, effective_date,
              broker_name, broker_agency, broker_phone, broker_email,
-             rep_name, rep_phone, rep_email, commission_included, products
+             rep_name, commission_included, products,
+             COALESCE(status, 'pending') AS status
       FROM quotes
-      WHERE client_name   LIKE ?
-         OR broker_name   LIKE ?
-         OR broker_agency LIKE ?
-         OR quote_number  LIKE ?
-         OR rep_name      LIKE ?
+      WHERE (status IS NULL OR status != 'trashed')
+        AND (client_name   LIKE ?
+         OR broker_name    LIKE ?
+         OR broker_agency  LIKE ?
+         OR quote_number   LIKE ?
+         OR rep_name       LIKE ?)
       ORDER BY created_at DESC LIMIT ? OFFSET ?
     `).bind(like, like, like, like, like, limit, offset).all();
   } else {
     result = await env.DB.prepare(`
       SELECT id, quote_number, created_at, client_name, effective_date,
              broker_name, broker_agency, broker_phone, broker_email,
-             rep_name, rep_phone, rep_email, commission_included, products
-      FROM quotes ORDER BY created_at DESC LIMIT ? OFFSET ?
+             rep_name, commission_included, products,
+             COALESCE(status, 'pending') AS status
+      FROM quotes
+      WHERE (status IS NULL OR status != 'trashed')
+      ORDER BY created_at DESC LIMIT ? OFFSET ?
     `).bind(limit, offset).all();
   }
 
@@ -173,6 +179,27 @@ async function handleGetQuote(id, env) {
   const row = await env.DB.prepare('SELECT * FROM quotes WHERE id = ?').bind(id).first();
   if (!row) return jsonResp({ error: 'Not found' }, 404);
   return jsonResp(row);
+}
+
+// ─── Quote: update status (admin) ─────────────────────────────────────────────
+
+async function handleUpdateStatus(id, request, env) {
+  let body;
+  try { body = await request.json(); }
+  catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+
+  const { status } = body;
+  const allowed = ['pending', 'sold', 'dead', 'trashed'];
+  if (!allowed.includes(status)) return jsonResp({ error: 'Invalid status' }, 400);
+
+  try {
+    await env.DB.prepare(`UPDATE quotes SET status = ? WHERE id = ?`).bind(status, id).run();
+  } catch (err) {
+    console.error('Status update failed:', err);
+    return jsonResp({ error: 'Failed to update status' }, 500);
+  }
+
+  return jsonResp({ ok: true, id, status });
 }
 
 // ─── Email via Resend ──────────────────────────────────────────────────────────
@@ -221,7 +248,6 @@ async function sendEmail(env, { quoteNumber, clientName, effectiveDate, brokerNa
   </div>
 </body></html>`;
 
-  // Send to eric@comedyce.com for now — expand once domain is verified in Resend
   const repTo  = 'eric@comedyce.com';
   const ccList = [];
 
@@ -288,7 +314,6 @@ async function withAuth(request, env, handler) {
     return handler();
   }
 
-  // Not logged in — show login page (401 so admin.html can detect and redirect)
   return new Response(loginHTML(), {
     status: 401,
     headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -335,7 +360,7 @@ function esc(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// ─── Admin dashboard HTML (inlined so asset routing cannot bypass auth) ────────
+// ─── Admin dashboard HTML ──────────────────────────────────────────────────────
 
 function adminHTML() {
   return `<!DOCTYPE html>
@@ -382,12 +407,26 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 .detail-item label{display:block;font-size:.72rem;font-weight:700;color:#888;
                     text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px}
 .detail-item span{font-size:.875rem;color:#1a1a1a}
-.products-label{font-size:.72rem;font-weight:700;color:#888;text-transform:uppercase;
-                 letter-spacing:.05em;margin-bottom:6px}
-.product-chips{display:flex;flex-wrap:wrap;gap:4px}
 .chip{background:#e8f5ee;color:#1a6640;border-radius:4px;padding:2px 8px;font-size:.8rem;font-weight:600}
 .empty-row td{text-align:center;padding:60px;color:#aaa;font-style:italic}
 .loading{text-align:center;padding:60px;color:#aaa}
+/* Status badges */
+.status-badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:.72rem;font-weight:700;letter-spacing:.03em;white-space:nowrap}
+.s-pending{background:#f0f0f0;color:#666}
+.s-sold{background:#e8f5ee;color:#1a6640}
+.s-dead{background:#fde8e8;color:#b03030}
+/* Status change buttons in detail view */
+.status-controls{display:flex;flex-wrap:wrap;gap:6px;margin-top:.85rem}
+.status-controls label{font-size:.72rem;font-weight:700;color:#888;text-transform:uppercase;
+                        letter-spacing:.05em;display:block;margin-bottom:5px;width:100%}
+.status-btn{padding:4px 14px;border-radius:6px;border:1px solid;font-size:.82rem;font-weight:600;
+            cursor:pointer;background:white;transition:opacity .1s}
+.status-btn:hover{opacity:.75}
+.status-btn.pending{color:#666;border-color:#ccc}
+.status-btn.sold{color:#1a6640;border-color:#b8d9c4}
+.status-btn.dead{color:#b03030;border-color:#f5b8b8}
+.status-btn.trash{color:#b03030;border-color:#f5b8b8;background:#fff5f5}
+.status-btn.active{outline:2px solid currentColor;outline-offset:2px}
 </style>
 </head>
 <body>
@@ -405,11 +444,11 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
       <thead>
         <tr>
           <th>Date / Time</th><th>Quote #</th><th>Client</th>
-          <th>Broker / Agency</th><th>Rep</th><th>Products</th><th>Comm</th>
+          <th>Broker / Agency</th><th>Rep</th><th>Products</th><th>Status</th><th>Comm</th>
         </tr>
       </thead>
       <tbody id="tbody">
-        <tr><td colspan="7" class="loading">Loading quotes…</td></tr>
+        <tr><td colspan="8" class="loading">Loading quotes…</td></tr>
       </tbody>
     </table>
   </div>
@@ -417,6 +456,9 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 <script>
 let quotes = [];
 let expandedId = null;
+
+const STATUS_LABEL = { pending: 'Pending', sold: 'Sold', dead: 'Dead' };
+const STATUS_CLASS = { pending: 's-pending', sold: 's-sold', dead: 's-dead' };
 
 async function load(q) {
   q = q || '';
@@ -426,7 +468,7 @@ async function load(q) {
     if (res.status === 401) { location.href = '/admin'; return; }
     if (!res.ok) {
       document.getElementById('tbody').innerHTML =
-        '<tr><td colspan="7" class="loading" style="color:#c0392b">HTTP ' + res.status + ' — refresh to try again.</td></tr>';
+        '<tr><td colspan="8" class="loading" style="color:#c0392b">HTTP ' + res.status + ' — refresh to try again.</td></tr>';
       return;
     }
     const data = await res.json();
@@ -434,7 +476,7 @@ async function load(q) {
     render();
   } catch (e) {
     document.getElementById('tbody').innerHTML =
-      '<tr><td colspan="7" class="loading" style="color:#c0392b">Failed to load quotes (' + e.message + ').</td></tr>';
+      '<tr><td colspan="8" class="loading" style="color:#c0392b">Failed to load quotes (' + e.message + ').</td></tr>';
   }
 }
 
@@ -443,7 +485,7 @@ function render() {
   document.getElementById('count').textContent =
     quotes.length ? (quotes.length + ' quote' + (quotes.length !== 1 ? 's' : '')) : '';
   if (!quotes.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No quotes found.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No quotes found.</td></tr>';
     return;
   }
   tbody.innerHTML = '';
@@ -454,6 +496,7 @@ function render() {
     const dateStr  = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     const timeStr  = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
     const isExp    = expandedId === q.id;
+    const st       = q.status || 'pending';
 
     const row = document.createElement('tr');
     row.className = 'data-row' + (isExp ? ' expanded' : '');
@@ -466,6 +509,8 @@ function render() {
       return '<span class="chip" style="white-space:nowrap">' + esc(p) + '</span>';
     }).join('') + (products.length > 3 ? '<span style="color:#888;font-size:.78rem;white-space:nowrap">+' + (products.length-3) + ' more</span>' : '');
 
+    const statusBadge = '<span class="status-badge ' + (STATUS_CLASS[st] || 's-pending') + '">' + (STATUS_LABEL[st] || st) + '</span>';
+
     row.innerHTML =
       '<td><div class="date-main">' + dateStr + '</div><div class="date-time">' + timeStr + '</div></td>' +
       '<td class="qnum">' + esc(q.quote_number) + '</td>' +
@@ -473,6 +518,7 @@ function render() {
       '<td>' + brokerCell + '</td>' +
       '<td>' + (esc(q.rep_name) || '<span class="muted">—</span>') + '</td>' +
       '<td><div style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">' + chipHtml + '</div></td>' +
+      '<td>' + statusBadge + '</td>' +
       '<td><span class="badge ' + (isC ? 'badge-c' : 'badge-nc') + '">' + (isC ? 'C' : 'NC') + '</span></td>';
 
     row.addEventListener('click', function(){ toggleDetail(q.id); });
@@ -481,7 +527,7 @@ function render() {
     if (isExp) {
       const dr = document.createElement('tr');
       dr.className = 'detail-row';
-      dr.innerHTML = '<td colspan="7">' + detailHTML(q, products) + '</td>';
+      dr.innerHTML = '<td colspan="8">' + detailHTML(q, products) + '</td>';
       tbody.appendChild(dr);
     }
   }
@@ -493,6 +539,7 @@ function toggleDetail(id) {
 }
 
 function detailHTML(q, products) {
+  const st = q.status || 'pending';
   const rerunState = JSON.stringify({
     clientName: q.client_name || '',
     effectiveDate: q.effective_date || '',
@@ -510,16 +557,47 @@ function detailHTML(q, products) {
       '<div class="detail-item"><label>Effective Date</label><span>' + (esc(q.effective_date) || '—') + '</span></div>' +
       '<div class="detail-item"><label>Broker Phone</label><span>' + (esc(q.broker_phone) || '—') + '</span></div>' +
       '<div class="detail-item"><label>Broker Email</label><span>' + (esc(q.broker_email) || '—') + '</span></div>' +
-      '<div class="detail-item"><label>Commission</label><span>' + (q.commission_included ? 'Included (−C)' : 'Not included (−NC)') + '</span></div>' +
     '</div>' +
-    '<div style="margin-top:.75rem">' +
+    '<div class="status-controls">' +
+      '<label>Update Status</label>' +
+      '<button class="status-btn pending' + (st==='pending'?' active':'') + '" onclick="updateStatus(\'' + q.id + '\',\'pending\',event)">Pending</button>' +
+      '<button class="status-btn sold' + (st==='sold'?' active':'') + '" onclick="updateStatus(\'' + q.id + '\',\'sold\',event)">Sold</button>' +
+      '<button class="status-btn dead' + (st==='dead'?' active':'') + '" onclick="updateStatus(\'' + q.id + '\',\'dead\',event)">Dead</button>' +
+      '<button class="status-btn trash" onclick="updateStatus(\'' + q.id + '\',\'trashed\',event)">🗑 Trash</button>' +
+    '</div>' +
+    '<div style="margin-top:.85rem">' +
       '<a href="' + rerunUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:#e8f4ec;color:#1a5c3a;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4">Re-run Quote ↗</a>' +
     '</div>' +
     '</div>';
 }
 
+async function updateStatus(id, status, e) {
+  if (e) e.stopPropagation();
+  if (status === 'trashed' && !confirm('Remove this quote from the list? This cannot be undone.')) return;
+  try {
+    const res = await fetch('/api/quotes/' + id + '/status', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    });
+    if (res.status === 401) { location.href = '/admin'; return; }
+    if (!res.ok) { alert('Failed to update status'); return; }
+    const q = quotes.find(function(x) { return x.id === id; });
+    if (q) {
+      if (status === 'trashed') {
+        quotes = quotes.filter(function(x) { return x.id !== id; });
+        if (expandedId === id) expandedId = null;
+      } else {
+        q.status = status;
+      }
+      render();
+    }
+  } catch (err) {
+    alert('Error: ' + err.message);
+  }
+}
+
 const PRODUCT_SHORT = {
-  // embedsName: true means the package label already contains the product name, so don't prefix
   pop:              { def: 'POP', embedsName: true, packages: { docsOnly: 'POP Docs Only', popHsa: 'POP + NDT (POP & HSA)', full: 'POP + NDT (FSA & HSA)' } },
   fsa:              { def: 'FSA / DCAP / LFSA', countLabel: 'participants' },
   hsa:              { def: 'HSA', countLabel: 'accounts' },
@@ -557,20 +635,17 @@ function shortProductName(p) {
     const embedsName = !!(typeof entry === 'object' && entry.embedsName);
 
     if (p.inputs && p.inputs.packageIds) {
-      // Multi-package (e.g. ERISA — broker selected 1–5 packages)
       const labels = p.inputs.packageIds.split(',').filter(Boolean).map(function(pkgId) {
         return (pkgs && pkgs[pkgId]) || pkgId;
       });
       label = labels.length > 0 ? def + ' — ' + labels.join(', ') : def;
     } else if (p.inputs && p.inputs.package) {
-      // Single-package select (e.g. POP, ICHRA, ACA)
       const pkgLabel = pkgs && pkgs[p.inputs.package];
       label = pkgLabel ? (embedsName ? pkgLabel : def + ' — ' + pkgLabel) : def;
     } else {
       label = def;
     }
 
-    // Append participant/account/form count where it affects pricing
     if (p.inputs && p.inputs.count) {
       label += ' (' + p.inputs.count + ' ' + countLabel + ')';
     }
@@ -610,7 +685,7 @@ load();
 </html>`;
 }
 
-// ─── Login page HTML (served when not authenticated) ──────────────────────────
+// ─── Login page HTML ───────────────────────────────────────────────────────────
 
 function loginHTML() {
   return `<!DOCTYPE html>
