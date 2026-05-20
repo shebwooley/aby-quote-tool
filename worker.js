@@ -493,30 +493,42 @@ function toggleDetail(id) {
 }
 
 function detailHTML(q, products) {
+  const rerunState = JSON.stringify({
+    clientName: q.client_name || '',
+    effectiveDate: q.effective_date || '',
+    brokerName: q.broker_name || '',
+    brokerAgency: q.broker_agency || '',
+    brokerPhone: q.broker_phone || '',
+    brokerEmail: q.broker_email || '',
+    commissionIncluded: !!q.commission_included,
+    repName: q.rep_name || '',
+    products: q.products || '[]'
+  });
+  const rerunUrl = '/?rerun=' + encodeURIComponent(rerunState);
   return '<div class="detail-inner">' +
     '<div class="detail-grid">' +
       '<div class="detail-item"><label>Effective Date</label><span>' + (esc(q.effective_date) || '—') + '</span></div>' +
       '<div class="detail-item"><label>Broker Phone</label><span>' + (esc(q.broker_phone) || '—') + '</span></div>' +
       '<div class="detail-item"><label>Broker Email</label><span>' + (esc(q.broker_email) || '—') + '</span></div>' +
-      '<div class="detail-item"><label>Rep Phone</label><span>' + (esc(q.rep_phone) || '—') + '</span></div>' +
-      '<div class="detail-item"><label>Rep Email</label><span>' + (esc(q.rep_email) || '—') + '</span></div>' +
       '<div class="detail-item"><label>Commission</label><span>' + (q.commission_included ? 'Included (−C)' : 'Not included (−NC)') + '</span></div>' +
     '</div>' +
-    '<div class="products-label">Products</div>' +
-    '<div class="product-chips">' +
-      (products.length
-        ? products.map(function(p){ return '<span class="chip">' + esc(p) + '</span>'; }).join('')
-        : '<span style="color:#aaa;font-style:italic;font-size:.875rem">None recorded</span>') +
-    '</div></div>';
+    '<div style="margin-top:.75rem">' +
+      '<a href="' + rerunUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:#e8f4ec;color:#1a5c3a;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4">Re-run Quote ↗</a>' +
+    '</div>' +
+    '</div>';
 }
 
 const PRODUCT_SHORT = {
-  pop: { def: 'POP', packages: { docsOnly: 'POP Docs Only', popHsa: 'POP + NDT (POP & HSA)', full: 'POP + NDT (FSA & HSA)' } },
-  fsa: 'FSA / DCAP / LFSA', hsa: 'HSA', hra: 'HRA',
-  ichra: 'ICHRA / QSEHRA', cobra: 'COBRA',
-  stateContinuation: 'State Continuation',
-  erisa: { def: 'ERISA Wrap', packages: { basic: 'Basic', buyUp: 'Buy-Up', enhanced: 'Enhanced', fullPlan: 'Full Plan', whiteGlove: 'White Glove' } },
-  aca: 'ACA Reporting',
+  // embedsName: true means the package label already contains the product name, so don't prefix
+  pop:              { def: 'POP', embedsName: true, packages: { docsOnly: 'POP Docs Only', popHsa: 'POP + NDT (POP & HSA)', full: 'POP + NDT (FSA & HSA)' } },
+  fsa:              { def: 'FSA / DCAP / LFSA', countLabel: 'participants' },
+  hsa:              { def: 'HSA', countLabel: 'accounts' },
+  hra:              { def: 'HRA', countLabel: 'participants' },
+  ichra:            { def: 'ICHRA / QSEHRA', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
+  cobra:            { def: 'COBRA', countLabel: 'eligible employees' },
+  stateContinuation:{ def: 'State Continuation', countLabel: 'employees' },
+  erisa:            { def: 'ERISA Wrap', packages: { basic: 'Basic', buyUp: 'Buy-Up', enhanced: 'Enhanced', fullPlan: 'Full Plan', whiteGlove: 'White Glove' } },
+  aca:              { def: 'ACA Reporting', packages: { smallB: 'Small/Level-Funded 1095-B', fullLt100: 'ALE Full <100', fullMid: 'ALE Full 100–249', fullHigh: 'ALE Full 250–499', selfLt100: 'ALE Self <100', selfMid: 'ALE Self 100–249', selfHigh: 'ALE Self 250–499' }, countLabel: 'forms' },
 };
 const PRODUCT_NAME_TO_ID = {
   'Section 125 Premium Only Plan (POP)': 'pop',
@@ -534,16 +546,37 @@ function shortProductName(p) {
   if (typeof p === 'string') return p;
   const id = (p.id in PRODUCT_SHORT) ? p.id : (PRODUCT_NAME_TO_ID[p.id] || PRODUCT_NAME_TO_ID[p.name] || p.id);
   const entry = PRODUCT_SHORT[id];
-  if (!entry) return p.name || p.id || '?';
-  if (typeof entry === 'string') return entry;
-  if (p.inputs && p.inputs.packageIds) {
-    const labels = p.inputs.packageIds.split(',').filter(Boolean).map(function(pkgId) {
-      return (entry.packages && entry.packages[pkgId]) || pkgId;
-    });
-    if (labels.length > 0) return (entry.def || id) + ' (' + labels.join(', ') + ')';
+  let label;
+
+  if (!entry) {
+    label = p.name || p.id || '?';
+  } else {
+    const def        = (typeof entry === 'string') ? entry : (entry.def || id);
+    const pkgs       = (typeof entry === 'object') ? entry.packages : null;
+    const countLabel = (typeof entry === 'object' && entry.countLabel) ? entry.countLabel : 'participants';
+    const embedsName = !!(typeof entry === 'object' && entry.embedsName);
+
+    if (p.inputs && p.inputs.packageIds) {
+      // Multi-package (e.g. ERISA — broker selected 1–5 packages)
+      const labels = p.inputs.packageIds.split(',').filter(Boolean).map(function(pkgId) {
+        return (pkgs && pkgs[pkgId]) || pkgId;
+      });
+      label = labels.length > 0 ? def + ' — ' + labels.join(', ') : def;
+    } else if (p.inputs && p.inputs.package) {
+      // Single-package select (e.g. POP, ICHRA, ACA)
+      const pkgLabel = pkgs && pkgs[p.inputs.package];
+      label = pkgLabel ? (embedsName ? pkgLabel : def + ' — ' + pkgLabel) : def;
+    } else {
+      label = def;
+    }
+
+    // Append participant/account/form count where it affects pricing
+    if (p.inputs && p.inputs.count) {
+      label += ' (' + p.inputs.count + ' ' + countLabel + ')';
+    }
   }
-  const pkgVal = p.inputs && (p.inputs.package || p.inputs[id + '-package'] || Object.values(p.inputs)[0]);
-  return (pkgVal && entry.packages && entry.packages[pkgVal]) || entry.def || p.name || id;
+
+  return label;
 }
 
 function parseProducts(raw) {

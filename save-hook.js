@@ -51,8 +51,9 @@
       const pi = (cb.dataset && cb.dataset.productInput) ? cb.dataset.productInput : '';
       if (pi && pi.split(':').length >= 3) return;
 
-      // Walk up to the product container
-      const item = cb.closest('.product-item') || cb.closest('[class*="product"]') || cb.parentElement;
+      // Walk up to the product container (.product-row wraps both the checkbox head
+      // and the options panel; must not stop at .product-row-head which is a child)
+      const item = cb.closest('.product-row') || cb.closest('.product-item') || cb.parentElement;
       // Name: try a heading, a label sibling, or fall back to the input name/id
       const nameEl = item && item.querySelector('h3,h4,.product-name,[class*="name"],legend,label');
       const name   = (nameEl && nameEl.textContent.trim()) || cb.getAttribute('aria-label') || cb.name || cb.id || '';
@@ -67,6 +68,13 @@
           const parts = (sel.dataset.productInput || '').split(':');
           if (parts.length === 2 && parts[1] === 'package' && sel.value) {
             inputs.package = sel.value;
+          }
+        });
+        // Capture participant/account count inputs (FSA, HSA, HRA, COBRA, etc.)
+        item.querySelectorAll('input[data-product-input]').forEach(function(inp) {
+          const parts = (inp.dataset.productInput || '').split(':');
+          if (parts.length === 2 && parts[1] === 'count' && inp.value) {
+            inputs.count = inp.value;
           }
         });
         // Collect checked multi-package sub-checkboxes (e.g. ERISA packages selected for quoting)
