@@ -35,7 +35,12 @@ export default {
     // ── Admin page ──────────────────────────────────────────────────────────────
     if (path === '/admin' || path === '/admin/') {
       return withAuth(request, env, () =>
-        new Response(adminHTML(), { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
+        new Response(adminHTML(), {
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'no-store',          // never let Cloudflare cache the authenticated page
+          },
+        })
       );
     }
     if (path === '/admin.html') {
@@ -164,40 +169,29 @@ async function handleListQuotes(request, env) {
   const limit  = Math.min(parseInt(url.searchParams.get('limit')  || '300'), 500);
   const offset = parseInt(url.searchParams.get('offset') || '0');
 
-  // Auto-migrate: add status column if it doesn't exist yet.
-  // D1 throws "duplicate column name" if it's already there — we catch that silently.
-  try {
-    await env.DB.prepare(`ALTER TABLE quotes ADD COLUMN status TEXT DEFAULT 'pending'`).run();
-  } catch (_) {}
-
-  // Query — status column is now guaranteed to exist
+  // SELECT * so this works whether or not the `status` column exists yet.
+  // Status is handled in JavaScript below — no DDL in this path.
   try {
     let result;
     if (q) {
       const like = `%${q}%`;
       result = await env.DB.prepare(`
-        SELECT id, quote_number, created_at, client_name, effective_date,
-               broker_name, broker_agency, broker_phone, broker_email,
-               rep_name, commission_included, products,
-               COALESCE(status, 'pending') AS status
-        FROM quotes
-        WHERE (status IS NULL OR status != 'trashed')
-          AND (client_name LIKE ? OR broker_name LIKE ? OR broker_agency LIKE ?
-               OR quote_number LIKE ? OR rep_name LIKE ?)
+        SELECT * FROM quotes
+        WHERE client_name LIKE ? OR broker_name LIKE ? OR broker_agency LIKE ?
+              OR quote_number LIKE ? OR rep_name LIKE ?
         ORDER BY created_at DESC LIMIT ? OFFSET ?
       `).bind(like, like, like, like, like, limit, offset).all();
     } else {
-      result = await env.DB.prepare(`
-        SELECT id, quote_number, created_at, client_name, effective_date,
-               broker_name, broker_agency, broker_phone, broker_email,
-               rep_name, commission_included, products,
-               COALESCE(status, 'pending') AS status
-        FROM quotes
-        WHERE (status IS NULL OR status != 'trashed')
-        ORDER BY created_at DESC LIMIT ? OFFSET ?
-      `).bind(limit, offset).all();
+      result = await env.DB.prepare(
+        'SELECT * FROM quotes ORDER BY created_at DESC LIMIT ? OFFSET ?'
+      ).bind(limit, offset).all();
     }
-    return jsonResp({ quotes: result.results || [] });
+    // Normalise status in JS: default to 'pending' if column absent or null,
+    // and exclude trashed quotes (safe even before the column exists).
+    const rows = (result.results || [])
+      .map(r  => ({ ...r, status: r.status || 'pending' }))
+      .filter(r => r.status !== 'trashed');
+    return jsonResp({ quotes: rows });
   } catch (err) {
     console.error('handleListQuotes failed:', err);
     return jsonResp({ error: String(err) }, 500);
@@ -226,8 +220,19 @@ async function handleUpdateStatus(id, request, env) {
   try {
     await env.DB.prepare(`UPDATE quotes SET status = ? WHERE id = ?`).bind(status, id).run();
   } catch (err) {
-    console.error('Status update failed:', err);
-    return jsonResp({ error: 'Failed to update status' }, 500);
+    // If the column doesn't exist yet, add it now then retry once
+    if (String(err).toLowerCase().includes('no such column')) {
+      try {
+        await env.DB.prepare(`ALTER TABLE quotes ADD COLUMN status TEXT DEFAULT 'pending'`).run();
+        await env.DB.prepare(`UPDATE quotes SET status = ? WHERE id = ?`).bind(status, id).run();
+      } catch (err2) {
+        console.error('Status update (with migration) failed:', err2);
+        return jsonResp({ error: 'Failed to update status' }, 500);
+      }
+    } else {
+      console.error('Status update failed:', err);
+      return jsonResp({ error: 'Failed to update status' }, 500);
+    }
   }
 
   return jsonResp({ ok: true, id, status });
@@ -345,9 +350,18 @@ async function withAuth(request, env, handler) {
     return handler();
   }
 
+  // API routes: return JSON 401 so the admin JS can show a real error message
+  if (new URL(request.url).pathname.startsWith('/api/')) {
+    return jsonResp({ error: 'Session expired — please log in again.' }, 401);
+  }
+
+  // Page routes: show the login form, never cached
   return new Response(loginHTML(), {
     status: 401,
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    headers: {
+      'Content-Type':  'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
   });
 }
 
@@ -496,10 +510,15 @@ async function load(q) {
   const url = '/api/quotes' + (q ? ('?q=' + encodeURIComponent(q)) : '');
   try {
     const res = await fetch(url);
-    if (res.status === 401) { location.href = '/admin'; return; }
-    if (!res.ok) {
+    if (res.status === 401) {
       document.getElementById('tbody').innerHTML =
-        '<tr><td colspan="8" class="loading" style="color:#c0392b">HTTP ' + res.status + ' — refresh to try again.</td></tr>';
+        '<tr><td colspan="8" class="loading" style="color:#c0392b">Session expired — <a href="/admin" style="color:#c0392b;font-weight:700">click here to log in again</a>.</td></tr>';
+      return;
+    }
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      document.getElementById('tbody').innerHTML =
+        '<tr><td colspan="8" class="loading" style="color:#c0392b">Error ' + res.status + ': ' + (errBody.error || 'unknown') + '</td></tr>';
       return;
     }
     const data = await res.json();
