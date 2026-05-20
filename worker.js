@@ -29,6 +29,9 @@ export default {
     if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'DELETE') {
       return withAuth(request, env, () => handleDeleteQuote(path.split('/').pop(), env));
     }
+    if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'PATCH') {
+      return withAuth(request, env, () => handleUpdateQuoteStatus(request, path.split('/').pop(), env));
+    }
     if (path === '/api/admin/login'  && method === 'POST') return handleLogin(request, env);
     if (path === '/api/admin/logout')                      return handleLogout();
 
@@ -183,7 +186,7 @@ async function handleListQuotes(request, env) {
   const limit  = Math.min(parseInt(url.searchParams.get('limit')  || '300'), 500);
   const offset = parseInt(url.searchParams.get('offset') || '0');
 
-  const cols = 'id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products';
+  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status";
 
   try {
     let result;
@@ -223,6 +226,25 @@ async function handleDeleteQuote(id, env) {
     return jsonResp({ ok: true });
   } catch (err) {
     console.error('handleDeleteQuote failed:', err);
+    return jsonResp({ error: String(err) }, 500);
+  }
+}
+
+// ─── Quote: update status (admin) ─────────────────────────────────────────────
+
+async function handleUpdateQuoteStatus(request, id, env) {
+  let body;
+  try { body = await request.json(); }
+  catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const { status } = body;
+  if (!['P', 'S', 'D'].includes(status)) {
+    return jsonResp({ error: 'Invalid status' }, 400);
+  }
+  try {
+    await env.DB.prepare('UPDATE quotes SET status = ? WHERE id = ?').bind(status, id).run();
+    return jsonResp({ ok: true });
+  } catch (err) {
+    console.error('handleUpdateQuoteStatus failed:', err);
     return jsonResp({ error: String(err) }, 500);
   }
 }
@@ -445,6 +467,15 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 .empty-row td{text-align:center;padding:60px;color:#aaa;font-style:italic}
 .loading{text-align:center;padding:60px;color:#aaa}
 .error-msg{text-align:center;padding:40px;color:#c0392b}
+.tabs{background:white;border-bottom:1px solid #e5e5e5;padding:0 24px;display:flex;gap:0}
+.tab{width:auto !important;background:transparent !important;color:#666;border:none;
+     border-bottom:3px solid transparent;border-radius:0 !important;padding:.75rem 1.25rem;
+     font-size:.875rem;font-weight:600;cursor:pointer;white-space:nowrap;transition:color .15s}
+.tab:hover{background:rgba(0,0,0,.04) !important;color:#333}
+.tab.active{color:#1a5c3a !important;border-bottom-color:#1a5c3a;background:transparent !important}
+.tab-count{font-size:.75rem;background:#e8f5ee;color:#1a6640;border-radius:99px;
+           padding:1px 7px;margin-left:5px;font-weight:700;display:inline-block}
+.tab.active .tab-count{background:#1a5c3a;color:white}
 </style>
 </head>
 <body>
@@ -456,17 +487,22 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
   <input type="text" id="search" placeholder="Search by client, broker, agency, or quote number…">
   <span class="count" id="count"></span>
 </div>
+<div class="tabs">
+  <button class="tab active" data-status="P">Pending</button>
+  <button class="tab" data-status="S">Sold</button>
+  <button class="tab" data-status="D">Dead</button>
+</div>
 <main>
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Date / Time</th><th>Quote #</th><th>Client</th>
+          <th>Date / Time</th><th>Client</th>
           <th>Broker / Agency</th><th>Rep</th><th>Products</th><th>Comm</th>
         </tr>
       </thead>
       <tbody id="tbody">
-        <tr><td colspan="7" class="loading">Loading quotes…</td></tr>
+        <tr><td colspan="6" class="loading">Loading quotes…</td></tr>
       </tbody>
     </table>
   </div>
@@ -474,29 +510,30 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 <script>
 let quotes = [];
 let expandedId = null;
+let activeTab = 'P';
 
 async function load(q) {
   q = q || '';
   const url = '/api/quotes' + (q ? ('?q=' + encodeURIComponent(q)) : '');
   const tbody = document.getElementById('tbody');
 
-  tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading quotes…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="6" class="loading">Loading quotes…</td></tr>';
 
   let res;
   try {
     res = await fetch(url);
   } catch (netErr) {
-    tbody.innerHTML = '<tr><td colspan="7" class="error-msg">Network error: ' + netErr.message + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="error-msg">Network error: ' + netErr.message + '</td></tr>';
     return;
   }
 
   if (res.status === 401) {
-    tbody.innerHTML = '<tr><td colspan="7" class="error-msg">Session expired — <a href="/admin">click here to log in again</a>.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="error-msg">Session expired — <a href="/admin">click here to log in again</a>.</td></tr>';
     return;
   }
   if (!res.ok) {
     const errBody = await res.json().catch(function(){ return {}; });
-    tbody.innerHTML = '<tr><td colspan="7" class="error-msg">Server error ' + res.status + ': ' + (errBody.error || 'unknown error') + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="error-msg">Server error ' + res.status + ': ' + (errBody.error || 'unknown error') + '</td></tr>';
     return;
   }
 
@@ -504,7 +541,7 @@ async function load(q) {
   try {
     data = await res.json();
   } catch (parseErr) {
-    tbody.innerHTML = '<tr><td colspan="7" class="error-msg">Could not read server response: ' + parseErr.message + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="error-msg">Could not read server response: ' + parseErr.message + '</td></tr>';
     return;
   }
 
@@ -514,14 +551,24 @@ async function load(q) {
 
 function render() {
   const tbody = document.getElementById('tbody');
+  const filtered = quotes.filter(function(q){ return (q.status || 'P') === activeTab; });
+
+  ['P','S','D'].forEach(function(s) {
+    var btn = document.querySelector('.tab[data-status="' + s + '"]');
+    if (!btn) return;
+    var n = quotes.filter(function(q){ return (q.status || 'P') === s; }).length;
+    var label = {P:'Pending',S:'Sold',D:'Dead'}[s];
+    btn.innerHTML = label + (n ? ' <span class="tab-count">' + n + '</span>' : '');
+  });
+
   document.getElementById('count').textContent =
-    quotes.length ? (quotes.length + ' quote' + (quotes.length !== 1 ? 's' : '')) : '';
-  if (!quotes.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No quotes found.</td></tr>';
+    filtered.length ? (filtered.length + ' quote' + (filtered.length !== 1 ? 's' : '')) : '';
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No quotes found.</td></tr>';
     return;
   }
   tbody.innerHTML = '';
-  for (const q of quotes) {
+  for (const q of filtered) {
     const isC      = !(q.quote_number || '').endsWith('-NC');
     const products = parseProducts(q.products);
     const dt       = new Date(q.created_at);
@@ -542,7 +589,6 @@ function render() {
 
     row.innerHTML =
       '<td><div class="date-main">' + dateStr + '</div><div class="date-time">' + timeStr + '</div></td>' +
-      '<td class="qnum">' + esc(q.quote_number) + '</td>' +
       '<td>' + (esc(q.client_name) || '<span class="muted">—</span>') + '</td>' +
       '<td>' + brokerCell + '</td>' +
       '<td>' + (esc(q.rep_name) || '<span class="muted">—</span>') + '</td>' +
@@ -555,7 +601,7 @@ function render() {
     if (isExp) {
       const dr = document.createElement('tr');
       dr.className = 'detail-row';
-      dr.innerHTML = '<td colspan="7">' + detailHTML(q, products) + '</td>';
+      dr.innerHTML = '<td colspan="6">' + detailHTML(q, products) + '</td>';
       tbody.appendChild(dr);
     }
   }
@@ -579,8 +625,15 @@ function detailHTML(q, products) {
     products: q.products || '[]'
   });
   const rerunUrl = '/?rerun=' + encodeURIComponent(rerunState);
+  var curStatus = q.status || 'P';
+  var moveTargets = ['P','S','D'].filter(function(s){ return s !== curStatus; });
+  var moveLabels = {P:'Pending',S:'Sold',D:'Dead'};
+  var moveButtons = moveTargets.map(function(s){
+    return '<button onclick="event.stopPropagation();moveQuote(this.dataset.id,this.dataset.status)" data-id="' + q.id + '" data-status="' + s + '" style="display:inline-flex;align-items:center;gap:.25rem;padding:.35rem .8rem;background:white;color:#555;border-radius:6px;font-size:.82rem;font-weight:600;border:1px solid #ddd;cursor:pointer">Move to ' + moveLabels[s] + '</button>';
+  }).join('');
   return '<div class="detail-inner">' +
     '<div class="detail-grid">' +
+      '<div class="detail-item"><label>Quote #</label><span class="qnum">' + esc(q.quote_number) + '</span></div>' +
       '<div class="detail-item"><label>Effective Date</label><span>' + (esc(q.effective_date) || '—') + '</span></div>' +
       '<div class="detail-item"><label>Broker Phone</label><span>' + (esc(q.broker_phone) || '—') + '</span></div>' +
       '<div class="detail-item"><label>Broker Email</label><span>' + (esc(q.broker_email) || '—') + '</span></div>' +
@@ -588,6 +641,7 @@ function detailHTML(q, products) {
     '<div style="margin-top:.85rem;display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
       '<a href="' + rerunUrl + '&readonly=1" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:#e8f4ec;color:#1a5c3a;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4">View Quote ↗</a>' +
       '<a href="' + rerunUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#555;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #ddd">Re-run Quote ↗</a>' +
+      moveButtons +
       '<button onclick="event.stopPropagation();deleteQuote(this.dataset.id)" data-id="' + q.id + '" style="margin-left:auto;display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#c0392b;border-radius:6px;font-size:.85rem;font-weight:600;border:1px solid #f5b8b8;cursor:pointer">Delete ✕</button>' +
     '</div>' +
     '</div>';
@@ -666,6 +720,22 @@ async function logout() {
   location.href = '/admin';
 }
 
+async function moveQuote(id, status) {
+  var res = await fetch('/api/quotes/' + id, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({status: status})
+  });
+  if (res.ok) {
+    var q = quotes.find(function(q){ return q.id === id; });
+    if (q) q.status = status;
+    expandedId = null;
+    render();
+  } else {
+    alert('Could not update status — please try again.');
+  }
+}
+
 async function deleteQuote(id) {
   if (!confirm('Delete this quote? This cannot be undone.')) return;
   var res = await fetch('/api/quotes/' + id, { method: 'DELETE' });
@@ -688,6 +758,16 @@ document.getElementById('search').addEventListener('input', function(e) {
 });
 
 load();
+
+document.querySelectorAll('.tab').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.tab').forEach(function(b){ b.classList.remove('active'); });
+    this.classList.add('active');
+    activeTab = this.dataset.status;
+    expandedId = null;
+    render();
+  });
+});
 </script>
 </body>
 </html>`;
