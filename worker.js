@@ -32,6 +32,20 @@ export default {
     if (path === '/api/admin/login'  && method === 'POST') return handleLogin(request, env);
     if (path === '/api/admin/logout')                      return handleLogout();
 
+    // ── Diagnostic: minimal auth-gated D1 query ────────────────────────────────
+    if (path === '/api/quotes-ping') {
+      return withAuth(request, env, async () => {
+        try {
+          const r = await env.DB.prepare(
+            'SELECT id, quote_number, created_at FROM quotes ORDER BY created_at DESC LIMIT 3'
+          ).all();
+          return jsonResp({ ok: true, rowCount: (r.results || []).length, rows: r.results || [] });
+        } catch (e) {
+          return jsonResp({ ok: false, error: String(e) }, 500);
+        }
+      });
+    }
+
     // ── Admin page ──────────────────────────────────────────────────────────────
     if (path === '/admin' || path === '/admin/') {
       return withAuth(request, env, () =>
@@ -508,25 +522,48 @@ const STATUS_CLASS = { pending: 's-pending', sold: 's-sold', dead: 's-dead' };
 async function load(q) {
   q = q || '';
   const url = '/api/quotes' + (q ? ('?q=' + encodeURIComponent(q)) : '');
-  try {
-    const res = await fetch(url);
-    if (res.status === 401) {
-      document.getElementById('tbody').innerHTML =
-        '<tr><td colspan="8" class="loading" style="color:#c0392b">Session expired — <a href="/admin" style="color:#c0392b;font-weight:700">click here to log in again</a>.</td></tr>';
-      return;
-    }
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      document.getElementById('tbody').innerHTML =
-        '<tr><td colspan="8" class="loading" style="color:#c0392b">Error ' + res.status + ': ' + (errBody.error || 'unknown') + '</td></tr>';
-      return;
-    }
-    const data = await res.json();
-    quotes = data.quotes || [];
-    render();
-  } catch (e) {
+
+  // Step-by-step status — tells us exactly where it gets stuck
+  function step(msg, color) {
     document.getElementById('tbody').innerHTML =
-      '<tr><td colspan="8" class="loading" style="color:#c0392b">Failed to load quotes (' + e.message + ').</td></tr>';
+      '<tr><td colspan="8" class="loading" style="' + (color ? 'color:' + color : '') + '">' + msg + '</td></tr>';
+  }
+
+  step('Step 1 of 4 — sending request to server…');
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (netErr) {
+    step('&#x2717; Network error (stuck at step 1): ' + netErr.message, '#c0392b');
+    return;
+  }
+
+  step('Step 2 of 4 — server replied HTTP ' + res.status + ', reading body…');
+  if (res.status === 401) {
+    step('Session expired — <a href="/admin" style="color:#c0392b;font-weight:700">click here to log in again</a>.', '#c0392b');
+    return;
+  }
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    step('&#x2717; Server error (stuck at step 2): HTTP ' + res.status + ' — ' + (errBody.error || 'unknown'), '#c0392b');
+    return;
+  }
+
+  step('Step 3 of 4 — parsing JSON…');
+  let data;
+  try {
+    data = await res.json();
+  } catch (parseErr) {
+    step('&#x2717; JSON parse error (stuck at step 3): ' + parseErr.message, '#c0392b');
+    return;
+  }
+
+  step('Step 4 of 4 — received ' + (data.quotes || []).length + ' quotes, rendering…');
+  quotes = data.quotes || [];
+  try {
+    render();
+  } catch (renderErr) {
+    step('&#x2717; Render error (stuck at step 4): ' + renderErr.message, '#c0392b');
   }
 }
 
