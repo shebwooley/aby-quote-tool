@@ -136,17 +136,12 @@ async function handleSaveQuote(request, env, ctx) {
 // ─── Quote: list (admin) ───────────────────────────────────────────────────────
 
 async function handleListQuotes(request, env) {
-  // Auto-migrate: add status column if it doesn't exist yet.
-  // ALTER TABLE fails silently if column already exists.
-  try {
-    await env.DB.prepare(`ALTER TABLE quotes ADD COLUMN status TEXT DEFAULT 'pending'`).run();
-  } catch (_) { /* already exists — fine */ }
-
   const url    = new URL(request.url);
   const q      = (url.searchParams.get('q') || '').trim();
   const limit  = Math.min(parseInt(url.searchParams.get('limit')  || '300'), 500);
   const offset = parseInt(url.searchParams.get('offset') || '0');
 
+  // First attempt: query with status column (works once column exists)
   try {
     let result;
     if (q) {
@@ -158,11 +153,8 @@ async function handleListQuotes(request, env) {
                COALESCE(status, 'pending') AS status
         FROM quotes
         WHERE (status IS NULL OR status != 'trashed')
-          AND (client_name   LIKE ?
-           OR broker_name    LIKE ?
-           OR broker_agency  LIKE ?
-           OR quote_number   LIKE ?
-           OR rep_name       LIKE ?)
+          AND (client_name LIKE ? OR broker_name LIKE ? OR broker_agency LIKE ?
+               OR quote_number LIKE ? OR rep_name LIKE ?)
         ORDER BY created_at DESC LIMIT ? OFFSET ?
       `).bind(like, like, like, like, like, limit, offset).all();
     } else {
@@ -177,9 +169,68 @@ async function handleListQuotes(request, env) {
       `).bind(limit, offset).all();
     }
     return jsonResp({ quotes: result.results || [] });
+  } catch (_) {}
+
+  // Second attempt: column doesn't exist yet — add it, then retry
+  try {
+    await env.DB.prepare(`ALTER TABLE quotes ADD COLUMN status TEXT DEFAULT 'pending'`).run();
+  } catch (_) {}
+
+  try {
+    let result;
+    if (q) {
+      const like = `%${q}%`;
+      result = await env.DB.prepare(`
+        SELECT id, quote_number, created_at, client_name, effective_date,
+               broker_name, broker_agency, broker_phone, broker_email,
+               rep_name, commission_included, products,
+               COALESCE(status, 'pending') AS status
+        FROM quotes
+        WHERE (status IS NULL OR status != 'trashed')
+          AND (client_name LIKE ? OR broker_name LIKE ? OR broker_agency LIKE ?
+               OR quote_number LIKE ? OR rep_name LIKE ?)
+        ORDER BY created_at DESC LIMIT ? OFFSET ?
+      `).bind(like, like, like, like, like, limit, offset).all();
+    } else {
+      result = await env.DB.prepare(`
+        SELECT id, quote_number, created_at, client_name, effective_date,
+               broker_name, broker_agency, broker_phone, broker_email,
+               rep_name, commission_included, products,
+               COALESCE(status, 'pending') AS status
+        FROM quotes
+        WHERE (status IS NULL OR status != 'trashed')
+        ORDER BY created_at DESC LIMIT ? OFFSET ?
+      `).bind(limit, offset).all();
+    }
+    return jsonResp({ quotes: result.results || [] });
+  } catch (_) {}
+
+  // Last resort: query without status column at all
+  try {
+    let result;
+    if (q) {
+      const like = `%${q}%`;
+      result = await env.DB.prepare(`
+        SELECT id, quote_number, created_at, client_name, effective_date,
+               broker_name, broker_agency, broker_phone, broker_email,
+               rep_name, commission_included, products
+        FROM quotes
+        WHERE client_name LIKE ? OR broker_name LIKE ? OR broker_agency LIKE ?
+              OR quote_number LIKE ? OR rep_name LIKE ?
+        ORDER BY created_at DESC LIMIT ? OFFSET ?
+      `).bind(like, like, like, like, like, limit, offset).all();
+    } else {
+      result = await env.DB.prepare(`
+        SELECT id, quote_number, created_at, client_name, effective_date,
+               broker_name, broker_agency, broker_phone, broker_email,
+               rep_name, commission_included, products
+        FROM quotes ORDER BY created_at DESC LIMIT ? OFFSET ?
+      `).bind(limit, offset).all();
+    }
+    const rows = (result.results || []).map(r => ({ ...r, status: 'pending' }));
+    return jsonResp({ quotes: rows });
   } catch (err) {
-    console.error('handleListQuotes failed:', err);
-    return jsonResp({ error: err.message }, 500);
+    return jsonResp({ error: String(err) }, 500);
   }
 }
 
