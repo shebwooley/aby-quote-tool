@@ -23,9 +23,6 @@ export default {
     // ── API routes ──────────────────────────────────────────────────────────────
     if (path === '/api/quotes' && method === 'POST')  return handleSaveQuote(request, env, ctx);
     if (path === '/api/quotes' && method === 'GET')   return withAuth(request, env, () => handleListQuotes(request, env));
-    if (/^\/api\/quotes\/[^/]+\/status$/.test(path) && method === 'PATCH') {
-      return withAuth(request, env, () => handleUpdateStatus(path.split('/')[3], request, env));
-    }
     if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'GET') {
       return withAuth(request, env, () => handleGetQuote(path.split('/').pop(), env));
     }
@@ -183,29 +180,24 @@ async function handleListQuotes(request, env) {
   const limit  = Math.min(parseInt(url.searchParams.get('limit')  || '300'), 500);
   const offset = parseInt(url.searchParams.get('offset') || '0');
 
-  // SELECT * so this works whether or not the `status` column exists yet.
-  // Status is handled in JavaScript below — no DDL in this path.
+  const cols = 'id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products';
+
   try {
     let result;
     if (q) {
       const like = `%${q}%`;
       result = await env.DB.prepare(`
-        SELECT * FROM quotes
+        SELECT ${cols} FROM quotes
         WHERE client_name LIKE ? OR broker_name LIKE ? OR broker_agency LIKE ?
               OR quote_number LIKE ? OR rep_name LIKE ?
         ORDER BY created_at DESC LIMIT ? OFFSET ?
       `).bind(like, like, like, like, like, limit, offset).all();
     } else {
       result = await env.DB.prepare(
-        'SELECT * FROM quotes ORDER BY created_at DESC LIMIT ? OFFSET ?'
+        `SELECT ${cols} FROM quotes ORDER BY created_at DESC LIMIT ? OFFSET ?`
       ).bind(limit, offset).all();
     }
-    // Normalise status in JS: default to 'pending' if column absent or null,
-    // and exclude trashed quotes (safe even before the column exists).
-    const rows = (result.results || [])
-      .map(r  => ({ ...r, status: r.status || 'pending' }))
-      .filter(r => r.status !== 'trashed');
-    return jsonResp({ quotes: rows });
+    return jsonResp({ quotes: result.results || [] });
   } catch (err) {
     console.error('handleListQuotes failed:', err);
     return jsonResp({ error: String(err) }, 500);
@@ -218,38 +210,6 @@ async function handleGetQuote(id, env) {
   const row = await env.DB.prepare('SELECT * FROM quotes WHERE id = ?').bind(id).first();
   if (!row) return jsonResp({ error: 'Not found' }, 404);
   return jsonResp(row);
-}
-
-// ─── Quote: update status (admin) ─────────────────────────────────────────────
-
-async function handleUpdateStatus(id, request, env) {
-  let body;
-  try { body = await request.json(); }
-  catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
-
-  const { status } = body;
-  const allowed = ['pending', 'sold', 'dead', 'trashed'];
-  if (!allowed.includes(status)) return jsonResp({ error: 'Invalid status' }, 400);
-
-  try {
-    await env.DB.prepare(`UPDATE quotes SET status = ? WHERE id = ?`).bind(status, id).run();
-  } catch (err) {
-    // If the column doesn't exist yet, add it now then retry once
-    if (String(err).toLowerCase().includes('no such column')) {
-      try {
-        await env.DB.prepare(`ALTER TABLE quotes ADD COLUMN status TEXT DEFAULT 'pending'`).run();
-        await env.DB.prepare(`UPDATE quotes SET status = ? WHERE id = ?`).bind(status, id).run();
-      } catch (err2) {
-        console.error('Status update (with migration) failed:', err2);
-        return jsonResp({ error: 'Failed to update status' }, 500);
-      }
-    } else {
-      console.error('Status update failed:', err);
-      return jsonResp({ error: 'Failed to update status' }, 500);
-    }
-  }
-
-  return jsonResp({ ok: true, id, status });
 }
 
 // ─── Email via Resend ──────────────────────────────────────────────────────────
@@ -469,23 +429,7 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 .chip{background:#e8f5ee;color:#1a6640;border-radius:4px;padding:2px 8px;font-size:.8rem;font-weight:600}
 .empty-row td{text-align:center;padding:60px;color:#aaa;font-style:italic}
 .loading{text-align:center;padding:60px;color:#aaa}
-/* Status badges */
-.status-badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:.72rem;font-weight:700;letter-spacing:.03em;white-space:nowrap}
-.s-pending{background:#f0f0f0;color:#666}
-.s-sold{background:#e8f5ee;color:#1a6640}
-.s-dead{background:#fde8e8;color:#b03030}
-/* Status change buttons in detail view */
-.status-controls{display:flex;flex-wrap:wrap;gap:6px;margin-top:.85rem}
-.status-controls label{font-size:.72rem;font-weight:700;color:#888;text-transform:uppercase;
-                        letter-spacing:.05em;display:block;margin-bottom:5px;width:100%}
-.status-btn{padding:4px 14px;border-radius:6px;border:1px solid;font-size:.82rem;font-weight:600;
-            cursor:pointer;background:white;transition:opacity .1s}
-.status-btn:hover{opacity:.75}
-.status-btn.pending{color:#666;border-color:#ccc}
-.status-btn.sold{color:#1a6640;border-color:#b8d9c4}
-.status-btn.dead{color:#b03030;border-color:#f5b8b8}
-.status-btn.trash{color:#b03030;border-color:#f5b8b8;background:#fff5f5}
-.status-btn.active{outline:2px solid currentColor;outline-offset:2px}
+.error-msg{text-align:center;padding:40px;color:#c0392b}
 </style>
 </head>
 <body>
@@ -503,11 +447,11 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
       <thead>
         <tr>
           <th>Date / Time</th><th>Quote #</th><th>Client</th>
-          <th>Broker / Agency</th><th>Rep</th><th>Products</th><th>Status</th><th>Comm</th>
+          <th>Broker / Agency</th><th>Rep</th><th>Products</th><th>Comm</th>
         </tr>
       </thead>
       <tbody id="tbody">
-        <tr><td colspan="8" class="loading">Loading quotes…</td></tr>
+        <tr><td colspan="7" class="loading">Loading quotes…</td></tr>
       </tbody>
     </table>
   </div>
@@ -516,55 +460,41 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 let quotes = [];
 let expandedId = null;
 
-const STATUS_LABEL = { pending: 'Pending', sold: 'Sold', dead: 'Dead' };
-const STATUS_CLASS = { pending: 's-pending', sold: 's-sold', dead: 's-dead' };
-
 async function load(q) {
   q = q || '';
   const url = '/api/quotes' + (q ? ('?q=' + encodeURIComponent(q)) : '');
+  const tbody = document.getElementById('tbody');
 
-  // Step-by-step status — tells us exactly where it gets stuck
-  function step(msg, color) {
-    document.getElementById('tbody').innerHTML =
-      '<tr><td colspan="8" class="loading" style="' + (color ? 'color:' + color : '') + '">' + msg + '</td></tr>';
-  }
+  tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading quotes…</td></tr>';
 
-  step('Step 1 of 4 — sending request to server…');
   let res;
   try {
     res = await fetch(url);
   } catch (netErr) {
-    step('&#x2717; Network error (stuck at step 1): ' + netErr.message, '#c0392b');
+    tbody.innerHTML = '<tr><td colspan="7" class="error-msg">Network error: ' + netErr.message + '</td></tr>';
     return;
   }
 
-  step('Step 2 of 4 — server replied HTTP ' + res.status + ', reading body…');
   if (res.status === 401) {
-    step('Session expired — <a href="/admin" style="color:#c0392b;font-weight:700">click here to log in again</a>.', '#c0392b');
+    tbody.innerHTML = '<tr><td colspan="7" class="error-msg">Session expired — <a href="/admin">click here to log in again</a>.</td></tr>';
     return;
   }
   if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}));
-    step('&#x2717; Server error (stuck at step 2): HTTP ' + res.status + ' — ' + (errBody.error || 'unknown'), '#c0392b');
+    const errBody = await res.json().catch(function(){ return {}; });
+    tbody.innerHTML = '<tr><td colspan="7" class="error-msg">Server error ' + res.status + ': ' + (errBody.error || 'unknown error') + '</td></tr>';
     return;
   }
 
-  step('Step 3 of 4 — parsing JSON…');
   let data;
   try {
     data = await res.json();
   } catch (parseErr) {
-    step('&#x2717; JSON parse error (stuck at step 3): ' + parseErr.message, '#c0392b');
+    tbody.innerHTML = '<tr><td colspan="7" class="error-msg">Could not read server response: ' + parseErr.message + '</td></tr>';
     return;
   }
 
-  step('Step 4 of 4 — received ' + (data.quotes || []).length + ' quotes, rendering…');
   quotes = data.quotes || [];
-  try {
-    render();
-  } catch (renderErr) {
-    step('&#x2717; Render error (stuck at step 4): ' + renderErr.message, '#c0392b');
-  }
+  render();
 }
 
 function render() {
@@ -572,7 +502,7 @@ function render() {
   document.getElementById('count').textContent =
     quotes.length ? (quotes.length + ' quote' + (quotes.length !== 1 ? 's' : '')) : '';
   if (!quotes.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No quotes found.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No quotes found.</td></tr>';
     return;
   }
   tbody.innerHTML = '';
@@ -583,7 +513,6 @@ function render() {
     const dateStr  = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     const timeStr  = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
     const isExp    = expandedId === q.id;
-    const st       = q.status || 'pending';
 
     const row = document.createElement('tr');
     row.className = 'data-row' + (isExp ? ' expanded' : '');
@@ -596,8 +525,6 @@ function render() {
       return '<span class="chip" style="white-space:nowrap">' + esc(p) + '</span>';
     }).join('') + (products.length > 3 ? '<span style="color:#888;font-size:.78rem;white-space:nowrap">+' + (products.length-3) + ' more</span>' : '');
 
-    const statusBadge = '<span class="status-badge ' + (STATUS_CLASS[st] || 's-pending') + '">' + (STATUS_LABEL[st] || st) + '</span>';
-
     row.innerHTML =
       '<td><div class="date-main">' + dateStr + '</div><div class="date-time">' + timeStr + '</div></td>' +
       '<td class="qnum">' + esc(q.quote_number) + '</td>' +
@@ -605,7 +532,6 @@ function render() {
       '<td>' + brokerCell + '</td>' +
       '<td>' + (esc(q.rep_name) || '<span class="muted">—</span>') + '</td>' +
       '<td><div style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">' + chipHtml + '</div></td>' +
-      '<td>' + statusBadge + '</td>' +
       '<td><span class="badge ' + (isC ? 'badge-c' : 'badge-nc') + '">' + (isC ? 'C' : 'NC') + '</span></td>';
 
     row.addEventListener('click', function(){ toggleDetail(q.id); });
@@ -614,7 +540,7 @@ function render() {
     if (isExp) {
       const dr = document.createElement('tr');
       dr.className = 'detail-row';
-      dr.innerHTML = '<td colspan="8">' + detailHTML(q, products) + '</td>';
+      dr.innerHTML = '<td colspan="7">' + detailHTML(q, products) + '</td>';
       tbody.appendChild(dr);
     }
   }
@@ -626,7 +552,6 @@ function toggleDetail(id) {
 }
 
 function detailHTML(q, products) {
-  const st = q.status || 'pending';
   const rerunState = JSON.stringify({
     clientName: q.client_name || '',
     effectiveDate: q.effective_date || '',
@@ -645,43 +570,10 @@ function detailHTML(q, products) {
       '<div class="detail-item"><label>Broker Phone</label><span>' + (esc(q.broker_phone) || '—') + '</span></div>' +
       '<div class="detail-item"><label>Broker Email</label><span>' + (esc(q.broker_email) || '—') + '</span></div>' +
     '</div>' +
-    '<div class="status-controls">' +
-      '<label>Update Status</label>' +
-      '<button class="status-btn pending' + (st==='pending'?' active':'') + '" onclick="updateStatus(\'' + q.id + '\',\'pending\',event)">Pending</button>' +
-      '<button class="status-btn sold' + (st==='sold'?' active':'') + '" onclick="updateStatus(\'' + q.id + '\',\'sold\',event)">Sold</button>' +
-      '<button class="status-btn dead' + (st==='dead'?' active':'') + '" onclick="updateStatus(\'' + q.id + '\',\'dead\',event)">Dead</button>' +
-      '<button class="status-btn trash" onclick="updateStatus(\'' + q.id + '\',\'trashed\',event)">🗑 Trash</button>' +
-    '</div>' +
     '<div style="margin-top:.85rem">' +
       '<a href="' + rerunUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:#e8f4ec;color:#1a5c3a;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4">Re-run Quote ↗</a>' +
     '</div>' +
     '</div>';
-}
-
-async function updateStatus(id, status, e) {
-  if (e) e.stopPropagation();
-  if (status === 'trashed' && !confirm('Remove this quote from the list? This cannot be undone.')) return;
-  try {
-    const res = await fetch('/api/quotes/' + id + '/status', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status })
-    });
-    if (res.status === 401) { location.href = '/admin'; return; }
-    if (!res.ok) { alert('Failed to update status'); return; }
-    const q = quotes.find(function(x) { return x.id === id; });
-    if (q) {
-      if (status === 'trashed') {
-        quotes = quotes.filter(function(x) { return x.id !== id; });
-        if (expandedId === id) expandedId = null;
-      } else {
-        q.status = status;
-      }
-      render();
-    }
-  } catch (err) {
-    alert('Error: ' + err.message);
-  }
 }
 
 const PRODUCT_SHORT = {
