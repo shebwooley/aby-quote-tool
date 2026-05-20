@@ -531,15 +531,19 @@
     buildRepSelector();
     buildEffectiveDateOptions();
     attachPhoneFormatters();
+
+    // Capture readonly flag BEFORE prePopulateFromRerun() strips URL params via history.replaceState.
+    var isReadOnly = new URLSearchParams(window.location.search).get('readonly') === '1';
+
     prePopulateFromRerun();
 
     formEl.addEventListener('submit', generateQuote);
     var resetBtn = document.getElementById('resetBtn');
     if (resetBtn) resetBtn.addEventListener('click', resetForm);
 
-    // Read-only (View Quote) mode: auto-generate without saving to the log.
-    // save-hook.js checks window.__abyReadOnly and skips the POST when true.
-    if (new URLSearchParams(window.location.search).get('readonly') === '1') {
+    // View Quote mode: auto-generate without saving to the admin log.
+    // save-hook.js sees window.__abyReadOnly = true and skips the POST.
+    if (isReadOnly) {
       window.__abyReadOnly = true;
       setTimeout(generateQuote, 150);
     }
