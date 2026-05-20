@@ -536,5 +536,12 @@
     formEl.addEventListener('submit', generateQuote);
     var resetBtn = document.getElementById('resetBtn');
     if (resetBtn) resetBtn.addEventListener('click', resetForm);
+
+    // Read-only (View Quote) mode: auto-generate without saving to the log.
+    // save-hook.js checks window.__abyReadOnly and skips the POST when true.
+    if (new URLSearchParams(window.location.search).get('readonly') === '1') {
+      window.__abyReadOnly = true;
+      setTimeout(generateQuote, 150);
+    }
   });
 })();
