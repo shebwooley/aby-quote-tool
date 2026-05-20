@@ -133,6 +133,13 @@
       if (qNum === lastSavedNum) return;   // don't double-save the same quote
       lastSavedNum = qNum;
 
+      // View-only mode (opened via admin "View Quote"): skip this save,
+      // then clear the flag so any subsequent manual generate does save normally.
+      if (window.__abyReadOnly) {
+        window.__abyReadOnly = false;
+        return;
+      }
+
       saveQuote(qNum);
     });
 
