@@ -495,6 +495,14 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 <main>
   <div class="table-wrap">
     <table>
+      <colgroup>
+        <col style="width:11%">
+        <col style="width:17%">
+        <col style="width:20%">
+        <col style="width:12%">
+        <col style="width:35%">
+        <col style="width:5%">
+      </colgroup>
       <thead>
         <tr>
           <th>Date / Time</th><th>Client</th>
@@ -591,7 +599,7 @@ function render() {
       '<td><div class="date-main">' + dateStr + '</div><div class="date-time">' + timeStr + '</div></td>' +
       '<td>' + (esc(q.client_name) || '<span class="muted">—</span>') + '</td>' +
       '<td>' + brokerCell + '</td>' +
-      '<td>' + (esc(q.rep_name) || '<span class="muted">—</span>') + '</td>' +
+      '<td>' + (q.rep_name ? esc(q.rep_name.split(' ')[0]) : '<span class="muted">—</span>') + '</td>' +
       '<td><div style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">' + chipHtml + '</div></td>' +
       '<td><span class="badge ' + (isC ? 'badge-c' : 'badge-nc') + '">' + (isC ? 'C' : 'NC') + '</span></td>';
 
