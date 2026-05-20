@@ -26,6 +26,9 @@ export default {
     if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'GET') {
       return withAuth(request, env, () => handleGetQuote(path.split('/').pop(), env));
     }
+    if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'DELETE') {
+      return withAuth(request, env, () => handleDeleteQuote(path.split('/').pop(), env));
+    }
     if (path === '/api/admin/login'  && method === 'POST') return handleLogin(request, env);
     if (path === '/api/admin/logout')                      return handleLogout();
 
@@ -210,6 +213,18 @@ async function handleGetQuote(id, env) {
   const row = await env.DB.prepare('SELECT * FROM quotes WHERE id = ?').bind(id).first();
   if (!row) return jsonResp({ error: 'Not found' }, 404);
   return jsonResp(row);
+}
+
+// ─── Quote: delete (admin) ────────────────────────────────────────────────────
+
+async function handleDeleteQuote(id, env) {
+  try {
+    await env.DB.prepare('DELETE FROM quotes WHERE id = ?').bind(id).run();
+    return jsonResp({ ok: true });
+  } catch (err) {
+    console.error('handleDeleteQuote failed:', err);
+    return jsonResp({ error: String(err) }, 500);
+  }
 }
 
 // ─── Email via Resend ──────────────────────────────────────────────────────────
@@ -570,9 +585,10 @@ function detailHTML(q, products) {
       '<div class="detail-item"><label>Broker Phone</label><span>' + (esc(q.broker_phone) || '—') + '</span></div>' +
       '<div class="detail-item"><label>Broker Email</label><span>' + (esc(q.broker_email) || '—') + '</span></div>' +
     '</div>' +
-    '<div style="margin-top:.85rem;display:flex;gap:8px;flex-wrap:wrap">' +
+    '<div style="margin-top:.85rem;display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
       '<a href="' + rerunUrl + '&readonly=1" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:#e8f4ec;color:#1a5c3a;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4">View Quote ↗</a>' +
       '<a href="' + rerunUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#555;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #ddd">Re-run Quote ↗</a>' +
+      '<button onclick="event.stopPropagation();deleteQuote(\'' + q.id + '\')" style="margin-left:auto;display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#c0392b;border-radius:6px;font-size:.85rem;font-weight:600;border:1px solid #f5b8b8;cursor:pointer">Delete ✕</button>' +
     '</div>' +
     '</div>';
 }
@@ -648,6 +664,18 @@ function esc(s) {
 async function logout() {
   await fetch('/api/admin/logout');
   location.href = '/admin';
+}
+
+async function deleteQuote(id) {
+  if (!confirm('Delete this quote? This cannot be undone.')) return;
+  var res = await fetch('/api/quotes/' + id, { method: 'DELETE' });
+  if (res.ok) {
+    quotes = quotes.filter(function(q) { return q.id !== id; });
+    expandedId = null;
+    render();
+  } else {
+    alert('Delete failed — please try again.');
+  }
 }
 
 let searchTimer;
