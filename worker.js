@@ -42,14 +42,37 @@ export default {
       return Response.redirect(new URL('/admin', request.url).toString(), 302);
     }
 
-    // ── Diagnostics (temporary) ─────────────────────────────────────────────────
+    // ── Diagnostics ─────────────────────────────────────────────────────────────
     if (path === '/api/debug') {
+      // Test DB connectivity and schema
+      let dbStatus = 'not bound';
+      let quoteCount = null;
+      let hasStatusCol = null;
+      if (env.DB) {
+        try {
+          const r = await env.DB.prepare('SELECT COUNT(*) AS n FROM quotes').first();
+          quoteCount = r ? r.n : 0;
+          dbStatus = 'connected';
+        } catch (e) {
+          dbStatus = 'error: ' + String(e);
+        }
+        try {
+          // PRAGMA table_info returns one row per column
+          const cols = await env.DB.prepare("PRAGMA table_info('quotes')").all();
+          hasStatusCol = (cols.results || []).some(c => c.name === 'status');
+        } catch (e) {
+          hasStatusCol = 'error: ' + String(e);
+        }
+      }
       return jsonResp({
-        hasResendKey:      !!env.RESEND_API_KEY,
-        resendKeyPrefix:   env.RESEND_API_KEY ? env.RESEND_API_KEY.slice(0, 6) : 'MISSING',
-        hasAdminPassword:  !!env.ADMIN_PASSWORD,
-        hasFromEmail:      !!env.FROM_EMAIL,
-        fromEmail:         env.FROM_EMAIL || 'MISSING',
+        hasResendKey:     !!env.RESEND_API_KEY,
+        resendKeyPrefix:  env.RESEND_API_KEY ? env.RESEND_API_KEY.slice(0, 6) : 'MISSING',
+        hasAdminPassword: !!env.ADMIN_PASSWORD,
+        hasFromEmail:     !!env.FROM_EMAIL,
+        fromEmail:        env.FROM_EMAIL || 'MISSING',
+        dbStatus,
+        quoteCount,
+        hasStatusCol,
       });
     }
     if (path === '/api/test-email') {
@@ -141,41 +164,13 @@ async function handleListQuotes(request, env) {
   const limit  = Math.min(parseInt(url.searchParams.get('limit')  || '300'), 500);
   const offset = parseInt(url.searchParams.get('offset') || '0');
 
-  // First attempt: query with status column (works once column exists)
-  try {
-    let result;
-    if (q) {
-      const like = `%${q}%`;
-      result = await env.DB.prepare(`
-        SELECT id, quote_number, created_at, client_name, effective_date,
-               broker_name, broker_agency, broker_phone, broker_email,
-               rep_name, commission_included, products,
-               COALESCE(status, 'pending') AS status
-        FROM quotes
-        WHERE (status IS NULL OR status != 'trashed')
-          AND (client_name LIKE ? OR broker_name LIKE ? OR broker_agency LIKE ?
-               OR quote_number LIKE ? OR rep_name LIKE ?)
-        ORDER BY created_at DESC LIMIT ? OFFSET ?
-      `).bind(like, like, like, like, like, limit, offset).all();
-    } else {
-      result = await env.DB.prepare(`
-        SELECT id, quote_number, created_at, client_name, effective_date,
-               broker_name, broker_agency, broker_phone, broker_email,
-               rep_name, commission_included, products,
-               COALESCE(status, 'pending') AS status
-        FROM quotes
-        WHERE (status IS NULL OR status != 'trashed')
-        ORDER BY created_at DESC LIMIT ? OFFSET ?
-      `).bind(limit, offset).all();
-    }
-    return jsonResp({ quotes: result.results || [] });
-  } catch (_) {}
-
-  // Second attempt: column doesn't exist yet — add it, then retry
+  // Auto-migrate: add status column if it doesn't exist yet.
+  // D1 throws "duplicate column name" if it's already there — we catch that silently.
   try {
     await env.DB.prepare(`ALTER TABLE quotes ADD COLUMN status TEXT DEFAULT 'pending'`).run();
   } catch (_) {}
 
+  // Query — status column is now guaranteed to exist
   try {
     let result;
     if (q) {
@@ -203,33 +198,8 @@ async function handleListQuotes(request, env) {
       `).bind(limit, offset).all();
     }
     return jsonResp({ quotes: result.results || [] });
-  } catch (_) {}
-
-  // Last resort: query without status column at all
-  try {
-    let result;
-    if (q) {
-      const like = `%${q}%`;
-      result = await env.DB.prepare(`
-        SELECT id, quote_number, created_at, client_name, effective_date,
-               broker_name, broker_agency, broker_phone, broker_email,
-               rep_name, commission_included, products
-        FROM quotes
-        WHERE client_name LIKE ? OR broker_name LIKE ? OR broker_agency LIKE ?
-              OR quote_number LIKE ? OR rep_name LIKE ?
-        ORDER BY created_at DESC LIMIT ? OFFSET ?
-      `).bind(like, like, like, like, like, limit, offset).all();
-    } else {
-      result = await env.DB.prepare(`
-        SELECT id, quote_number, created_at, client_name, effective_date,
-               broker_name, broker_agency, broker_phone, broker_email,
-               rep_name, commission_included, products
-        FROM quotes ORDER BY created_at DESC LIMIT ? OFFSET ?
-      `).bind(limit, offset).all();
-    }
-    const rows = (result.results || []).map(r => ({ ...r, status: 'pending' }));
-    return jsonResp({ quotes: rows });
   } catch (err) {
+    console.error('handleListQuotes failed:', err);
     return jsonResp({ error: String(err) }, 500);
   }
 }
