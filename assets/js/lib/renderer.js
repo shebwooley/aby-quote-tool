@@ -376,10 +376,23 @@ ABYQuote.renderer = (function () {
     sections.push(renderAboutABY());
     sections.push(renderStandardServices());
 
+    // Group consecutive results by productId so the product overview renders
+    // once even when multiple packages are quoted for the same product (e.g. ERISA).
+    var productGroups = [];
     results.forEach(function (r) {
+      var last = productGroups[productGroups.length - 1];
+      if (last && last.productId === r.productId) {
+        last.results.push(r);
+      } else {
+        productGroups.push({ productId: r.productId, results: [r] });
+      }
+    });
+    productGroups.forEach(function (group) {
       sections.push('<div class="product-block">');
-      sections.push(renderProductOverview(r.productId));
-      sections.push(renderPricingTable(r));
+      sections.push(renderProductOverview(group.productId));
+      group.results.forEach(function (r) {
+        sections.push(renderPricingTable(r));
+      });
       sections.push('</div>');
     });
 
