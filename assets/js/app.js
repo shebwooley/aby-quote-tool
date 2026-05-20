@@ -116,29 +116,35 @@
 
     var heading = document.createElement('p');
     heading.className = 'product-package-multi-label';
-    heading.style.cssText = 'margin:0 0 8px;font-size:.875rem;color:#555;font-weight:600;';
+    heading.style.cssText = 'margin:0 0 8px;font-size:1rem;color:#555;font-weight:600;';
     heading.textContent = 'Select packages to quote — choose one or more:';
     wrap.appendChild(heading);
 
     product.packages.forEach(function (pkg) {
-      var row = document.createElement('div');
-      row.className = 'package-option-row';
-      row.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:6px;font-size:.875rem;line-height:1.4;';
-
       var cbId = 'pkg-' + product.id + '-' + pkg.id;
+
       var cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.id = cbId;
       cb.dataset.productInput = product.id + ':package:' + pkg.id;
-      cb.style.cssText = 'margin:0;flex-shrink:0;cursor:pointer;';
+      cb.style.cssText = 'margin:0;flex-shrink:0;cursor:pointer;width:16px;height:16px;vertical-align:middle;';
 
-      var lbl = document.createElement('label');
-      lbl.htmlFor = cbId;
-      lbl.textContent = pkg.name;
-      lbl.style.cssText = 'margin:0;cursor:pointer;font-weight:normal;';
+      var span = document.createElement('span');
+      span.textContent = pkg.name;
+      span.style.cssText = 'cursor:pointer;vertical-align:middle;';
 
+      var row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:1rem;cursor:pointer;';
       row.appendChild(cb);
-      row.appendChild(lbl);
+      row.appendChild(span);
+
+      // Clicking anywhere on the row toggles the checkbox
+      row.addEventListener('click', function (e) {
+        if (e.target !== cb) {
+          cb.checked = !cb.checked;
+        }
+      });
+
       wrap.appendChild(row);
     });
 
