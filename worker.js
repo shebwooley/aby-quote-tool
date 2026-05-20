@@ -511,10 +511,12 @@ function detailHTML(q, products) {
 }
 
 const PRODUCT_SHORT = {
-  pop: { def: 'POP', packages: { docsOnly: 'POP Docs', popHsa: 'POP + NDT (HSA)', full: 'POP + NDT (FSA/HSA)' } },
+  pop: { def: 'POP', packages: { docsOnly: 'POP Docs Only', popHsa: 'POP + NDT (POP & HSA)', full: 'POP + NDT (FSA & HSA)' } },
   fsa: 'FSA / DCAP / LFSA', hsa: 'HSA', hra: 'HRA',
   ichra: 'ICHRA / QSEHRA', cobra: 'COBRA',
-  stateContinuation: 'State Continuation', erisa: 'ERISA Wrap', aca: 'ACA Reporting',
+  stateContinuation: 'State Continuation',
+  erisa: { def: 'ERISA Wrap', packages: { basic: 'Basic', buyUp: 'Buy-Up', enhanced: 'Enhanced', fullPlan: 'Full Plan', whiteGlove: 'White Glove' } },
+  aca: 'ACA Reporting',
 };
 
 // Reverse lookup — handles quotes saved when checkboxes lacked name attributes,
@@ -538,8 +540,15 @@ function shortProductName(p) {
   const entry = PRODUCT_SHORT[id];
   if (!entry) return p.name || p.id || '?';
   if (typeof entry === 'string') return entry;
+  // Multi-package: packageIds stored as comma-separated string (e.g. ERISA)
+  if (p.inputs && p.inputs.packageIds) {
+    const labels = p.inputs.packageIds.split(',').filter(Boolean).map(function(pkgId) {
+      return (entry.packages && entry.packages[pkgId]) || pkgId;
+    });
+    if (labels.length > 0) return (entry.def || id) + ' (' + labels.join(', ') + ')';
+  }
   const pkgVal = p.inputs && (p.inputs.package || p.inputs[id + '-package'] || Object.values(p.inputs)[0]);
-  return (pkgVal && entry.packages[pkgVal]) || entry.def || p.name || id;
+  return (pkgVal && entry.packages && entry.packages[pkgVal]) || entry.def || p.name || id;
 }
 
 function parseProducts(raw) {
@@ -593,38 +602,4 @@ input[type=password]{width:100%;padding:.625rem .75rem;border:1px solid #ddd;bor
                       font-size:1rem;margin-bottom:.75rem;display:block}
 input[type=password]:focus{outline:none;border-color:#1a5c3a;box-shadow:0 0 0 3px rgba(26,92,58,.15)}
 button{width:100%;padding:.65rem;background:#1a5c3a;color:white;border:none;border-radius:6px;
-       font-size:1rem;cursor:pointer;font-weight:600}
-button:hover{background:#164d30}
-button:disabled{opacity:.6;cursor:default}
-.err{color:#c0392b;font-size:.85rem;margin-bottom:.5rem;display:none}
-</style>
-</head>
-<body>
-<div class="card">
-  <h1>ABY Quote Admin</h1>
-  <p class="sub">Internal access only</p>
-  <p class="err" id="err">Incorrect password.</p>
-  <input type="password" id="pw" placeholder="Enter password" autofocus>
-  <button id="btn" onclick="login()">Log in</button>
-</div>
-<script>
-async function login(){
-  const pw=document.getElementById('pw').value;
-  const btn=document.getElementById('btn');
-  btn.disabled=true; btn.textContent='Checking…';
-  const res=await fetch('/api/admin/login',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({password:pw})
-  });
-  if(res.ok){location.reload();}
-  else{
-    document.getElementById('err').style.display='block';
-    btn.disabled=false; btn.textContent='Log in';
-  }
-}
-document.getElementById('pw').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
-</script>
-</body>
-</html>`;
-}
+       font-size:1rem;curs

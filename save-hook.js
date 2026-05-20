@@ -45,6 +45,12 @@
     }
 
     checked.forEach(cb => {
+      // Skip multi-package sub-checkboxes (e.g. individual ERISA package options).
+      // These have data-product-input with 3 colon-separated parts like "erisa:package:basic".
+      // They are collected below via the item scan, not as top-level product selections.
+      const pi = (cb.dataset && cb.dataset.productInput) ? cb.dataset.productInput : '';
+      if (pi && pi.split(':').length >= 3) return;
+
       // Walk up to the product container
       const item = cb.closest('.product-item') || cb.closest('[class*="product"]') || cb.parentElement;
       // Name: try a heading, a label sibling, or fall back to the input name/id
@@ -56,6 +62,13 @@
         item.querySelectorAll('input:not([type="checkbox"]):not([type="file"]), select').forEach(el => {
           if (el.name && el.value) inputs[el.name] = el.value;
         });
+        // Collect checked multi-package sub-checkboxes (e.g. ERISA packages selected for quoting)
+        const checkedPkgIds = [];
+        item.querySelectorAll('input[type="checkbox"][data-product-input]:checked').forEach(function(pcb) {
+          const parts = (pcb.dataset.productInput || '').split(':');
+          if (parts.length === 3 && parts[1] === 'package') checkedPkgIds.push(parts[2]);
+        });
+        if (checkedPkgIds.length > 0) inputs.packageIds = checkedPkgIds.join(',');
       }
       // Prefer checkbox name/id; fall back to registry lookup; last resort use display name
       const id = cb.name || cb.id || nameToId[name] || name;
