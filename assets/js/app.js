@@ -445,6 +445,81 @@
     });
   }
 
+  // -------------------------------------------------------------
+  // Pre-populate form from a ?rerun= URL param (set by admin Re-run link)
+  // -------------------------------------------------------------
+
+  function prePopulateFromRerun() {
+    var params = new URLSearchParams(window.location.search);
+    var rerunParam = params.get('rerun');
+    if (!rerunParam) return;
+
+    var state;
+    try { state = JSON.parse(decodeURIComponent(rerunParam)); } catch (e) { return; }
+
+    // Basic text fields
+    ['clientName', 'effectiveDate', 'brokerName', 'brokerAgency', 'brokerPhone', 'brokerEmail'].forEach(function (key) {
+      if (!state[key]) return;
+      var el = document.getElementById(key) || formEl.querySelector('[name="' + key + '"]');
+      if (el) el.value = state[key];
+    });
+
+    // Commission checkbox
+    if (state.commissionIncluded != null) {
+      var commCb = document.getElementById('commissionIncluded');
+      if (commCb) commCb.checked = !!state.commissionIncluded;
+    }
+
+    // Rep: find the card whose visible name matches the saved rep name
+    if (state.repName && repSelectorEl) {
+      repSelectorEl.querySelectorAll('.rep-card').forEach(function (card) {
+        var nameEl = card.querySelector('.rep-card-name');
+        if (nameEl && nameEl.textContent.trim() === state.repName.trim()) {
+          var radio = card.querySelector('input[type="radio"]');
+          if (radio) { radio.checked = true; radio.dispatchEvent(new Event('change')); }
+        }
+      });
+    }
+
+    // Products
+    var productArr;
+    try {
+      productArr = typeof state.products === 'string' ? JSON.parse(state.products) : (state.products || []);
+    } catch (e) { productArr = []; }
+
+    productArr.forEach(function (p) {
+      var cb = document.querySelector('[data-product-checkbox="' + p.id + '"]');
+      if (!cb) return;
+      cb.checked = true;
+      cb.dispatchEvent(new Event('change')); // reveals the options panel
+
+      if (!p.inputs) return;
+
+      // Single package select (POP, ICHRA, ACA)
+      if (p.inputs.package) {
+        var sel = document.querySelector('[data-product-input="' + p.id + ':package"]');
+        if (sel) { sel.value = p.inputs.package; sel.dispatchEvent(new Event('change')); }
+      }
+
+      // Multi-package checkboxes (ERISA)
+      if (p.inputs.packageIds) {
+        p.inputs.packageIds.split(',').filter(Boolean).forEach(function (pkgId) {
+          var pkgCb = document.querySelector('[data-product-input="' + p.id + ':package:' + pkgId + '"]');
+          if (pkgCb) pkgCb.checked = true;
+        });
+      }
+
+      // Participant / account / form count
+      if (p.inputs.count) {
+        var countEl = document.querySelector('[data-product-input="' + p.id + ':count"]');
+        if (countEl) { countEl.value = p.inputs.count; countEl.dispatchEvent(new Event('change')); }
+      }
+    });
+
+    // Clean up URL so the long param doesn't linger in the address bar
+    history.replaceState({}, '', window.location.pathname);
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
     productListEl = document.getElementById('productList');
     formEl = document.getElementById('quoteForm');
@@ -456,6 +531,7 @@
     buildRepSelector();
     buildEffectiveDateOptions();
     attachPhoneFormatters();
+    prePopulateFromRerun();
 
     formEl.addEventListener('submit', generateQuote);
     var resetBtn = document.getElementById('resetBtn');
