@@ -53,10 +53,13 @@
 
     if (product.inputType === 'count') {
       wrap.appendChild(buildCountInput(product));
+    } else if (product.inputType === 'multi-package' || product.id === 'erisa') {
+      // ERISA always uses checkboxes so brokers can quote multiple packages at once.
+      // The product.id check ensures this works even if products.js is cached with
+      // the old inputType: 'package' value.
+      wrap.appendChild(buildMultiPackageCheckboxes(product));
     } else if (product.inputType === 'package') {
       wrap.appendChild(buildPackageSelect(product));
-    } else if (product.inputType === 'multi-package') {
-      wrap.appendChild(buildMultiPackageCheckboxes(product));
     } else if (product.inputType === 'package-with-count') {
       var pkgSelect = buildPackageSelect(product);
       var countInput = buildCountInput(product);
@@ -273,7 +276,7 @@
       } else if (product.inputType === 'package') {
         var ps = formEl.querySelector('[data-product-input="' + productId + ':package"]');
         selection.packageId = ps ? ps.value : (product.packages[0] && product.packages[0].id);
-      } else if (product.inputType === 'multi-package') {
+      } else if (product.inputType === 'multi-package' || product.id === 'erisa') {
         // Collect all checked package sub-checkboxes
         var multiCbs = formEl.querySelectorAll('[data-product-input^="' + productId + ':package:"]');
         var packageIds = [];
