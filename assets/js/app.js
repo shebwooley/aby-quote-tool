@@ -55,6 +55,8 @@
       wrap.appendChild(buildCountInput(product));
     } else if (product.inputType === 'package') {
       wrap.appendChild(buildPackageSelect(product));
+    } else if (product.inputType === 'multi-package') {
+      wrap.appendChild(buildMultiPackageCheckboxes(product));
     } else if (product.inputType === 'package-with-count') {
       var pkgSelect = buildPackageSelect(product);
       var countInput = buildCountInput(product);
@@ -102,6 +104,39 @@
     label.appendChild(span);
     label.appendChild(select);
     return label;
+  }
+
+  // Renders a set of checkboxes so the user can quote 1–N packages at once.
+  // Used for ERISA (inputType: 'multi-package').
+  function buildMultiPackageCheckboxes(product) {
+    var wrap = document.createElement('div');
+    wrap.className = 'product-package-multi';
+
+    var heading = document.createElement('p');
+    heading.className = 'product-package-multi-label';
+    heading.style.cssText = 'margin:0 0 8px;font-size:.875rem;color:#555;font-weight:600;';
+    heading.textContent = 'Select packages to quote — choose one or more:';
+    wrap.appendChild(heading);
+
+    product.packages.forEach(function (pkg) {
+      var row = document.createElement('label');
+      row.className = 'package-option-row';
+      row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin-bottom:6px;font-size:.875rem;line-height:1.4;';
+
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset.productInput = product.id + ':package:' + pkg.id;
+      cb.style.cssText = 'margin-top:2px;flex-shrink:0;';
+
+      var span = document.createElement('span');
+      span.textContent = pkg.name;
+
+      row.appendChild(cb);
+      row.appendChild(span);
+      wrap.appendChild(row);
+    });
+
+    return wrap;
   }
 
   // -------------------------------------------------------------
@@ -238,6 +273,17 @@
       } else if (product.inputType === 'package') {
         var ps = formEl.querySelector('[data-product-input="' + productId + ':package"]');
         selection.packageId = ps ? ps.value : (product.packages[0] && product.packages[0].id);
+      } else if (product.inputType === 'multi-package') {
+        // Collect all checked package sub-checkboxes
+        var multiCbs = formEl.querySelectorAll('[data-product-input^="' + productId + ':package:"]');
+        var packageIds = [];
+        multiCbs.forEach(function (pcb) {
+          if (pcb.checked) {
+            // data-product-input is "erisa:package:basic" — the id is the third segment
+            packageIds.push(pcb.dataset.productInput.split(':')[2]);
+          }
+        });
+        selection.packageIds = packageIds;
       } else if (product.inputType === 'package-with-count') {
         var ps2 = formEl.querySelector('[data-product-input="' + productId + ':package"]');
         var ci2 = formEl.querySelector('[data-product-input="' + productId + ':count"]');
@@ -248,6 +294,27 @@
     });
 
     return data;
+  }
+
+  // -------------------------------------------------------------
+  // Expand multi-package selections into individual package entries
+  // so the engine (which handles one packageId at a time) can price each.
+  // -------------------------------------------------------------
+
+  function expandSelections(selections) {
+    var expanded = [];
+    selections.forEach(function (sel) {
+      if (Array.isArray(sel.packageIds)) {
+        // Multi-package product (e.g. ERISA): one engine call per selected package
+        sel.packageIds.forEach(function (pkgId) {
+          expanded.push({ productId: sel.productId, packageId: pkgId });
+        });
+        // If the user checked ERISA but picked no packages, it is silently omitted
+      } else {
+        expanded.push(sel);
+      }
+    });
+    return expanded;
   }
 
   // -------------------------------------------------------------
@@ -277,7 +344,14 @@
   }
 
   function renderQuote(form) {
-    var results = ABYQuote.engine.calculateAll(form.selections, form.commissioned);
+    // Expand multi-package selections (e.g. ERISA) into individual engine calls
+    var expanded = expandSelections(form.selections);
+    if (expanded.length === 0) {
+      outputEl.innerHTML = '<div class="empty-state">Select at least one product to generate a quote.</div>';
+      return;
+    }
+
+    var results = ABYQuote.engine.calculateAll(expanded, form.commissioned);
     var quoteNumber = ABYQuote.utils.generateQuoteNumber(form.effectiveDate, form.commissioned);
     var html = ABYQuote.renderer.render(form, results, quoteNumber);
 
