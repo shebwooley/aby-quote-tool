@@ -62,6 +62,13 @@
         item.querySelectorAll('input:not([type="checkbox"]):not([type="file"]), select').forEach(el => {
           if (el.name && el.value) inputs[el.name] = el.value;
         });
+        // Capture package selects that use data-product-input instead of a name attr (e.g. POP)
+        item.querySelectorAll('select[data-product-input]').forEach(function(sel) {
+          const parts = (sel.dataset.productInput || '').split(':');
+          if (parts.length === 2 && parts[1] === 'package' && sel.value) {
+            inputs.package = sel.value;
+          }
+        });
         // Collect checked multi-package sub-checkboxes (e.g. ERISA packages selected for quoting)
         const checkedPkgIds = [];
         item.querySelectorAll('input[type="checkbox"][data-product-input]:checked').forEach(function(pcb) {
