@@ -517,13 +517,29 @@ const PRODUCT_SHORT = {
   stateContinuation: 'State Continuation', erisa: 'ERISA Wrap', aca: 'ACA Reporting',
 };
 
+// Reverse lookup — handles quotes saved when checkboxes lacked name attributes,
+// causing the full product name to be stored as the id.
+const PRODUCT_NAME_TO_ID = {
+  'Section 125 Premium Only Plan (POP)':               'pop',
+  'Section 125 Cafeteria Plan with FSA / DCAP / LFSA': 'fsa',
+  'Health Savings Account (HSA) Administration':        'hsa',
+  'Section 105 Health Reimbursement Arrangement (HRA)': 'hra',
+  'ICHRA / QSEHRA':                                     'ichra',
+  'COBRA Administration':                               'cobra',
+  'Texas State Continuation (Mini-COBRA)':              'stateContinuation',
+  'ERISA Wrap Document & Compliance':                   'erisa',
+  'ACA Forms 1094/1095 Reporting':                      'aca',
+};
+
 function shortProductName(p) {
   if (typeof p === 'string') return p;
-  const entry = PRODUCT_SHORT[p.id];
+  // Normalize id — some saves stored the full product name as the id
+  const id = (p.id in PRODUCT_SHORT) ? p.id : (PRODUCT_NAME_TO_ID[p.id] || PRODUCT_NAME_TO_ID[p.name] || p.id);
+  const entry = PRODUCT_SHORT[id];
   if (!entry) return p.name || p.id || '?';
   if (typeof entry === 'string') return entry;
-  const pkgVal = p.inputs && (p.inputs.package || p.inputs[p.id + '-package'] || Object.values(p.inputs)[0]);
-  return (pkgVal && entry.packages[pkgVal]) || entry.def || p.name || p.id;
+  const pkgVal = p.inputs && (p.inputs.package || p.inputs[id + '-package'] || Object.values(p.inputs)[0]);
+  return (pkgVal && entry.packages[pkgVal]) || entry.def || p.name || id;
 }
 
 function parseProducts(raw) {

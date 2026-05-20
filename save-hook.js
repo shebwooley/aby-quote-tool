@@ -37,6 +37,13 @@
     const checked = document.querySelectorAll(
       '#productList input[type="checkbox"]:checked, .product-list input[type="checkbox"]:checked'
     );
+
+    // Build a display-name → id lookup from the product registry (loaded before this script)
+    const nameToId = {};
+    if (window.ABYQuote && Array.isArray(window.ABYQuote.products)) {
+      window.ABYQuote.products.forEach(function(p) { nameToId[p.name] = p.id; });
+    }
+
     checked.forEach(cb => {
       // Walk up to the product container
       const item = cb.closest('.product-item') || cb.closest('[class*="product"]') || cb.parentElement;
@@ -50,7 +57,9 @@
           if (el.name && el.value) inputs[el.name] = el.value;
         });
       }
-      products.push({ id: cb.name || cb.id || name, name, inputs });
+      // Prefer checkbox name/id; fall back to registry lookup; last resort use display name
+      const id = cb.name || cb.id || nameToId[name] || name;
+      products.push({ id, name, inputs });
     });
     return products;
   }
