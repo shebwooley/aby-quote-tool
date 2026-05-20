@@ -127,15 +127,20 @@
       cb.type = 'checkbox';
       cb.id = cbId;
       cb.dataset.productInput = product.id + ':package:' + pkg.id;
-      cb.style.cssText = 'margin:0;flex-shrink:0;cursor:pointer;width:16px;height:16px;vertical-align:middle;';
+      cb.style.cssText = 'margin:0;cursor:pointer;';
+
+      // Wrap checkbox in a span so site-wide "input { width:100% }" can't stretch it
+      var cbWrap = document.createElement('span');
+      cbWrap.style.cssText = 'display:inline-flex;align-items:center;width:auto;flex-shrink:0;line-height:1;';
+      cbWrap.appendChild(cb);
 
       var span = document.createElement('span');
       span.textContent = pkg.name;
-      span.style.cssText = 'cursor:pointer;vertical-align:middle;';
+      span.style.cssText = 'cursor:pointer;';
 
       var row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:1rem;cursor:pointer;';
-      row.appendChild(cb);
+      row.appendChild(cbWrap);
       row.appendChild(span);
 
       // Clicking anywhere on the row toggles the checkbox
