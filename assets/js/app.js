@@ -121,20 +121,24 @@
     wrap.appendChild(heading);
 
     product.packages.forEach(function (pkg) {
-      var row = document.createElement('label');
+      var row = document.createElement('div');
       row.className = 'package-option-row';
-      row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin-bottom:6px;font-size:.875rem;line-height:1.4;';
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:6px;font-size:.875rem;line-height:1.4;';
 
+      var cbId = 'pkg-' + product.id + '-' + pkg.id;
       var cb = document.createElement('input');
       cb.type = 'checkbox';
+      cb.id = cbId;
       cb.dataset.productInput = product.id + ':package:' + pkg.id;
-      cb.style.cssText = 'margin-top:2px;flex-shrink:0;';
+      cb.style.cssText = 'margin:0;flex-shrink:0;cursor:pointer;';
 
-      var span = document.createElement('span');
-      span.textContent = pkg.name;
+      var lbl = document.createElement('label');
+      lbl.htmlFor = cbId;
+      lbl.textContent = pkg.name;
+      lbl.style.cssText = 'margin:0;cursor:pointer;font-weight:normal;';
 
       row.appendChild(cb);
-      row.appendChild(span);
+      row.appendChild(lbl);
       wrap.appendChild(row);
     });
 
