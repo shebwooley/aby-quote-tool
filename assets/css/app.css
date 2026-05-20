@@ -225,6 +225,16 @@ label.field .required-mark {
 
 .product-row-options input[type="number"] { min-width: 120px; }
 
+.product-row-options input[type="checkbox"] {
+  min-width: 0;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  accent-color: var(--aby-blue);
+}
+
 /* ----- Rep selector ----- */
 
 .rep-selector {
