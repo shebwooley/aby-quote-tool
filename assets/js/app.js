@@ -527,10 +527,6 @@
     repSelectorEl = document.getElementById('repSelector');
     dateSelectEl = document.getElementById('effectiveDateSelect');
 
-    // Capture readonly flag before prePopulateFromRerun wipes the URL params
-    var readOnly = new URLSearchParams(window.location.search).get('readonly') === '1';
-    if (readOnly) window.__abyReadOnly = true;
-
     buildProductList();
     buildRepSelector();
     buildEffectiveDateOptions();
@@ -540,52 +536,5 @@
     formEl.addEventListener('submit', generateQuote);
     var resetBtn = document.getElementById('resetBtn');
     if (resetBtn) resetBtn.addEventListener('click', resetForm);
-
-    // Auto-generate and show a notice when viewing a saved quote (readonly mode)
-    if (readOnly) {
-      var banner = document.createElement('div');
-      banner.style.cssText = 'background:#fffbea;border:1px solid #e8d44d;border-radius:6px;' +
-        'padding:10px 16px;margin-bottom:14px;font-size:.875rem;color:#7a5c00;';
-      banner.textContent = 'Viewing saved quote — no record will be created. ' +
-        'To save a new version, modify anything and click Generate.';
-      outputEl.parentNode.insertBefore(banner, outputEl);
-      setTimeout(function () { generateQuote(null); }, 100);
-    }
-  });
-})();
-  prePopulateFromRerun();
-
-    formEl.addEventListener('submit', generateQuote);
-    var resetBtn = document.getElementById('resetBtn');
-    if (resetBtn) resetBtn.addEventListener('click', resetForm);
-
-    // Auto-generate and show a notice when viewing a saved quote (readonly mode)
-    if (readOnly) {
-      var banner = document.createElement('div');
-      banner.style.cssText = 'background:#fffbea;border:1px solid #e8d44d;border-radius:6px;' +
-        'padding:10px 16px;margin-bottom:14px;font-size:.875rem;color:#7a5c00;';
-      banner.textContent = 'Viewing saved quote — no record will be created. ' +
-        'To save a new version, modify anything and click Generate.';
-      outputEl.parentNode.insertBefore(banner, outputEl);
-      setTimeout(function () { generateQuote(null); }, 100);
-    }
-  });
-})();
-prePopulateFromRerun();
-
-    formEl.addEventListener('submit', generateQuote);
-    var resetBtn = document.getElementById('resetBtn');
-    if (resetBtn) resetBtn.addEventListener('click', resetForm);
-
-    // Auto-generate and show a notice when viewing a saved quote (readonly mode)
-    if (readOnly) {
-      var banner = document.createElement('div');
-      banner.style.cssText = 'background:#fffbea;border:1px solid #e8d44d;border-radius:6px;' +
-        'padding:10px 16px;margin-bottom:14px;font-size:.875rem;color:#7a5c00;';
-      banner.textContent = 'Viewing saved quote — no record will be created. ' +
-        'To save a new version, modify anything and click Generate.';
-      outputEl.parentNode.insertBefore(banner, outputEl);
-      setTimeout(function () { generateQuote(null); }, 100);
-    }
   });
 })();
