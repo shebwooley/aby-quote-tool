@@ -109,8 +109,7 @@
     return label;
   }
 
-  // Renders a set of checkboxes so the user can quote 1–N packages at once.
-  // Used for ERISA (inputType: 'multi-package').
+  // Renders checkboxes so the broker can quote 1-5 ERISA packages at once.
   function buildMultiPackageCheckboxes(product) {
     var wrap = document.createElement('div');
     wrap.className = 'product-package-multi';
@@ -143,7 +142,7 @@
   }
 
   // -------------------------------------------------------------
-  // Sales rep selector — radio cards that auto-populate the fields
+  // Sales rep selector
   // -------------------------------------------------------------
 
   function buildRepSelector() {
@@ -200,14 +199,10 @@
   }
 
   // -------------------------------------------------------------
-  // Effective date dropdown — date-aware
-  // - Lists the 1st of each month from the current month through MAX_EFFECTIVE_DATE.
-  // - A past 1st-of-month drops off 15 days after the effective date
-  //   (e.g. June 1 disappears on June 16 — June 15 is still valid).
-  // - To extend past the current cap, just update MAX_EFFECTIVE_DATE below.
+  // Effective date dropdown
+  // YEAR-END NOTE: update MAX_EFFECTIVE_DATE once a year.
   // -------------------------------------------------------------
 
-  // YEAR-END NOTE: update this date once a year (e.g. to '2027-12-01' after Dec 2026).
   var MAX_EFFECTIVE_DATE = '2026-12-01';
 
   function buildEffectiveDateOptions() {
@@ -229,12 +224,9 @@
     var endParts = MAX_EFFECTIVE_DATE.split('-');
     var endDate = new Date(Number(endParts[0]), Number(endParts[1]) - 1, Number(endParts[2]));
 
-    // Iterate from the 1st of the current month forward
     var iter = new Date(now.getFullYear(), now.getMonth(), 1);
 
     while (iter <= endDate) {
-      // Cutoff: this 1st-of-month is valid up to and including the 15th
-      // (i.e. drop it once today >= the 16th of that month)
       var cutoff = new Date(iter.getFullYear(), iter.getMonth(), 16);
       if (todayMidnight < cutoff) {
         var y = iter.getFullYear();
@@ -246,7 +238,6 @@
         opt.textContent = label;
         dateSelectEl.appendChild(opt);
       }
-      // Advance to next month (Date handles year rollover)
       iter.setMonth(iter.getMonth() + 1);
     }
   }
@@ -273,20 +264,18 @@
       if (product.inputType === 'count') {
         var ci = formEl.querySelector('[data-product-input="' + productId + ':count"]');
         selection.count = ci && ci.value !== '' ? Number(ci.value) : null;
-      } else if (product.inputType === 'package') {
-        var ps = formEl.querySelector('[data-product-input="' + productId + ':package"]');
-        selection.packageId = ps ? ps.value : (product.packages[0] && product.packages[0].id);
       } else if (product.inputType === 'multi-package' || product.id === 'erisa') {
-        // Collect all checked package sub-checkboxes
         var multiCbs = formEl.querySelectorAll('[data-product-input^="' + productId + ':package:"]');
         var packageIds = [];
         multiCbs.forEach(function (pcb) {
           if (pcb.checked) {
-            // data-product-input is "erisa:package:basic" — the id is the third segment
             packageIds.push(pcb.dataset.productInput.split(':')[2]);
           }
         });
         selection.packageIds = packageIds;
+      } else if (product.inputType === 'package') {
+        var ps = formEl.querySelector('[data-product-input="' + productId + ':package"]');
+        selection.packageId = ps ? ps.value : (product.packages[0] && product.packages[0].id);
       } else if (product.inputType === 'package-with-count') {
         var ps2 = formEl.querySelector('[data-product-input="' + productId + ':package"]');
         var ci2 = formEl.querySelector('[data-product-input="' + productId + ':count"]');
@@ -300,19 +289,16 @@
   }
 
   // -------------------------------------------------------------
-  // Expand multi-package selections into individual package entries
-  // so the engine (which handles one packageId at a time) can price each.
+  // Expand multi-package selections before passing to the engine
   // -------------------------------------------------------------
 
   function expandSelections(selections) {
     var expanded = [];
     selections.forEach(function (sel) {
       if (Array.isArray(sel.packageIds)) {
-        // Multi-package product (e.g. ERISA): one engine call per selected package
         sel.packageIds.forEach(function (pkgId) {
           expanded.push({ productId: sel.productId, packageId: pkgId });
         });
-        // If the user checked ERISA but picked no packages, it is silently omitted
       } else {
         expanded.push(sel);
       }
@@ -347,7 +333,6 @@
   }
 
   function renderQuote(form) {
-    // Expand multi-package selections (e.g. ERISA) into individual engine calls
     var expanded = expandSelections(form.selections);
     if (expanded.length === 0) {
       outputEl.innerHTML = '<div class="empty-state">Select at least one product to generate a quote.</div>';
@@ -375,7 +360,7 @@
   }
 
   // -------------------------------------------------------------
-  // Download PDF (via html2pdf — no browser print headers/footers)
+  // Download PDF
   // -------------------------------------------------------------
 
   function downloadQuoteAsPdf(form, quoteNumber) {
@@ -386,17 +371,11 @@
     var liveQuote = outputEl.querySelector('.quote');
     if (!liveQuote) return;
 
-    // Clone the quote element so modifications don't affect the live preview.
-    // Working on a clone also avoids html2pdf measurement quirks that produce
-    // blank pages at the start when display:none toggles happen on live DOM.
     var element = liveQuote.cloneNode(true);
 
-    // Remove (not just hide) elements that shouldn't appear in the PDF.
     var hiddenEls = element.querySelectorAll('.no-print');
     hiddenEls.forEach(function (el) { el.parentNode && el.parentNode.removeChild(el); });
 
-    // Strip screen-only chrome — these were creating phantom spacing that
-    // html2pdf misread as a full blank page at the top.
     element.style.boxShadow = 'none';
     element.style.border = 'none';
     element.style.borderRadius = '0';
@@ -430,16 +409,15 @@
     outputEl.innerHTML = '';
   }
 
-
   // -------------------------------------------------------------
-  // Phone number auto-format: any 10-digit input becomes (XXX) XXX-XXXX
+  // Phone number auto-format
   // -------------------------------------------------------------
 
   function formatPhone(raw) {
     if (!raw) return '';
     var digits = String(raw).replace(/\D/g, '');
     if (digits.length === 11 && digits[0] === '1') digits = digits.slice(1);
-    if (digits.length !== 10) return raw; // leave untouched if not 10 digits
+    if (digits.length !== 10) return raw;
     return '(' + digits.slice(0, 3) + ') ' + digits.slice(3, 6) + '-' + digits.slice(6);
   }
 
