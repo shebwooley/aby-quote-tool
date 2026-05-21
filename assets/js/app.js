@@ -459,6 +459,169 @@
       var titleText = (clientPart + ' \u2014 ' + quoteNumber)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+      // Collect elected product names from the rendered quote
+      var productNames = [];
+      element.querySelectorAll('.product-overview h2').forEach(function (h) {
+        if (h.textContent.trim()) productNames.push(h.textContent.trim());
+      });
+      if (!productNames.length) {
+        element.querySelectorAll('.proposal-contents li').forEach(function (li) {
+          if (li.textContent.trim()) productNames.push(li.textContent.trim());
+        });
+      }
+
+      // Worker endpoint for commitment submissions (full URL so the file:// download can reach it)
+      var workerOrigin = window.location.origin;
+
+      var acceptanceForm = [
+        '<div id="acceptance-section" style="max-width:960px;margin:40px auto;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif">',
+        '  <link href=\"https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600&display=swap\" rel=\"stylesheet\">',
+        '  <div style=\"background:#fff;border:1.5px solid #b3cde8;border-top:5px solid #143b6b;border-radius:8px;padding:36px 40px;box-shadow:0 2px 8px rgba(0,0,0,.07)\">',
+        '    <div style=\"text-align:center;margin-bottom:28px\">',
+        '      <div style=\"font-size:13px;font-weight:700;color:#143b6b;letter-spacing:.08em;text-transform:uppercase;margin-bottom:4px\">ABY Benefits LLC</div>',
+        '      <h2 style=\"margin:0 0 6px;font-size:20px;color:#111\">Employer Acceptance &amp; Authorization</h2>',
+        '      <div style=\"font-size:12px;color:#777\">Non-binding letter of intent — quote number: <strong>' + quoteNumber + '</strong></div>',
+        '      <div style=\"margin-top:10px;font-size:12px;background:#eef4fb;border:1px solid #b3cde8;border-radius:6px;padding:6px 12px;display:inline-block\">',
+        '        <strong>\u2605 All ABY Admin Fees Guaranteed for 3 Years \u2605</strong>',
+        '      </div>',
+        '    </div>',
+
+        '    <div style=\"margin-bottom:18px\">',
+        '      <div style=\"font-size:11px;font-weight:700;color:#143b6b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px\">ABY Services Elected</div>',
+        '      <div id=\"elected-products\" style=\"font-size:13px;color:#333;padding:10px 14px;background:#f7faff;border:1px solid #dde8f4;border-radius:6px\">',
+        '        ' + (productNames.length ? productNames.map(function(n){ return '\u2713 ' + n; }).join('<br>') : '(as quoted above)'),
+        '      </div>',
+        '    </div>',
+
+        '    <form id=\"commitForm\" onsubmit=\"submitCommitment(event)\">',
+        '      <input type=\"hidden\" name=\"quoteNumber\" value=\"' + quoteNumber + '\">',
+        '      <input type=\"hidden\" name=\"products\" value=\"\" id=\"productsField\">',
+
+        // Two-column field rows
+        '      <div style=\"margin-bottom:20px\">',
+        '        <div style=\"font-size:11px;font-weight:700;color:#143b6b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px\">Employer Information</div>',
+        '        <div style=\"margin-bottom:10px\">',
+        '          <label style=\"font-size:12px;color:#555;display:block;margin-bottom:3px\">Employer Name</label>',
+        '          <input name=\"employerName\" value=\"' + (form.clientName || '') + '\" style=\"width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px\">',
+        '        </div>',
+        '        <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px\">',
+        '          <div><label style=\"font-size:12px;color:#555;display:block;margin-bottom:3px\">Address</label><input name=\"address\" style=\"width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px\"></div>',
+        '          <div><label style=\"font-size:12px;color:#555;display:block;margin-bottom:3px\">City / State / Zip</label><input name=\"cityStateZip\" style=\"width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px\"></div>',
+        '        </div>',
+        '      </div>',
+
+        '      <div style=\"margin-bottom:20px\">',
+        '        <div style=\"font-size:11px;font-weight:700;color:#143b6b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px\">Authorized Signer</div>',
+        '        <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px\">',
+        '          <div><label style=\"font-size:12px;color:#555;display:block;margin-bottom:3px\">Name</label><input name=\"authSigner\" id=\"authSignerInput\" oninput=\"document.getElementById(\'printPreview\').textContent=this.value;document.getElementById(\'signPreview\').textContent=this.value\" style=\"width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px\"></div>',
+        '          <div><label style=\"font-size:12px;color:#555;display:block;margin-bottom:3px\">Title</label><input name=\"authTitle\" style=\"width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px\"></div>',
+        '        </div>',
+        '        <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:10px\">',
+        '          <div><label style=\"font-size:12px;color:#555;display:block;margin-bottom:3px\">Email</label><input type=\"email\" name=\"authEmail\" style=\"width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px\"></div>',
+        '          <div><label style=\"font-size:12px;color:#555;display:block;margin-bottom:3px\">Phone</label><input type=\"tel\" name=\"authPhone\" style=\"width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px\"></div>',
+        '        </div>',
+        '      </div>',
+
+        '      <div style=\"margin-bottom:20px\">',
+        '        <div style=\"font-size:11px;font-weight:700;color:#143b6b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px\">HR / Benefits Contact <span style=\"font-weight:400;color:#888\">(if different)</span></div>',
+        '        <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px\">',
+        '          <div><label style=\"font-size:12px;color:#555;display:block;margin-bottom:3px\">Name</label><input name=\"hrContact\" style=\"width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px\"></div>',
+        '          <div><label style=\"font-size:12px;color:#555;display:block;margin-bottom:3px\">Title</label><input name=\"hrTitle\" style=\"width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px\"></div>',
+        '        </div>',
+        '        <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:10px\">',
+        '          <div><label style=\"font-size:12px;color:#555;display:block;margin-bottom:3px\">Email</label><input type=\"email\" name=\"hrEmail\" style=\"width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px\"></div>',
+        '          <div><label style=\"font-size:12px;color:#555;display:block;margin-bottom:3px\">Phone</label><input type=\"tel\" name=\"hrPhone\" style=\"width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px\"></div>',
+        '        </div>',
+        '      </div>',
+
+        '      <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:28px\">',
+        '        <div><label style=\"font-size:12px;color:#555;display:block;margin-bottom:3px\">Proposed Administrative Start Date</label><input type=\"date\" name=\"startDate\" style=\"width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px\"></div>',
+        '      </div>',
+
+        // Signature block
+        '      <div style=\"border-top:1px solid #dde;padding-top:24px;margin-bottom:24px\">',
+        '        <div style=\"font-size:11px;font-weight:700;color:#143b6b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px\">Authorization</div>',
+        '        <div style=\"display:grid;grid-template-columns:1fr 1fr;gap:24px\">',
+
+        // Accepted Print
+        '          <div>',
+        '            <label style=\"font-size:12px;color:#555;display:block;margin-bottom:6px\">Accepted — Printed Name</label>',
+        '            <div id=\"printPreview\" style=\"min-height:44px;border-bottom:1.5px solid #333;padding:6px 2px;font-size:16px;color:#222;letter-spacing:.01em\"></div>',
+        '            <input type=\"hidden\" name=\"acceptedPrint\" id=\"acceptedPrint\">',
+        '          </div>',
+
+        // Accepted Sign (cursive)
+        '          <div>',
+        '            <label style=\"font-size:12px;color:#555;display:block;margin-bottom:6px\">Accepted — Electronic Signature</label>',
+        '            <div id=\"signPreview\" style=\"min-height:44px;border-bottom:1.5px solid #333;padding:6px 2px;font-size:26px;color:#143b6b;font-family:\'Dancing Script\',cursive\"></div>',
+        '            <input type=\"hidden\" name=\"acceptedSign\" id=\"acceptedSign\">',
+        '            <div style=\"font-size:10px;color:#999;margin-top:3px\">Type your name in the \"Authorized Signer\" field above to sign</div>',
+        '          </div>',
+        '        </div>',
+
+        // Date
+        '        <div style=\"margin-top:16px;display:grid;grid-template-columns:200px 1fr;gap:10px;align-items:end\">',
+        '          <div>',
+        '            <label style=\"font-size:12px;color:#555;display:block;margin-bottom:3px\">Date</label>',
+        '            <input type=\"date\" name=\"signDate\" id=\"signDate\" style=\"width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px\">',
+        '          </div>',
+        '        </div>',
+        '      </div>',
+
+        // Submit button
+        '      <div style=\"text-align:center\">',
+        '        <button type=\"submit\" id=\"commitBtn\" style=\"background:#143b6b;color:#fff;font-size:14px;font-weight:600;padding:12px 36px;border:none;border-radius:6px;cursor:pointer;letter-spacing:.02em\">',
+        '          Submit Authorization to ABY',
+        '        </button>',
+        '        <div style=\"margin-top:8px;font-size:11px;color:#888\">This is a non-binding letter of intent. ABY will follow up to confirm implementation details.</div>',
+        '        <div id=\"commitMsg\" style=\"margin-top:12px;font-size:13px;display:none\"></div>',
+        '      </div>',
+        '    </form>',
+        '  </div>',
+        '  <script>',
+        '    document.getElementById(\'signDate\').valueAsDate = new Date();',
+        '    document.getElementById(\'productsField\').value = JSON.stringify(' + JSON.stringify(productNames) + ');',
+        '    async function submitCommitment(e) {',
+        '      e.preventDefault();',
+        '      var form = e.target;',
+        '      var authSigner = form.authSigner.value.trim();',
+        '      form.acceptedPrint.value = authSigner;',
+        '      form.acceptedSign.value  = authSigner;',
+        '      var btn = document.getElementById(\'commitBtn\');',
+        '      var msg = document.getElementById(\'commitMsg\');',
+        '      btn.disabled = true; btn.textContent = \'Submitting…\';',
+        '      var payload = {};',
+        '      new FormData(form).forEach(function(v,k){ payload[k]=v; });',
+        '      try {',
+        '        var products = [];',
+        '        try { products = JSON.parse(payload.products || \'[]\'); } catch(e){}',
+        '        payload.products = products;',
+        '        var res = await fetch(\'' + workerOrigin + '/api/commitments\', {',
+        '          method:\'POST\',',
+        '          headers:{\'Content-Type\':\'application/json\'},',
+        '          body:JSON.stringify(payload)',
+        '        });',
+        '        if (res.ok) {',
+        '          msg.style.display=\'block\';',
+        '          msg.style.color=\'#1a5c3a\';',
+        '          msg.innerHTML=\'<strong>\u2713 Authorization received.</strong> ABY Benefits has been notified and will be in touch shortly. You may print or save this page for your records.\';',
+        '          btn.style.display=\'none\';',
+        '          window.print();',
+        '        } else {',
+        '          msg.style.display=\'block\'; msg.style.color=\'#c00\';',
+        '          msg.textContent=\'Submission failed. Please contact ABY Benefits directly.\';',
+        '          btn.disabled=false; btn.textContent=\'Submit Authorization to ABY\';',
+        '        }',
+        '      } catch(err) {',
+        '        msg.style.display=\'block\'; msg.style.color=\'#c00\';',
+        '        msg.textContent=\'Network error. Please contact ABY Benefits directly.\';',
+        '        btn.disabled=false; btn.textContent=\'Submit Authorization to ABY\';',
+        '      }',
+        '    }',
+        '  <\/script>',
+        '</div>'
+      ].join('\n');
+
       var doc = [
         '<!DOCTYPE html>',
         '<html lang="en">',
@@ -466,6 +629,7 @@
         '<meta charset="UTF-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
         '<title>' + titleText + '</title>',
+        '<link href=\"https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600&display=swap\" rel=\"stylesheet\">',
         '<style>',
         'body { margin: 40px auto; max-width: 960px; background: #f3f4f6; }',
         css,
@@ -473,6 +637,7 @@
         '</head>',
         '<body>',
         element.outerHTML,
+        acceptanceForm,
         '</body>',
         '</html>'
       ].join('\n');
