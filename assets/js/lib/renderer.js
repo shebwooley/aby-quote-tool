@@ -411,17 +411,4 @@ ABYQuote.renderer = (function () {
   }
 
   return { render: render };
-})();
-      });
-      sections.push('</div>');
-    });
-
-    sections.push(renderDisclaimer());
-    var selectedIds = results.map(function (r) { return r.productId; });
-    sections.push(renderAdditionalServices(selectedIds));
-
-    return sections.filter(Boolean).join('\n');
-  }
-
-  return { render: render };
-})();
+})()
