@@ -328,6 +328,30 @@ ABYQuote.renderer = (function () {
   }
 
   // -------------------------------------------------------------
+  // File Feed Integration card
+  // -------------------------------------------------------------
+
+  function renderFileFeedCard() {
+    var providers = [
+      'ADP', 'Bswift', 'Ceridian', 'Employee Navigator', 'Exponent HR',
+      'Netchex', 'Paycom', 'Paycor', 'Paychex', 'Selerix',
+      'UKG', 'Workday', 'Workforce Now'
+    ];
+    var chips = providers.map(function (p) {
+      return '<span class="feed-chip">' + u.escapeHtml(p) + '</span>';
+    }).join('');
+    return [
+      '<section class="file-feed-card">',
+      '  <h2>File Feed Integration</h2>',
+      '  <p>ABY is integrated with numerous HRIS and payroll providers. ABY is also able to set up file feeds with new providers as long as our SFTPs are used. A partial list of current integrations:</p>',
+      '  <div class="feed-chips">',
+      '    ' + chips,
+      '  </div>',
+      '</section>'
+    ].join('\n');
+  }
+
+  // -------------------------------------------------------------
   // Disclaimer (always at bottom)
   // -------------------------------------------------------------
 
@@ -404,6 +428,7 @@ ABYQuote.renderer = (function () {
     });
 
     sections.push(renderDisclaimer());
+    sections.push(renderFileFeedCard());
     var selectedIds = results.map(function (r) { return r.productId; });
     sections.push(renderAdditionalServices(selectedIds));
 
