@@ -139,11 +139,17 @@ ABYQuote.renderer = (function () {
   // -------------------------------------------------------------
 
   function renderStandardServices() {
+    var itemsHtml = L.standardServices.items.map(function (item) {
+      if (item && typeof item === 'object' && item.bold) {
+        return '<li><strong>' + u.escapeHtml(item.text) + '</strong></li>';
+      }
+      return '<li>' + u.escapeHtml(item) + '</li>';
+    }).join('\n');
     return [
       '<section class="standard-services">',
       '  <h2>' + u.escapeHtml(L.standardServices.heading) + '</h2>',
       '  <p>' + u.escapeHtml(L.standardServices.intro) + '</p>',
-      '  <ul>' + u.bullets(L.standardServices.items) + '</ul>',
+      '  <ul>' + itemsHtml + '</ul>',
       '  <p>' + u.escapeHtml(L.standardServices.closing) + '</p>',
       '</section>'
     ].join('\n');
@@ -204,7 +210,7 @@ ABYQuote.renderer = (function () {
         rows.push('<tr class="breakdown-row"><td></td><td colspan="2"><em>' + u.escapeHtml(result.formulaBreakdown) + '</em></td></tr>');
       }
       if (result.annualFee.count != null && meta.countLabel) {
-        rows.push('<tr class="count-summary-row"><td></td><td colspan="2">Based on <strong>' + result.annualFee.count + ' ' + u.escapeHtml(meta.countLabel) + '</strong></td></tr>');
+        rows.push('<tr class="count-summary-row"><td class="row-label">Estimated based on <strong>' + result.annualFee.count + ' ' + u.escapeHtml(meta.countLabel) + '</strong></td><td colspan="2"></td></tr>');
       }
     }
     if (result.monthlyFee) {
@@ -218,7 +224,7 @@ ABYQuote.renderer = (function () {
       }
       if (result.monthlyFee.count != null) {
         var countTerm = (meta.countLabel || 'enrollees');
-        rows.push('<tr class="count-summary-row"><td></td><td colspan="2">Based on <strong>' + result.monthlyFee.count + ' ' + u.escapeHtml(countTerm) + '</strong></td></tr>');
+        rows.push('<tr class="count-summary-row"><td class="row-label">Estimated based on <strong>' + result.monthlyFee.count + ' ' + u.escapeHtml(countTerm) + '</strong></td><td colspan="2"></td></tr>');
       }
     }
 
@@ -328,7 +334,6 @@ ABYQuote.renderer = (function () {
       '<section class="disclaimer">',
       '  <h2>' + u.escapeHtml(L.disclaimer.heading) + '</h2>',
       '  <p>' + u.escapeHtml(L.disclaimer.text) + '</p>',
-      '  <p class="fee-guarantee"><strong>' + u.escapeHtml(L.feeGuarantee) + '</strong></p>',
       '</section>'
     ].join('\n');
   }
