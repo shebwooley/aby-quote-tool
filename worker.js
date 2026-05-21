@@ -528,6 +528,7 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 .detail-item span{font-size:.875rem;color:#1a1a1a}
 .chip{background:#e8f5ee;color:#1a6640;border-radius:4px;padding:2px 8px;font-size:.8rem;font-weight:600}
 .empty-row td{text-align:center;padding:60px;color:#aaa;font-style:italic}
+.c-row:hover td{background:#f9fafb}
 .loading{text-align:center;padding:60px;color:#aaa}
 .error-msg{text-align:center;padding:40px;color:#c0392b}
 .tabs{background:white;border-bottom:1px solid #e5e5e5;padding:0 24px;display:flex;gap:0}
@@ -919,7 +920,7 @@ async function loadCommitments() {
       var products = [];
       try { products = JSON.parse(c.products || '[]'); } catch(e) {}
       var td = function(v, extra) { return '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top' + (extra || '') + '">' + (v || '<span style="color:#bbb">—</span>') + '</td>'; };
-      return '<tr style="transition:background .1s" onmouseover="this.style.background=\'#f9fafb\'" onmouseout="this.style.background=\'\'">' +
+      return '<tr class="c-row">' +
         td(dateStr, ';white-space:nowrap') +
         td('<strong>' + (c.quote_number || '') + '</strong>') +
         td((c.employer_name || '') + (c.address ? '<br><span style="color:#777;font-size:12px">' + c.address + (c.city_state_zip ? ', ' + c.city_state_zip : '') + '</span>' : '')) +
