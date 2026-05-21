@@ -32,6 +32,13 @@ export default {
     if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'PATCH') {
       return withAuth(request, env, () => handleUpdateQuoteStatus(request, path.split('/').pop(), env));
     }
+    // CORS preflight for cross-origin requests (e.g. from downloaded HTML files)
+    if (method === 'OPTIONS') return new Response(null, { status: 204, headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Max-Age': '86400',
+    }});
     if (path === '/api/commitments' && method === 'POST') return handleSaveCommitment(request, env);
     if (path === '/api/commitments' && method === 'GET')  return withAuth(request, env, () => handleListCommitments(request, env));
     if (path === '/api/admin/login'  && method === 'POST') return handleLogin(request, env);
