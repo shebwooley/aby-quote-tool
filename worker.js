@@ -476,6 +476,39 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 .tab-count{font-size:.75rem;background:#e8f5ee;color:#1a6640;border-radius:99px;
            padding:1px 7px;margin-left:5px;font-weight:700;display:inline-block}
 .tab.active .tab-count{background:#1a5c3a;color:white}
+.detail-actions{margin-top:.85rem;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+@media(max-width:680px){
+  header{padding:12px 16px}
+  .toolbar{padding:10px 12px}
+  .tabs{padding:0 12px}
+  .tab{padding:.6rem .8rem;font-size:.8rem}
+  main{padding:12px}
+  .table-wrap{background:transparent;box-shadow:none;overflow:visible}
+  table,tbody{display:block;width:100%}
+  thead,colgroup{display:none}
+  tr.data-row{display:grid;grid-template-columns:1fr auto;
+              grid-template-rows:auto auto auto auto;
+              background:white;border-radius:8px;margin-bottom:8px;
+              padding:12px 14px;box-shadow:0 1px 3px rgba(0,0,0,.08);
+              cursor:pointer;gap:1px 8px;border:1px solid #eaeaea}
+  tr.data-row:hover td{background:transparent}
+  tr.data-row.expanded{border-radius:8px 8px 0 0;border-bottom-color:transparent}
+  tr.data-row td{display:block;border:none;padding:0;background:transparent !important}
+  tr.data-row td:nth-child(1){grid-column:1;grid-row:1;font-size:.72rem;color:#999}
+  tr.data-row td:nth-child(2){grid-column:1;grid-row:2;font-weight:600;font-size:.95rem}
+  tr.data-row td:nth-child(3){grid-column:1;grid-row:3;font-size:.8rem;color:#666}
+  tr.data-row td:nth-child(4){display:none}
+  tr.data-row td:nth-child(5){grid-column:1/-1;grid-row:4;margin-top:6px}
+  tr.data-row td:nth-child(6){grid-column:2;grid-row:1/-1;display:flex;align-items:center;justify-content:center}
+  tr.detail-row{display:block;margin-bottom:12px}
+  tr.detail-row td{display:block;border-radius:0 0 8px 8px;padding:14px}
+  tr:not(.data-row):not(.detail-row){display:block}
+  tr:not(.data-row):not(.detail-row) td{display:block}
+  .detail-inner{max-width:100%}
+  .detail-grid{grid-template-columns:1fr 1fr}
+  .detail-actions{flex-direction:column;align-items:stretch}
+  .detail-actions a,.detail-actions button{margin-left:0 !important;justify-content:center;text-align:center}
+}
 </style>
 </head>
 <body>
@@ -646,7 +679,7 @@ function detailHTML(q, products) {
       '<div class="detail-item"><label>Broker Phone</label><span>' + (esc(q.broker_phone) || '—') + '</span></div>' +
       '<div class="detail-item"><label>Broker Email</label><span>' + (esc(q.broker_email) || '—') + '</span></div>' +
     '</div>' +
-    '<div style="margin-top:.85rem;display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+    '<div class="detail-actions">' +
       '<a href="' + rerunUrl + '&readonly=1" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:#e8f4ec;color:#1a5c3a;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4">View Quote ↗</a>' +
       '<a href="' + rerunUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#555;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #ddd">Re-run Quote ↗</a>' +
       moveButtons +
