@@ -28,14 +28,15 @@ ABYQuote.language = {
     heading: 'Standard Services Included With All ABY Plans',
     intro: 'All ABY clients receive a consistent level of service and support, regardless of the specific products selected. Included with every ABY-administered plan:',
     items: [
-      'Dedicated Account Manager with direct phone and email access',
+      { text: 'Dedicated Account Manager with direct phone and email access', bold: true },
       'Customized plan design and consultation',
       'Plan document package (unless a document-only option is elected)',
       'Electronic, employee-facing materials and communications',
       'Enrollment support, including DFW-area on-site meetings and virtual meetings',
       'Secure online portal with full employer, employee, and broker access',
       'Standard reporting and select ad-hoc reports as requested',
-      'Mobile app access for participants, available via Google Play and the Apple App Store'
+      'Mobile app access for participants, available via Google Play and the Apple App Store',
+      { text: 'All fees guaranteed for three (3) years.', bold: true }
     ],
     closing: 'These services are designed to ensure consistent compliance, clear communication, and a positive experience for both employers and employees.'
   },
