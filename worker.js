@@ -497,8 +497,8 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
   tr.data-row td:nth-child(1){grid-column:1;grid-row:1;font-size:.72rem;color:#999}
   tr.data-row td:nth-child(2){grid-column:1;grid-row:2;font-weight:600;font-size:.95rem}
   tr.data-row td:nth-child(3){grid-column:1;grid-row:3;font-size:.8rem;color:#666}
-  tr.data-row td:nth-child(4){display:none}
-  tr.data-row td:nth-child(5){grid-column:1/-1;grid-row:4;margin-top:6px}
+  tr.data-row td:nth-child(4){grid-column:1;grid-row:4;font-size:.78rem;color:#666}
+  tr.data-row td:nth-child(5){grid-column:1/-1;grid-row:5;margin-top:6px}
   tr.data-row td:nth-child(6){grid-column:2;grid-row:1/-1;display:flex;align-items:center;justify-content:center}
   tr.detail-row{display:block;margin-bottom:12px}
   tr.detail-row td{display:block;border-radius:0 0 8px 8px;padding:14px}
