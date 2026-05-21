@@ -32,6 +32,8 @@ export default {
     if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'PATCH') {
       return withAuth(request, env, () => handleUpdateQuoteStatus(request, path.split('/').pop(), env));
     }
+    if (path === '/api/commitments' && method === 'POST') return handleSaveCommitment(request, env);
+    if (path === '/api/commitments' && method === 'GET')  return withAuth(request, env, () => handleListCommitments(request, env));
     if (path === '/api/admin/login'  && method === 'POST') return handleLogin(request, env);
     if (path === '/api/admin/logout')                      return handleLogout();
 
@@ -320,6 +322,67 @@ async function sendEmail(env, { quoteNumber, clientName, effectiveDate, brokerNa
 
 // ─── Admin auth ────────────────────────────────────────────────────────────────
 
+async function handleSaveCommitment(request, env) {
+  let body;
+  try { body = await request.json(); }
+  catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+
+  const id  = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  const {
+    quoteNumber    = 'UNKNOWN',
+    employerName   = '',
+    address        = '',
+    cityStateZip   = '',
+    authSigner     = '',
+    authTitle      = '',
+    authEmail      = '',
+    authPhone      = '',
+    hrContact      = '',
+    hrTitle        = '',
+    hrEmail        = '',
+    hrPhone        = '',
+    startDate      = '',
+    acceptedPrint  = '',
+    acceptedSign   = '',
+    products       = [],
+  } = body;
+
+  try {
+    await env.DB.prepare(`
+      INSERT INTO commitments
+        (id, quote_number, submitted_at, employer_name, address, city_state_zip,
+         auth_signer, auth_title, auth_email, auth_phone,
+         hr_contact, hr_title, hr_email, hr_phone,
+         start_date, accepted_print, accepted_sign, products)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).bind(
+      id, quoteNumber, now, employerName, address, cityStateZip,
+      authSigner, authTitle, authEmail, authPhone,
+      hrContact, hrTitle, hrEmail, hrPhone,
+      startDate, acceptedPrint, acceptedSign,
+      JSON.stringify(products)
+    ).run();
+  } catch (err) {
+    console.error('Commitment insert failed:', err);
+    return jsonResp({ error: 'Failed to save commitment' }, 500);
+  }
+
+  return jsonResp({ id, quoteNumber, submitted_at: now });
+}
+
+async function handleListCommitments(request, env) {
+  try {
+    const result = await env.DB.prepare(
+      'SELECT * FROM commitments ORDER BY submitted_at DESC LIMIT 200'
+    ).all();
+    return jsonResp({ commitments: result.results || [] });
+  } catch (err) {
+    return jsonResp({ error: String(err) }, 500);
+  }
+}
+
 async function handleLogin(request, env) {
   let pw;
   const ct = request.headers.get('content-type') || '';
@@ -524,6 +587,7 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
   <button class="tab active" data-status="P">Pending</button>
   <button class="tab" data-status="S">Sold</button>
   <button class="tab" data-status="D">Dead</button>
+  <button class="tab" data-view="commitments" id="commitmentsTab" style="margin-left:auto">Commitments</button>
 </div>
 <main>
   <div class="table-wrap">
@@ -547,6 +611,22 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
       </tbody>
     </table>
   </div>
+<div id="commitments-wrap" style="display:none;overflow-x:auto">
+  <table id="ctable" style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead>
+      <tr>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0;white-space:nowrap">Submitted</th>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Quote #</th>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Employer</th>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Auth Signer</th>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Email / Phone</th>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Start Date</th>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Products</th>
+      </tr>
+    </thead>
+    <tbody id="ctbody"><tr><td colspan="7" style="padding:20px;color:#888;text-align:center">Loading…</td></tr></tbody>
+  </table>
+</div>
 </main>
 <script>
 let quotes = [];
@@ -804,11 +884,56 @@ document.querySelectorAll('.tab').forEach(function(btn) {
   btn.addEventListener('click', function() {
     document.querySelectorAll('.tab').forEach(function(b){ b.classList.remove('active'); });
     this.classList.add('active');
-    activeTab = this.dataset.status;
-    expandedId = null;
-    render();
+
+    if (this.dataset.view === 'commitments') {
+      document.querySelector('.table-wrap').style.display = 'none';
+      document.getElementById('commitments-wrap').style.display = 'block';
+      document.getElementById('search').style.display = 'none';
+      document.getElementById('count').textContent = '';
+      loadCommitments();
+    } else {
+      document.querySelector('.table-wrap').style.display = 'block';
+      document.getElementById('commitments-wrap').style.display = 'none';
+      document.getElementById('search').style.display = '';
+      activeTab = this.dataset.status;
+      expandedId = null;
+      render();
+    }
   });
 });
+
+let commitmentsLoaded = false;
+async function loadCommitments() {
+  if (commitmentsLoaded) return;
+  const ctbody = document.getElementById('ctbody');
+  try {
+    const res = await fetch('/api/commitments');
+    if (!res.ok) { ctbody.innerHTML = '<tr><td colspan="7" style="padding:16px;color:#c00;text-align:center">Error loading commitments.</td></tr>'; return; }
+    const data = await res.json();
+    const rows = data.commitments || [];
+    document.getElementById('count').textContent = rows.length + ' commitment' + (rows.length !== 1 ? 's' : '');
+    if (!rows.length) { ctbody.innerHTML = '<tr><td colspan="7" style="padding:20px;color:#888;text-align:center">No commitments yet.</td></tr>'; return; }
+    ctbody.innerHTML = rows.map(function(c) {
+      var dt = new Date(c.submitted_at);
+      var dateStr = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      var products = [];
+      try { products = JSON.parse(c.products || '[]'); } catch(e) {}
+      var td = function(v, extra) { return '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top' + (extra || '') + '">' + (v || '<span style=\'color:#bbb\'>—</span>') + '</td>'; };
+      return '<tr style="transition:background .1s" onmouseover="this.style.background=\'#f9fafb\'" onmouseout="this.style.background=\'\'">' +
+        td(dateStr, ';white-space:nowrap') +
+        td('<strong>' + (c.quote_number || '') + '</strong>') +
+        td((c.employer_name || '') + (c.address ? '<br><span style=\'color:#777;font-size:12px\'>' + c.address + (c.city_state_zip ? ', ' + c.city_state_zip : '') + '</span>' : '')) +
+        td((c.auth_signer || '') + (c.auth_title ? '<br><span style=\'color:#777;font-size:12px\'>' + c.auth_title + '</span>' : '')) +
+        td((c.auth_email ? '<a href=\'mailto:' + c.auth_email + '\'>' + c.auth_email + '</a>' : '') + (c.auth_phone ? '<br>' + c.auth_phone : '')) +
+        td(c.start_date || '') +
+        td(products.join(', ')) +
+        '</tr>';
+    }).join('');
+    commitmentsLoaded = true;
+  } catch(err) {
+    ctbody.innerHTML = '<tr><td colspan="7" style="padding:16px;color:#c00;text-align:center">Network error.</td></tr>';
+  }
+}
 </script>
 </body>
 </html>`;
