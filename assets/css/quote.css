@@ -246,6 +246,12 @@
   font-size: 13px;
 }
 
+.pricing-table .breakdown-row .count-cell {
+  color: #143b6b;
+  font-size: 13px;
+  font-weight: 400;
+}
+
 .product-notes {
   margin-top: 10px;
   padding: 10px 14px;
