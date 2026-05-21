@@ -918,13 +918,13 @@ async function loadCommitments() {
       var dateStr = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
       var products = [];
       try { products = JSON.parse(c.products || '[]'); } catch(e) {}
-      var td = function(v, extra) { return '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top' + (extra || '') + '">' + (v || '<span style=\'color:#bbb\'>—</span>') + '</td>'; };
+      var td = function(v, extra) { return '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top' + (extra || '') + '">' + (v || '<span style="color:#bbb">—</span>') + '</td>'; };
       return '<tr style="transition:background .1s" onmouseover="this.style.background=\'#f9fafb\'" onmouseout="this.style.background=\'\'">' +
         td(dateStr, ';white-space:nowrap') +
         td('<strong>' + (c.quote_number || '') + '</strong>') +
-        td((c.employer_name || '') + (c.address ? '<br><span style=\'color:#777;font-size:12px\'>' + c.address + (c.city_state_zip ? ', ' + c.city_state_zip : '') + '</span>' : '')) +
-        td((c.auth_signer || '') + (c.auth_title ? '<br><span style=\'color:#777;font-size:12px\'>' + c.auth_title + '</span>' : '')) +
-        td((c.auth_email ? '<a href=\'mailto:' + c.auth_email + '\'>' + c.auth_email + '</a>' : '') + (c.auth_phone ? '<br>' + c.auth_phone : '')) +
+        td((c.employer_name || '') + (c.address ? '<br><span style="color:#777;font-size:12px">' + c.address + (c.city_state_zip ? ', ' + c.city_state_zip : '') + '</span>' : '')) +
+        td((c.auth_signer || '') + (c.auth_title ? '<br><span style="color:#777;font-size:12px">' + c.auth_title + '</span>' : '')) +
+        td((c.auth_email ? '<a href="mailto:' + c.auth_email + '">'  + c.auth_email + '</a>' : '') + (c.auth_phone ? '<br>' + c.auth_phone : '')) +
         td(c.start_date || '') +
         td(products.join(', ')) +
         '</tr>';
