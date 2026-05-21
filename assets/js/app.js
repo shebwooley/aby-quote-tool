@@ -361,6 +361,7 @@
     outputEl.innerHTML =
       '<div class="output-toolbar no-print">' +
       '  <button type="button" class="primary" id="pdfBtn">Download PDF</button>' +
+      '  <button type="button" class="secondary" id="htmlBtn">Download HTML</button>' +
       '  <button type="button" class="secondary" id="printBtn">Print</button>' +
       '</div>' +
       '<div class="quote">' + html + '</div>';
@@ -370,6 +371,9 @@
 
     var pdfBtn = document.getElementById('pdfBtn');
     if (pdfBtn) pdfBtn.addEventListener('click', function () { downloadQuoteAsPdf(form, quoteNumber); });
+
+    var htmlBtn = document.getElementById('htmlBtn');
+    if (htmlBtn) htmlBtn.addEventListener('click', function () { downloadQuoteAsHtml(form, quoteNumber); });
 
     outputEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -411,6 +415,78 @@
     };
 
     html2pdf().set(opt).from(element).save();
+  }
+
+
+  // -------------------------------------------------------------
+  // Download HTML (self-contained, offline-ready)
+  // -------------------------------------------------------------
+
+  function downloadQuoteAsHtml(form, quoteNumber) {
+    var liveQuote = outputEl.querySelector('.quote');
+    if (!liveQuote) return;
+
+    var element = liveQuote.cloneNode(true);
+    var hiddenEls = element.querySelectorAll('.no-print');
+    hiddenEls.forEach(function (el) { el.parentNode && el.parentNode.removeChild(el); });
+
+    var clientPart = (form.clientName || 'Quote').replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, ' ');
+    var filename = clientPart + ' - ' + quoteNumber + '.html';
+
+    // Inline the ABY logo so the file works without the server
+    var logoImg = element.querySelector('.aby-logo img');
+    var logoFetch = (logoImg && logoImg.src)
+      ? fetch(logoImg.src)
+          .then(function (r) { return r.blob(); })
+          .then(function (blob) {
+            return new Promise(function (resolve) {
+              var reader = new FileReader();
+              reader.onload = function () { logoImg.src = reader.result; resolve(); };
+              reader.readAsDataURL(blob);
+            });
+          })
+          .catch(function () {})
+      : Promise.resolve();
+
+    // Fetch stylesheets to embed
+    var cssFetch = Promise.all([
+      fetch('assets/css/quote.css').then(function (r) { return r.text(); }).catch(function () { return ''; }),
+      fetch('assets/css/print.css').then(function (r) { return r.text(); }).catch(function () { return ''; })
+    ]);
+
+    Promise.all([logoFetch, cssFetch]).then(function (resolved) {
+      var css = resolved[1].join('\n\n');
+      var titleText = (clientPart + ' \u2014 ' + quoteNumber)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+      var doc = [
+        '<!DOCTYPE html>',
+        '<html lang="en">',
+        '<head>',
+        '<meta charset="UTF-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+        '<title>' + titleText + '</title>',
+        '<style>',
+        'body { margin: 40px auto; max-width: 960px; background: #f3f4f6; }',
+        css,
+        '</style>',
+        '</head>',
+        '<body>',
+        element.outerHTML,
+        '</body>',
+        '</html>'
+      ].join('\n');
+
+      var blob = new Blob([doc], { type: 'text/html' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+    });
   }
 
   function resetForm() {
