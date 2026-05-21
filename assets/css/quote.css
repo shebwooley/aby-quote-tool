@@ -433,3 +433,41 @@
 }
 .quote-warnings ul { margin: 0; padding-left: 18px; }
 .quote-warnings li { margin-bottom: 3px; }
+
+/* ── File Feed Integration card ─────────────────────────────────────────── */
+.file-feed-card {
+  background: #eef4fb;
+  border: 1.5px solid #b3cde8;
+  border-left: 5px solid #143b6b;
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin: 24px 0;
+}
+.file-feed-card h2 {
+  font-size: 15px;
+  font-weight: 700;
+  color: #143b6b;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.file-feed-card p {
+  font-size: 13px;
+  color: #333;
+  margin: 0 0 14px;
+  line-height: 1.6;
+}
+.feed-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.feed-chip {
+  background: #143b6b;
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  letter-spacing: 0.02em;
+}
