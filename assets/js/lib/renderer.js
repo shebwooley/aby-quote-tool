@@ -206,11 +206,12 @@ ABYQuote.renderer = (function () {
     }
     if (result.annualFee != null) {
       rows.push(feeRow(result.annualFee.label, u.money(result.annualFee.amount), 'annual'));
-      if (result.formulaBreakdown) {
-        rows.push('<tr class="breakdown-row"><td></td><td colspan="2"><em>' + u.escapeHtml(result.formulaBreakdown) + '</em></td></tr>');
-      }
-      if (result.annualFee.count != null && meta.countLabel) {
-        rows.push('<tr class="count-summary-row"><td class="row-label">Estimated based on <strong>' + result.annualFee.count + ' ' + u.escapeHtml(meta.countLabel) + '</strong></td><td colspan="2"></td></tr>');
+      var hasAnnualFormula = !!result.formulaBreakdown;
+      var hasAnnualCount  = result.annualFee.count != null && !!meta.countLabel;
+      if (hasAnnualFormula || hasAnnualCount) {
+        var annualLeft  = hasAnnualCount  ? 'Estimated based on <strong>' + result.annualFee.count + ' ' + u.escapeHtml(meta.countLabel) + '</strong>' : '';
+        var annualRight = hasAnnualFormula ? '<em>' + u.escapeHtml(result.formulaBreakdown) + '</em>' : '';
+        rows.push('<tr class="breakdown-row"><td class="row-label count-cell">' + annualLeft + '</td><td colspan="2">' + annualRight + '</td></tr>');
       }
     }
     if (result.monthlyFee) {
@@ -219,12 +220,13 @@ ABYQuote.renderer = (function () {
       rows.push('<tr><td class="row-label">' + u.escapeHtml(result.monthlyFee.label) + '</td>' +
                 '<td class="row-value">' + monthlyValue + note + '</td>' +
                 '<td class="row-cadence">monthly</td></tr>');
-      if (result.monthlyFee.breakdown) {
-        rows.push('<tr class="breakdown-row"><td></td><td colspan="2"><em>' + u.escapeHtml(result.monthlyFee.breakdown) + '</em></td></tr>');
-      }
-      if (result.monthlyFee.count != null) {
-        var countTerm = (meta.countLabel || 'enrollees');
-        rows.push('<tr class="count-summary-row"><td class="row-label">Estimated based on <strong>' + result.monthlyFee.count + ' ' + u.escapeHtml(countTerm) + '</strong></td><td colspan="2"></td></tr>');
+      var hasMonthlyBreakdown = !!result.monthlyFee.breakdown;
+      var hasMonthlyCount     = result.monthlyFee.count != null;
+      if (hasMonthlyBreakdown || hasMonthlyCount) {
+        var countTerm    = (meta.countLabel || 'enrollees');
+        var monthlyLeft  = hasMonthlyCount     ? 'Estimated based on <strong>' + result.monthlyFee.count + ' ' + u.escapeHtml(countTerm) + '</strong>' : '';
+        var monthlyRight = hasMonthlyBreakdown ? '<em>' + u.escapeHtml(result.monthlyFee.breakdown) + '</em>' : '';
+        rows.push('<tr class="breakdown-row"><td class="row-label count-cell">' + monthlyLeft + '</td><td colspan="2">' + monthlyRight + '</td></tr>');
       }
     }
 
@@ -397,6 +399,19 @@ ABYQuote.renderer = (function () {
       sections.push(renderProductOverview(group.productId));
       group.results.forEach(function (r) {
         sections.push(renderPricingTable(r));
+      });
+      sections.push('</div>');
+    });
+
+    sections.push(renderDisclaimer());
+    var selectedIds = results.map(function (r) { return r.productId; });
+    sections.push(renderAdditionalServices(selectedIds));
+
+    return sections.filter(Boolean).join('\n');
+  }
+
+  return { render: render };
+})();
       });
       sections.push('</div>');
     });
