@@ -528,7 +528,7 @@
         '    </div>',
         '  </div>',
         '  <div style="display:grid;grid-template-columns:220px 1fr;gap:10px;margin-bottom:28px">',
-        '    <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Proposed Administrative Start Date</label><input type="date" name="startDate" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px"></div>',
+        '    <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Proposed Administrative Start Date</label><select name="startDate" id="startDateSel" required style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px;background:white"><option value="">Select start date...</option></select></div>',
         '  </div>',
         '  <div id="pricing-summary" style="display:none;margin-bottom:24px;background:#f7faff;border:1.5px solid #143b6b;border-radius:6px;padding:16px 18px">',
         '    <div style="font-size:11px;font-weight:700;color:#143b6b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Selected Products &amp; Fees — I agree to the following:</div>',
@@ -563,6 +563,30 @@
         '<script>\n' +
         'document.getElementById("signDate").valueAsDate = new Date();\n' +
         'buildProductCheckboxes();\n' +
+        'buildStartDateSelect();\n' +
+        '\n' +
+        'function buildStartDateSelect() {\n' +
+        '  var sel = document.getElementById("startDateSel");\n' +
+        '  if (!sel) return;\n' +
+        '  var now = new Date();\n' +
+        '  var months = ["January","February","March","April","May","June",\n' +
+        '               "July","August","September","October","November","December"];\n' +
+        '  var iter = new Date(now.getFullYear(), now.getMonth(), 1);\n' +
+        '  for (var i = 0; i < 18; i++) {\n' +
+        '    var cutoff = new Date(iter.getFullYear(), iter.getMonth(), 16);\n' +
+        '    if (now < cutoff) {\n' +
+        '      var y = iter.getFullYear();\n' +
+        '      var m = iter.getMonth();\n' +
+        '      var val = y + "-" + String(m + 1).padStart(2, "0") + "-01";\n' +
+        '      var lbl = months[m] + " 1, " + y;\n' +
+        '      var opt = document.createElement("option");\n' +
+        '      opt.value = val;\n' +
+        '      opt.textContent = lbl;\n' +
+        '      sel.appendChild(opt);\n' +
+        '    }\n' +
+        '    iter.setMonth(iter.getMonth() + 1);\n' +
+        '  }\n' +
+        '}\n' +
         '\n' +
         'function buildProductCheckboxes() {\n' +
         '  var wraps = document.querySelectorAll(".pricing-table-wrap");\n' +
