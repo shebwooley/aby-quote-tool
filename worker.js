@@ -940,11 +940,15 @@ async function loadCommitments() {
         td(c.start_date || '') +
         td(productNames) +
         '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top">' +
-          '<button onclick="downloadCommitment(\'' + c.id + '\')" style="padding:5px 12px;background:#1a5c3a;color:white;border:none;border-radius:4px;font-size:12px;cursor:pointer;white-space:nowrap">⭳ Download</button>' +
+          '<button class="dl-btn" data-cid="' + c.id + '" style="padding:5px 12px;background:#1a5c3a;color:white;border:none;border-radius:4px;font-size:12px;cursor:pointer;white-space:nowrap">&#11091; Download</button>' +
         '</td>' +
         '</tr>';
     }).join('');
     commitmentsLoaded = true;
+    ctbody.addEventListener('click', function(e) {
+      var btn = e.target.closest('.dl-btn');
+      if (btn) downloadCommitment(btn.dataset.cid);
+    }, { once: true });
   } catch(err) {
     ctbody.innerHTML = '<tr><td colspan="8" style="padding:16px;color:#c00;text-align:center">Network error.</td></tr>';
   }
