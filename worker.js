@@ -981,13 +981,23 @@ function downloadCommitment(id) {
     if (Array.isArray(p.fees) && p.fees.length) {
       feesHtml = '<table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:12px">' +
         p.fees.map(function(f) {
-          var noteText = (f.rateNote || '') + (f.rateNote && f.countNote ? ' — ' : '') + (f.countNote || '');
+          var m = f.tierNote ? f.tierNote.match(/^(\d+)\+/) : null;
+          if (f.countNote) {
+            var displayRate = f.rateNote || '';
+            if (m && displayRate.indexOf('minimum') !== -1) {
+              displayRate = displayRate.replace(/(\(minimum [^)]+\))/, '$1 for groups under ' + m[1] + ' employees');
+            }
+            return '<tr><td colspan="3" style="padding:5px 8px 1px 8px;font-size:13px;color:#555">' + f.label + ' — ' + f.countNote + '</td></tr>' +
+              '<tr><td style="padding:1px 8px 2px 24px"></td>' +
+              '<td style="padding:1px 8px 2px;text-align:right;font-weight:700;white-space:nowrap;border-bottom:1px solid #f0f0f0">' + (f.value || '') + '</td>' +
+              '<td style="padding:1px 8px 2px;color:#888;white-space:nowrap;border-bottom:1px solid #f0f0f0">' + (f.cadence || '') + '</td></tr>' +
+              (displayRate ? '<tr><td colspan="3" style="padding:0 8px 6px 24px;font-size:11px;color:#888;font-style:italic">' + displayRate + '</td></tr>' : '');
+          }
           return '<tr>' +
             '<td style="padding:4px 8px;color:#555;border-bottom:1px solid #f0f0f0">' + (f.label || '') + '</td>' +
-            '<td style="padding:4px 8px;text-align:right;font-weight:600;border-bottom:1px solid #f0f0f0;white-space:nowrap">' + (f.value || '') + '</td>' +
+            '<td style="padding:4px 8px;text-align:right;font-weight:700;border-bottom:1px solid #f0f0f0;white-space:nowrap">' + (f.value || '') + '</td>' +
             '<td style="padding:4px 8px;color:#888;border-bottom:1px solid #f0f0f0;white-space:nowrap">' + (f.cadence || '') + '</td>' +
-            '</tr>' +
-            (noteText ? '<tr><td colspan="3" style="padding:1px 8px 5px 8px;font-size:11px;color:#888;font-style:italic">' + noteText + '</td></tr>' : '');
+            '</tr>';
         }).join('') + '</table>';
     }
     return '<div style="margin-bottom:14px;padding:12px 16px;border:1px solid #d8e8d8;border-radius:6px;background:#fafffe">' +
