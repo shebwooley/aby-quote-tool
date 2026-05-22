@@ -618,13 +618,20 @@
         '      var cad = row.querySelector(".row-cadence");\n' +
         '      var labelTxt = lbl ? lbl.textContent.trim() : "";\n' +
         '      if (lbl && val && labelTxt && labelTxt !== "Plan selected") {\n' +
-        '        fees.push({ label: labelTxt, value: val.textContent.trim(), cadence: cad ? cad.textContent.trim() : "" });\n' +
+        '        var tierNoteEl = val.querySelector(".tier-note");\n' +
+        '        var tierNote = tierNoteEl ? tierNoteEl.textContent.replace(/[()]/g, "").trim() : "";\n' +
+        '        var valueClean = tierNote ? val.textContent.replace("(" + tierNote + ")", "").trim() : val.textContent.trim();\n' +
+        '        fees.push({ label: labelTxt, value: valueClean, cadence: cad ? cad.textContent.trim() : "", tierNote: tierNote });\n' +
         '      }\n' +
         '    });\n' +
         '    var feeHtml = fees.map(function(f) {\n' +
-        '      var line = "<div style=\\"font-size:12px;color:#555;margin:3px 0 0 26px\\">" + f.label + ": <strong>" + f.value + "</strong>" + (f.cadence ? " " + f.cadence : "") + "</div>";\n' +
-        '      if (f.rateNote) line += "<div style=\\"font-size:11px;color:#888;margin:1px 0 0 26px;font-style:italic\\">" + f.rateNote + "</div>";\n' +
-        '      if (f.countNote) line += "<div style=\\"font-size:11px;color:#888;margin:1px 0 0 26px;font-style:italic\\">" + f.countNote + "</div>";\n' +
+        '      var m = f.tierNote ? f.tierNote.match(/^(\\\\d+)\\\\+/) : null;\n' +
+        '      var labelDisplay = f.countNote ? f.label + " \u2014 " + f.countNote : f.label;\n' +
+        '      var line = "<div style=\\"font-size:12px;color:#555;margin:3px 0 0 26px\\">" + labelDisplay + ": <strong>" + f.value + "</strong>" + (f.cadence ? " " + f.cadence : "") + "</div>";\n' +
+        '      if (f.rateNote) {\n' +
+        '        var displayRate = m ? f.rateNote.replace(/(\\\\(minimum [^)]+\\\\))/, "$1 for groups under " + m[1] + " employees") : f.rateNote;\n' +
+        '        line += "<div style=\\"font-size:11px;color:#888;margin:1px 0 0 26px;font-style:italic\\">" + displayRate + "</div>";\n' +
+        '      }\n' +
         '      return line;\n' +
         '    }).join("");\n' +
         '    var encoded = encodeURIComponent(JSON.stringify(fees));\n' +
@@ -649,13 +656,18 @@
         '    try { fees = JSON.parse(decodeURIComponent(cb.dataset.fees || "[]")); } catch(e) {}\n' +
         '    rows += "<tr><td colspan=\\"3\\" style=\\"padding:6px 0 2px;font-weight:700;color:#143b6b;font-size:13px\\">" + cb.value + "</td></tr>";\n' +
         '    fees.forEach(function(f) {\n' +
-        '      rows += "<tr>" +\n' +
-        '        "<td style=\\"padding:2px 0 2px 12px;font-size:12px;color:#555\\">" + f.label + "</td>" +\n' +
-        '        "<td style=\\"padding:2px 8px;font-size:12px;font-weight:600;text-align:right\\">" + f.value + "</td>" +\n' +
-        '        "<td style=\\"padding:2px 0;font-size:12px;color:#777\\">" + f.cadence + "</td></tr>";\n' +
-        '      if (f.rateNote || f.countNote) {\n' +
-        '        var noteText = (f.rateNote || "") + (f.rateNote && f.countNote ? " \u2014 " : "") + (f.countNote || "");\n' +
-        '        rows += "<tr><td colspan=\\"3\\" style=\\"padding:1px 0 4px 12px;font-size:11px;color:#888;font-style:italic\\">" + noteText + "</td></tr>";\n' +
+        '      var m = f.tierNote ? f.tierNote.match(/^(\\\\d+)\\\\+/) : null;\n' +
+        '      if (f.countNote) {\n' +
+        '        var displayRate = f.rateNote || "";\n' +
+        '        if (m && displayRate.indexOf("minimum") !== -1) displayRate = displayRate.replace(/(\\\\(minimum [^)]+\\\\))/, "$1 for groups under " + m[1] + " employees");\n' +
+        '        rows += "<tr><td colspan=\\"3\\" style=\\"padding:5px 0 1px 12px;font-size:12px;color:#555\\">" + f.label + " \u2014 " + f.countNote + "</td></tr>";\n' +
+        '        rows += "<tr><td style=\\"padding:1px 0 2px 12px\\"></td><td style=\\"padding:1px 8px 2px;font-size:12px;font-weight:700;text-align:right\\">" + f.value + "</td><td style=\\"padding:1px 0 2px;font-size:12px;color:#777\\">" + f.cadence + "</td></tr>";\n' +
+        '        if (displayRate) rows += "<tr><td colspan=\\"3\\" style=\\"padding:0 0 5px 12px;font-size:11px;color:#888;font-style:italic\\">" + displayRate + "</td></tr>";\n' +
+        '      } else {\n' +
+        '        rows += "<tr>" +\n' +
+        '          "<td style=\\"padding:2px 0 2px 12px;font-size:12px;color:#555\\">" + f.label + "</td>" +\n' +
+        '          "<td style=\\"padding:2px 8px;font-size:12px;font-weight:700;text-align:right\\">" + f.value + "</td>" +\n' +
+        '          "<td style=\\"padding:2px 0;font-size:12px;color:#777\\">" + f.cadence + "</td></tr>";\n' +
         '      }\n' +
         '    });\n' +
         '  });\n' +
