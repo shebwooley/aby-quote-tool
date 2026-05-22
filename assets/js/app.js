@@ -600,9 +600,19 @@
         '    var h3 = wrap.querySelector("h3");\n' +
         '    var rawName = h3 ? h3.textContent : "Product " + (i + 1);\n' +
         '    var productName = rawName.replace(" \\u2014 Fees", "").replace(" - Fees", "").trim();\n' +
-        '    var rows = wrap.querySelectorAll(".pricing-table tr:not(.breakdown-row)");\n' +
+        '    var rows = wrap.querySelectorAll(".pricing-table tr");\n' +
         '    var fees = [];\n' +
         '    rows.forEach(function(row) {\n' +
+        '      if (row.classList.contains("breakdown-row")) {\n' +
+        '        if (fees.length) {\n' +
+        '          var countCell = row.querySelector(".count-cell");\n' +
+        '          var cells = row.querySelectorAll("td");\n' +
+        '          var rateCell = cells.length > 1 ? cells[cells.length - 1] : null;\n' +
+        '          if (countCell && countCell.textContent.trim()) fees[fees.length-1].countNote = countCell.innerHTML.trim();\n' +
+        '          if (rateCell && rateCell.textContent.trim()) fees[fees.length-1].rateNote = rateCell.textContent.trim();\n' +
+        '        }\n' +
+        '        return;\n' +
+        '      }\n' +
         '      var lbl = row.querySelector(".row-label");\n' +
         '      var val = row.querySelector(".row-value");\n' +
         '      var cad = row.querySelector(".row-cadence");\n' +
@@ -612,7 +622,10 @@
         '      }\n' +
         '    });\n' +
         '    var feeHtml = fees.map(function(f) {\n' +
-        '      return "<div style=\\"font-size:12px;color:#555;margin:3px 0 0 26px\\">" + f.label + ": <strong>" + f.value + "</strong>" + (f.cadence ? " " + f.cadence : "") + "</div>";\n' +
+        '      var line = "<div style=\\"font-size:12px;color:#555;margin:3px 0 0 26px\\">" + f.label + ": <strong>" + f.value + "</strong>" + (f.cadence ? " " + f.cadence : "") + "</div>";\n' +
+        '      if (f.rateNote) line += "<div style=\\"font-size:11px;color:#888;margin:1px 0 0 26px;font-style:italic\\">" + f.rateNote + "</div>";\n' +
+        '      if (f.countNote) line += "<div style=\\"font-size:11px;color:#888;margin:1px 0 0 26px;font-style:italic\\">" + f.countNote + "</div>";\n' +
+        '      return line;\n' +
         '    }).join("");\n' +
         '    var encoded = encodeURIComponent(JSON.stringify(fees));\n' +
         '    html += "<div style=\\"margin-bottom:14px\\">" +\n' +
@@ -640,6 +653,10 @@
         '        "<td style=\\"padding:2px 0 2px 12px;font-size:12px;color:#555\\">" + f.label + "</td>" +\n' +
         '        "<td style=\\"padding:2px 8px;font-size:12px;font-weight:600;text-align:right\\">" + f.value + "</td>" +\n' +
         '        "<td style=\\"padding:2px 0;font-size:12px;color:#777\\">" + f.cadence + "</td></tr>";\n' +
+        '      if (f.rateNote || f.countNote) {\n' +
+        '        var noteText = (f.rateNote || "") + (f.rateNote && f.countNote ? " \u2014 " : "") + (f.countNote || "");\n' +
+        '        rows += "<tr><td colspan=\\"3\\" style=\\"padding:1px 0 4px 12px;font-size:11px;color:#888;font-style:italic\\">" + noteText + "</td></tr>";\n' +
+        '      }\n' +
         '    });\n' +
         '  });\n' +
         '  table.innerHTML = rows;\n' +
