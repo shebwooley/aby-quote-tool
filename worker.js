@@ -630,9 +630,10 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
         <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Email / Phone</th>
         <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Start Date</th>
         <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Products</th>
+        <th style="padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0"></th>
       </tr>
     </thead>
-    <tbody id="ctbody"><tr><td colspan="7" style="padding:20px;color:#888;text-align:center">Loading…</td></tr></tbody>
+    <tbody id="ctbody"><tr><td colspan="8" style="padding:20px;color:#888;text-align:center">Loading…</td></tr></tbody>
   </table>
 </div>
 </main>
@@ -910,23 +911,26 @@ document.querySelectorAll('.tab').forEach(function(btn) {
   });
 });
 
+var commitmentData = {};
 let commitmentsLoaded = false;
 async function loadCommitments() {
   if (commitmentsLoaded) return;
   const ctbody = document.getElementById('ctbody');
   try {
     const res = await fetch('/api/commitments');
-    if (!res.ok) { ctbody.innerHTML = '<tr><td colspan="7" style="padding:16px;color:#c00;text-align:center">Error loading commitments.</td></tr>'; return; }
+    if (!res.ok) { ctbody.innerHTML = '<tr><td colspan="8" style="padding:16px;color:#c00;text-align:center">Error loading commitments.</td></tr>'; return; }
     const data = await res.json();
     const rows = data.commitments || [];
     document.getElementById('count').textContent = rows.length + ' commitment' + (rows.length !== 1 ? 's' : '');
-    if (!rows.length) { ctbody.innerHTML = '<tr><td colspan="7" style="padding:20px;color:#888;text-align:center">No commitments yet.</td></tr>'; return; }
+    if (!rows.length) { ctbody.innerHTML = '<tr><td colspan="8" style="padding:20px;color:#888;text-align:center">No commitments yet.</td></tr>'; return; }
     ctbody.innerHTML = rows.map(function(c) {
       var dt = new Date(c.submitted_at);
       var dateStr = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
       var products = [];
       try { products = JSON.parse(c.products || '[]'); } catch(e) {}
+      commitmentData[c.id] = { c: c, products: products };
       var td = function(v, extra) { return '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top' + (extra || '') + '">' + (v || '<span style="color:#bbb">—</span>') + '</td>'; };
+      var productNames = products.map(function(p){ return p.name || String(p); }).join('<br>');
       return '<tr class="c-row">' +
         td(dateStr, ';white-space:nowrap') +
         td('<strong>' + (c.quote_number || '') + '</strong>') +
@@ -934,13 +938,122 @@ async function loadCommitments() {
         td((c.auth_signer || '') + (c.auth_title ? '<br><span style="color:#777;font-size:12px">' + c.auth_title + '</span>' : '')) +
         td((c.auth_email ? '<a href="mailto:' + c.auth_email + '">'  + c.auth_email + '</a>' : '') + (c.auth_phone ? '<br>' + c.auth_phone : '')) +
         td(c.start_date || '') +
-        td(products.join(', ')) +
+        td(productNames) +
+        '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top">' +
+          '<button onclick="downloadCommitment(\'' + c.id + '\')" style="padding:5px 12px;background:#1a5c3a;color:white;border:none;border-radius:4px;font-size:12px;cursor:pointer;white-space:nowrap">⭳ Download</button>' +
+        '</td>' +
         '</tr>';
     }).join('');
     commitmentsLoaded = true;
   } catch(err) {
-    ctbody.innerHTML = '<tr><td colspan="7" style="padding:16px;color:#c00;text-align:center">Network error.</td></tr>';
+    ctbody.innerHTML = '<tr><td colspan="8" style="padding:16px;color:#c00;text-align:center">Network error.</td></tr>';
   }
+}
+
+function downloadCommitment(id) {
+  var entry = commitmentData[id];
+  if (!entry) return;
+  var c = entry.c;
+  var products = entry.products;
+
+  var productRows = products.map(function(p) {
+    var feesHtml = '';
+    if (Array.isArray(p.fees) && p.fees.length) {
+      feesHtml = '<table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:12px">' +
+        p.fees.map(function(f) {
+          return '<tr>' +
+            '<td style="padding:4px 8px;color:#555;border-bottom:1px solid #f0f0f0">' + (f.label || '') + '</td>' +
+            '<td style="padding:4px 8px;text-align:right;font-weight:600;border-bottom:1px solid #f0f0f0;white-space:nowrap">' + (f.value || '') + '</td>' +
+            '<td style="padding:4px 8px;color:#888;border-bottom:1px solid #f0f0f0;white-space:nowrap">' + (f.cadence || '') + '</td>' +
+            '</tr>';
+        }).join('') + '</table>';
+    }
+    return '<div style="margin-bottom:14px;padding:12px 16px;border:1px solid #d8e8d8;border-radius:6px;background:#fafffe">' +
+           '<strong style="font-size:14px;color:#1a5c3a">' + (p.name || '') + '</strong>' +
+           feesHtml +
+           '</div>';
+  }).join('');
+
+  var submittedDate = new Date(c.submitted_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+  var html = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">' +
+    '<title>Commitment to Proceed - ' + (c.quote_number || '') + '</title>' +
+    '<link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600&display=swap" rel="stylesheet">' +
+    '<style>' +
+    '*{box-sizing:border-box}' +
+    'body{font-family:system-ui,Arial,sans-serif;max-width:820px;margin:40px auto;padding:0 32px;color:#222;font-size:14px}' +
+    'h1{margin:0;color:#1a5c3a;font-size:22px}' +
+    '.header{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:18px;border-bottom:2px solid #1a5c3a;margin-bottom:28px}' +
+    '.header-right{text-align:right;font-size:13px;color:#555;line-height:1.8}' +
+    '.section{margin-bottom:24px}' +
+    '.section-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#888;margin:0 0 10px;padding-bottom:4px;border-bottom:1px solid #eee}' +
+    '.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 28px}' +
+    '.field{margin-bottom:10px}' +
+    '.field .lbl{font-size:11px;color:#999;margin-bottom:2px}' +
+    '.field .val{font-size:14px;color:#222}' +
+    '.sig-name{font-family:"Dancing Script",cursive;font-size:26px;color:#1a5c3a;border-bottom:2px solid #1a5c3a;padding-bottom:4px;display:inline-block;min-width:220px}' +
+    '.print-btn{margin-top:28px;padding:10px 26px;background:#1a5c3a;color:white;border:none;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600}' +
+    '@media print{.print-btn{display:none}body{margin:20px;padding:0 20px}}' +
+    '</style></head><body>' +
+    '<div class="header">' +
+      '<div>' +
+        '<h1>ABY Benefits LLC</h1>' +
+        '<div style="color:#666;font-size:13px;margin-top:4px">Commitment to Proceed</div>' +
+      '</div>' +
+      '<div class="header-right">' +
+        '<div><strong>Quote #:</strong> ' + (c.quote_number || '') + '</div>' +
+        '<div><strong>Submitted:</strong> ' + submittedDate + '</div>' +
+        '<div><strong>Requested Start:</strong> ' + (c.start_date || '') + '</div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="section">' +
+      '<div class="section-title">Employer Information</div>' +
+      '<div class="grid">' +
+        '<div class="field"><div class="lbl">Company Name</div><div class="val">' + (c.employer_name || '') + '</div></div>' +
+        '<div class="field"><div class="lbl">Address</div><div class="val">' + (c.address || '') + (c.city_state_zip ? '<br>' + c.city_state_zip : '') + '</div></div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="section">' +
+      '<div class="section-title">Authorized Signer</div>' +
+      '<div class="grid">' +
+        '<div class="field"><div class="lbl">Name</div><div class="val">' + (c.auth_signer || '') + '</div></div>' +
+        '<div class="field"><div class="lbl">Title</div><div class="val">' + (c.auth_title || '') + '</div></div>' +
+        '<div class="field"><div class="lbl">Email</div><div class="val">' + (c.auth_email || '') + '</div></div>' +
+        '<div class="field"><div class="lbl">Phone</div><div class="val">' + (c.auth_phone || '') + '</div></div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="section">' +
+      '<div class="section-title">HR / Benefits Contact</div>' +
+      '<div class="grid">' +
+        '<div class="field"><div class="lbl">Name</div><div class="val">' + (c.hr_contact || '') + '</div></div>' +
+        '<div class="field"><div class="lbl">Title</div><div class="val">' + (c.hr_title || '') + '</div></div>' +
+        '<div class="field"><div class="lbl">Email</div><div class="val">' + (c.hr_email || '') + '</div></div>' +
+        '<div class="field"><div class="lbl">Phone</div><div class="val">' + (c.hr_phone || '') + '</div></div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="section">' +
+      '<div class="section-title">Products &amp; Pricing Agreed To</div>' +
+      productRows +
+    '</div>' +
+    '<div class="section" style="margin-top:32px;padding-top:20px;border-top:2px solid #eee">' +
+      '<div class="section-title">Electronic Signature</div>' +
+      '<div class="field"><div class="lbl">Printed Name</div><div class="val">' + (c.accepted_print || '') + '</div></div>' +
+      '<div class="field" style="margin-top:12px"><div class="lbl">Electronic Signature</div>' +
+        '<div class="sig-name">' + (c.accepted_sign || '') + '</div>' +
+      '</div>' +
+    '</div>' +
+    '<button class="print-btn" onclick="window.print()">Print / Save as PDF</button>' +
+    '</body></html>';
+
+  var blob = new Blob([html], { type: 'text/html' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'Commitment-' + (c.quote_number || 'unknown') + '.html';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 </script>
 </body>
