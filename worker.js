@@ -41,6 +41,9 @@ export default {
     }});
     if (path === '/api/commitments' && method === 'POST') return handleSaveCommitment(request, env);
     if (path === '/api/commitments' && method === 'GET')  return withAuth(request, env, () => handleListCommitments(request, env));
+    if (/^\/api\/commitments\/[^/]+$/.test(path) && method === 'DELETE') {
+      return withAuth(request, env, () => handleDeleteCommitment(path.split('/').pop(), env));
+    }
     if (path === '/api/admin/login'  && method === 'POST') return handleLogin(request, env);
     if (path === '/api/admin/logout')                      return handleLogout();
 
@@ -386,6 +389,16 @@ async function handleListCommitments(request, env) {
     ).all();
     return jsonResp({ commitments: result.results || [] });
   } catch (err) {
+    return jsonResp({ error: String(err) }, 500);
+  }
+}
+
+async function handleDeleteCommitment(id, env) {
+  try {
+    await env.DB.prepare('DELETE FROM commitments WHERE id = ?').bind(id).run();
+    return jsonResp({ ok: true });
+  } catch (err) {
+    console.error('handleDeleteCommitment failed:', err);
     return jsonResp({ error: String(err) }, 500);
   }
 }
@@ -939,15 +952,18 @@ async function loadCommitments() {
         td((c.auth_email ? '<a href="mailto:' + c.auth_email + '">'  + c.auth_email + '</a>' : '') + (c.auth_phone ? '<br>' + c.auth_phone : '')) +
         td(c.start_date || '') +
         td(productNames) +
-        '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top">' +
-          '<button class="dl-btn" data-cid="' + c.id + '" style="padding:5px 12px;background:#1a5c3a;color:white;border:none;border-radius:4px;font-size:12px;cursor:pointer;white-space:nowrap">&#11091; Download</button>' +
+        '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top;white-space:nowrap">' +
+          '<button class="dl-btn" data-cid="' + c.id + '" style="padding:5px 10px;background:#1a5c3a;color:white;border:none;border-radius:4px;font-size:12px;cursor:pointer;margin-right:6px">&#11091; Download</button>' +
+          '<button class="del-cmt-btn" data-cid="' + c.id + '" style="padding:5px 10px;background:white;color:#c0392b;border:1px solid #f5b8b8;border-radius:4px;font-size:12px;cursor:pointer">Delete ✕</button>' +
         '</td>' +
         '</tr>';
     }).join('');
     commitmentsLoaded = true;
     ctbody.addEventListener('click', function(e) {
-      var btn = e.target.closest('.dl-btn');
-      if (btn) downloadCommitment(btn.dataset.cid);
+      var dlBtn = e.target.closest('.dl-btn');
+      if (dlBtn) { downloadCommitment(dlBtn.dataset.cid); return; }
+      var delBtn = e.target.closest('.del-cmt-btn');
+      if (delBtn) deleteCommitment(delBtn.dataset.cid);
     }, { once: true });
   } catch(err) {
     ctbody.innerHTML = '<tr><td colspan="8" style="padding:16px;color:#c00;text-align:center">Network error.</td></tr>';
@@ -965,11 +981,13 @@ function downloadCommitment(id) {
     if (Array.isArray(p.fees) && p.fees.length) {
       feesHtml = '<table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:12px">' +
         p.fees.map(function(f) {
+          var noteText = (f.rateNote || '') + (f.rateNote && f.countNote ? ' — ' : '') + (f.countNote || '');
           return '<tr>' +
             '<td style="padding:4px 8px;color:#555;border-bottom:1px solid #f0f0f0">' + (f.label || '') + '</td>' +
             '<td style="padding:4px 8px;text-align:right;font-weight:600;border-bottom:1px solid #f0f0f0;white-space:nowrap">' + (f.value || '') + '</td>' +
             '<td style="padding:4px 8px;color:#888;border-bottom:1px solid #f0f0f0;white-space:nowrap">' + (f.cadence || '') + '</td>' +
-            '</tr>';
+            '</tr>' +
+            (noteText ? '<tr><td colspan="3" style="padding:1px 8px 5px 8px;font-size:11px;color:#888;font-style:italic">' + noteText + '</td></tr>' : '');
         }).join('') + '</table>';
     }
     return '<div style="margin-bottom:14px;padding:12px 16px;border:1px solid #d8e8d8;border-radius:6px;background:#fafffe">' +
@@ -1058,6 +1076,20 @@ function downloadCommitment(id) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+async function deleteCommitment(id) {
+  if (!confirm('Delete this commitment? This cannot be undone.')) return;
+  var res = await fetch('/api/commitments/' + id, { method: 'DELETE' });
+  if (res.ok) {
+    delete commitmentData[id];
+    var row = document.querySelector('.del-cmt-btn[data-cid="' + id + '"]');
+    if (row) row.closest('tr').remove();
+    var remaining = Object.keys(commitmentData).length;
+    document.getElementById('count').textContent = remaining + ' commitment' + (remaining !== 1 ? 's' : '');
+  } else {
+    alert('Delete failed — please try again.');
+  }
 }
 </script>
 </body>
