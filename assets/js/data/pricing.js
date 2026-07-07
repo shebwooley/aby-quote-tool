@@ -36,9 +36,9 @@ ABYQuote.pricing = {
         full:     { setupFee: 550,  renewalFee: 550,       description: 'POP plan doc + annual NDT for POP, FSA, LFSA, DCAP & HSA' }
       },
       additionalFees: [
-        { label: 'Additional NDT (after first set per year)', amount: 250, unit: 'per additional test', description: '' },
-        { label: 'Prior year NDT', amount: 300, unit: 'per plan year', description: '' },
-        { label: 'Data manipulation / reformatting', amount: 5, unit: 'per participant', description: '' }
+        { label: 'Additional NDT (after first set per year)', amount: 250, unit: 'per additional test', description: 'Each nondiscrimination test set beyond the first one included per year.' },
+        { label: 'Prior year NDT', amount: 300, unit: 'per plan year', description: 'Nondiscrimination testing for a prior plan year, typically requested to catch up or correct a year that was not tested.' },
+        { label: 'Data manipulation / reformatting', amount: 5, unit: 'per participant', description: 'Reformatting or cleaning up census/participant data that is not provided in ABY\'s standard format.' }
       ]
     },
 
@@ -52,12 +52,12 @@ ABYQuote.pricing = {
       ],
       additionalFees: [
         { label: 'Plan documents (FSA/DCAP/LFSA/POP w/SPD)', amount: 0, description: '' },
-        { label: 'Debit card order (FSA only)', amount: 5, unit: 'per order', description: '' },
-        { label: 'Direct deposits', amount: 0, description: '' },
-        { label: 'Paper checks', amount: 5, unit: 'per check', description: '' },
-        { label: 'Mobile app', amount: 0, description: '' },
-        { label: 'Standard file feed integration', amount: 0, description: '' },
-        { label: 'Custom file feed integration', amount: 750, unit: 'annually', description: '' },
+        { label: 'Debit card order (FSA only)', amount: 5, unit: 'per order', description: 'Charged when new or replacement participant debit cards are ordered.' },
+        { label: 'Direct deposits', amount: 0, description: 'Participant reimbursements paid by ACH at no per-transaction charge.' },
+        { label: 'Paper checks', amount: 5, unit: 'per check', description: 'Issued when a participant is paid by mailed check instead of direct deposit.' },
+        { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' },
+        { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
+        { label: 'Custom file feed integration', amount: 750, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
         { label: 'Paper enrollment package', amount: 2, unit: 'per packet', description: '' },
         { label: 'Paper/PDF setup or renewal', amount: 5, unit: 'per participant ($500 min)', description: '' }
       ]
@@ -72,10 +72,10 @@ ABYQuote.pricing = {
         { maxCount: null, type: 'pppm', amount: 3.05, minMonthly: 50, label: '100+ accounts' }
       ],
       additionalFees: [
-        { label: 'Debit card order', amount: 5, unit: 'per order', description: '' },
-        { label: 'Mobile app', amount: 0, description: '' },
-        { label: 'Standard file feed integration', amount: 0, description: '' },
-        { label: 'Custom file feed integration', amount: 0, unit: 'fee depends on provider', description: '' },
+        { label: 'Debit card order', amount: 5, unit: 'per order', description: 'Charged when new or replacement participant debit cards are ordered.' },
+        { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' },
+        { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
+        { label: 'Custom file feed integration', amount: 0, unit: 'fee depends on provider', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
         { label: 'Paper enrollment material', amount: 2, unit: 'per packet', description: '' }
       ],
       notes: ['Custodian: HSAToday. Participant-incurred ancillary fees (overdrafts, replacement cards, etc.) are billed directly to the account holder by the custodian.']
@@ -91,10 +91,10 @@ ABYQuote.pricing = {
       ],
       additionalFees: [
         { label: 'Plan documents (HRA w/SPD)', amount: 0, description: '' },
-        { label: 'Direct deposits', amount: 0, description: '' },
-        { label: 'Paper checks', amount: 5, unit: 'per check', description: '' },
-        { label: 'Mobile app', amount: 0, description: '' },
-        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: '' }
+        { label: 'Direct deposits', amount: 0, description: 'Participant reimbursements paid by ACH at no per-transaction charge.' },
+        { label: 'Paper checks', amount: 5, unit: 'per check', description: 'Issued when a participant is paid by mailed check instead of direct deposit.' },
+        { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' },
+        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' }
       ]
     },
 
@@ -114,11 +114,11 @@ ABYQuote.pricing = {
         docsOnly: { setupFee: 350, renewalFee: 350, description: 'Plan documents only: no monthly administration', requiresCount: false }
       },
       additionalFees: [
-        { label: 'Standard file feed integration', amount: 0, description: '' },
-        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: '' },
-        { label: 'Direct deposits', amount: 0, description: '' },
-        { label: 'Paper checks', amount: 5, unit: 'per check', description: '' },
-        { label: 'Mobile app', amount: 0, description: '' }
+        { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
+        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
+        { label: 'Direct deposits', amount: 0, description: 'Participant reimbursements paid by ACH at no per-transaction charge.' },
+        { label: 'Paper checks', amount: 5, unit: 'per check', description: 'Issued when a participant is paid by mailed check instead of direct deposit.' },
+        { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' }
       ]
     },
 
@@ -130,15 +130,15 @@ ABYQuote.pricing = {
         { maxCount: null, type: 'pppm', amount: 0.85, minMonthly: 55, label: '65+ employees' }
       ],
       additionalFees: [
-        { label: 'Qualifying Event (QE) notices', amount: 0, description: '' },
-        { label: 'Initial/general rights notices during plan year', amount: 0, unit: 'per notice', description: '' },
-        { label: 'Initial/general rights notices at setup or renewal (optional)', amount: 3, unit: 'per notice', description: '' },
-        { label: 'COBRA participants', amount: 0, unit: 'per participant per month', description: '' },
-        { label: 'COBRA takeover', amount: 5, unit: 'per current participant (one-time)', description: '' },
-        { label: 'Standard file feed integration', amount: 0, description: '' },
-        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: '' },
-        { label: 'Open enrollment: generic renewal notice', amount: 0, description: '' },
-        { label: 'Open enrollment: full COBRA renewal packet mailed', amount: 15, unit: 'per packet', description: '' }
+        { label: 'Qualifying Event (QE) notices', amount: 0, description: 'When an employee loses coverage (termination, reduction in hours, divorce, a dependent aging out), federal law requires a COBRA election notice. ABY prepares and mails these at no additional charge.' },
+        { label: 'Initial/general rights notices during plan year', amount: 0, unit: 'per notice', description: 'The general COBRA rights notice sent to newly enrolled participants during the year. Included as part of standard administration.' },
+        { label: 'Initial/general rights notices at setup or renewal (optional)', amount: 3, unit: 'per notice', description: 'If you would like ABY to mail the general rights notice to your entire covered population at setup or renewal, it is $3 per notice mailed.' },
+        { label: 'COBRA participants', amount: 0, unit: 'per participant per month', description: 'There is no separate per-person charge for individuals actively enrolled in COBRA; their administration is covered by your monthly admin fee.' },
+        { label: 'COBRA takeover', amount: 5, unit: 'per current participant (one-time)', description: 'A one-time fee to move existing COBRA participants from a prior administrator onto ABY\'s system, including their records, payment history, and remaining coverage timeline.' },
+        { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
+        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
+        { label: 'Open enrollment: generic renewal notice', amount: 0, description: 'A general open-enrollment notice to participants about renewal and any plan changes. Included.' },
+        { label: 'Open enrollment: full COBRA renewal packet mailed', amount: 15, unit: 'per packet', description: 'A complete printed renewal packet (new rates, plan summaries, and election materials) mailed to each COBRA participant at open enrollment.' }
       ],
       notes: [
         'Includes Texas State Continuation following COBRA for fully-insured groups.',
@@ -153,13 +153,13 @@ ABYQuote.pricing = {
         { maxCount: null, type: 'flat', amount: 40, label: 'all groups' }
       ],
       additionalFees: [
-        { label: 'Qualifying Event (QE) notices', amount: 0, description: '' },
+        { label: 'Qualifying Event (QE) notices', amount: 0, description: 'When an employee loses coverage (termination, reduction in hours, divorce, a dependent aging out), federal law requires a COBRA election notice. ABY prepares and mails these at no additional charge.' },
         { label: 'Initial Rights notices during plan year', amount: 0, unit: 'per notice', description: '' },
         { label: 'Initial Rights notices at setup or renewal', amount: 1.50, unit: 'per notice', description: '' },
         { label: 'Takeover participants', amount: 5, unit: 'per participant (one-time)', description: '' },
         { label: 'Continuation participants', amount: 0, unit: 'per month', description: '' },
-        { label: 'Open enrollment: generic renewal notice', amount: 0, description: '' },
-        { label: 'Open enrollment: full continuation packet mailed', amount: 15, unit: 'per packet', description: '' }
+        { label: 'Open enrollment: generic renewal notice', amount: 0, description: 'A general open-enrollment notice to participants about renewal and any plan changes. Included.' },
+        { label: 'Open enrollment: full continuation packet mailed', amount: 15, unit: 'per packet', description: 'A complete printed renewal packet mailed to each continuation participant at open enrollment.' }
       ]
     },
 
@@ -174,13 +174,13 @@ ABYQuote.pricing = {
       },
       additionalFees: [
         { label: 'Annual Notice Packet', amount: 125, unit: 'per year', description: 'Includes GINA, CHIP, Medicare Creditable Coverage, HIPAA Special Enrollment, and Notice of Exchange.' },
-        { label: 'FSA/DCAP language addition', amount: 125, unit: 'year 1', description: '' },
-        { label: 'FSA/DCAP NDT testing', amount: 175, unit: 'per year per test set', description: '' },
-        { label: 'Additional current-year NDT (after one included)', amount: 125, unit: 'per additional test', description: '' },
-        { label: 'Prior year NDT', amount: 300, unit: 'per prior year', description: '' },
-        { label: 'Annual hard copy', amount: 99, unit: 'each', description: '' },
-        { label: 'Additional USB (one included annually)', amount: 25, unit: 'each', description: '' },
-        { label: 'Audit services', amount: 175, unit: 'per hour', description: '' }
+        { label: 'FSA/DCAP language addition', amount: 125, unit: 'year 1', description: 'Adds Flexible Spending Account and/or Dependent Care Assistance Plan language to your wrap document. A one-time charge in the first year it is added.' },
+        { label: 'FSA/DCAP NDT testing', amount: 175, unit: 'per year per test set', description: 'Annual nondiscrimination testing for FSA/DCAP plans, confirming benefits do not disproportionately favor highly compensated or key employees.' },
+        { label: 'Additional current-year NDT (after one included)', amount: 125, unit: 'per additional test', description: 'One nondiscrimination test set is included with testing packages; any additional test for the current plan year is charged per test.' },
+        { label: 'Prior year NDT', amount: 300, unit: 'per prior year', description: 'Nondiscrimination testing for a prior plan year, typically requested to catch up or correct a year that was not tested.' },
+        { label: 'Annual hard copy', amount: 99, unit: 'each', description: 'A professionally printed copy of your wrap document and SPD. Documents are delivered electronically by default.' },
+        { label: 'Additional USB (one included annually)', amount: 25, unit: 'each', description: 'Your documents come on one USB drive each year at no charge; additional copies are charged each.' },
+        { label: 'Audit services', amount: 175, unit: 'per hour', description: 'Hands-on help responding to a Department of Labor or IRS audit or document request: gathering records, preparing responses, and supporting your team.' }
       ]
     },
 
@@ -316,9 +316,9 @@ ABYQuote.pricing = {
         full:     { setupFee: 500,  renewalFee: 500,       description: 'POP plan doc + annual NDT for POP, FSA, LFSA, DCAP & HSA' }
       },
       additionalFees: [
-        { label: 'Additional NDT (after first set per year)', amount: 250, unit: 'per additional test', description: '' },
-        { label: 'Prior year NDT', amount: 300, unit: 'per plan year', description: '' },
-        { label: 'Data manipulation / reformatting', amount: 5, unit: 'per participant', description: '' }
+        { label: 'Additional NDT (after first set per year)', amount: 250, unit: 'per additional test', description: 'Each nondiscrimination test set beyond the first one included per year.' },
+        { label: 'Prior year NDT', amount: 300, unit: 'per plan year', description: 'Nondiscrimination testing for a prior plan year, typically requested to catch up or correct a year that was not tested.' },
+        { label: 'Data manipulation / reformatting', amount: 5, unit: 'per participant', description: 'Reformatting or cleaning up census/participant data that is not provided in ABY\'s standard format.' }
       ]
     },
 
@@ -332,12 +332,12 @@ ABYQuote.pricing = {
       ],
       additionalFees: [
         { label: 'Plan documents (FSA/DCAP/LFSA/POP w/SPD)', amount: 0, description: '' },
-        { label: 'Debit card order (FSA only)', amount: 5, unit: 'per order', description: '' },
-        { label: 'Direct deposits', amount: 0, description: '' },
-        { label: 'Paper checks', amount: 5, unit: 'per check', description: '' },
-        { label: 'Mobile app', amount: 0, description: '' },
-        { label: 'Standard file feed integration', amount: 0, description: '' },
-        { label: 'Custom file feed integration', amount: 750, unit: 'annually', description: '' },
+        { label: 'Debit card order (FSA only)', amount: 5, unit: 'per order', description: 'Charged when new or replacement participant debit cards are ordered.' },
+        { label: 'Direct deposits', amount: 0, description: 'Participant reimbursements paid by ACH at no per-transaction charge.' },
+        { label: 'Paper checks', amount: 5, unit: 'per check', description: 'Issued when a participant is paid by mailed check instead of direct deposit.' },
+        { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' },
+        { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
+        { label: 'Custom file feed integration', amount: 750, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
         { label: 'Paper enrollment package', amount: 2, unit: 'per packet', description: '' },
         { label: 'Paper/PDF setup or renewal', amount: 5, unit: 'per participant ($500 min)', description: '' }
       ]
@@ -352,10 +352,10 @@ ABYQuote.pricing = {
         { maxCount: null, type: 'pppm', amount: 2.90, minMonthly: 45, label: '100+ accounts' }
       ],
       additionalFees: [
-        { label: 'Debit card order', amount: 5, unit: 'per order', description: '' },
-        { label: 'Mobile app', amount: 0, description: '' },
-        { label: 'Standard file feed integration', amount: 0, description: '' },
-        { label: 'Custom file feed integration', amount: 0, unit: 'fee depends on provider', description: '' },
+        { label: 'Debit card order', amount: 5, unit: 'per order', description: 'Charged when new or replacement participant debit cards are ordered.' },
+        { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' },
+        { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
+        { label: 'Custom file feed integration', amount: 0, unit: 'fee depends on provider', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
         { label: 'Paper enrollment material', amount: 2, unit: 'per packet', description: '' }
       ],
       notes: ['Custodian: HSAToday. Participant-incurred ancillary fees (overdrafts, replacement cards, etc.) are billed directly to the account holder by the custodian.']
@@ -371,10 +371,10 @@ ABYQuote.pricing = {
       ],
       additionalFees: [
         { label: 'Plan documents (HRA w/SPD)', amount: 0, description: '' },
-        { label: 'Direct deposits', amount: 0, description: '' },
-        { label: 'Paper checks', amount: 5, unit: 'per check', description: '' },
-        { label: 'Mobile app', amount: 0, description: '' },
-        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: '' }
+        { label: 'Direct deposits', amount: 0, description: 'Participant reimbursements paid by ACH at no per-transaction charge.' },
+        { label: 'Paper checks', amount: 5, unit: 'per check', description: 'Issued when a participant is paid by mailed check instead of direct deposit.' },
+        { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' },
+        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' }
       ]
     },
 
@@ -394,11 +394,11 @@ ABYQuote.pricing = {
         docsOnly: { setupFee: 325, renewalFee: 325, description: 'Plan documents only: no monthly administration', requiresCount: false }
       },
       additionalFees: [
-        { label: 'Standard file feed integration', amount: 0, description: '' },
-        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: '' },
-        { label: 'Direct deposits', amount: 0, description: '' },
-        { label: 'Paper checks', amount: 5, unit: 'per check', description: '' },
-        { label: 'Mobile app', amount: 0, description: '' }
+        { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
+        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
+        { label: 'Direct deposits', amount: 0, description: 'Participant reimbursements paid by ACH at no per-transaction charge.' },
+        { label: 'Paper checks', amount: 5, unit: 'per check', description: 'Issued when a participant is paid by mailed check instead of direct deposit.' },
+        { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' }
       ]
     },
 
@@ -410,15 +410,15 @@ ABYQuote.pricing = {
         { maxCount: null, type: 'pppm', amount: 0.80, minMonthly: 50, label: '65+ employees' }
       ],
       additionalFees: [
-        { label: 'Qualifying Event (QE) notices', amount: 0, description: '' },
-        { label: 'Initial/general rights notices during plan year', amount: 0, unit: 'per notice', description: '' },
-        { label: 'Initial/general rights notices at setup or renewal (optional)', amount: 3, unit: 'per notice', description: '' },
-        { label: 'COBRA participants', amount: 0, unit: 'per participant per month', description: '' },
-        { label: 'COBRA takeover', amount: 5, unit: 'per current participant (one-time)', description: '' },
-        { label: 'Standard file feed integration', amount: 0, description: '' },
-        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: '' },
-        { label: 'Open enrollment: generic renewal notice', amount: 0, description: '' },
-        { label: 'Open enrollment: full COBRA renewal packet mailed', amount: 15, unit: 'per packet', description: '' }
+        { label: 'Qualifying Event (QE) notices', amount: 0, description: 'When an employee loses coverage (termination, reduction in hours, divorce, a dependent aging out), federal law requires a COBRA election notice. ABY prepares and mails these at no additional charge.' },
+        { label: 'Initial/general rights notices during plan year', amount: 0, unit: 'per notice', description: 'The general COBRA rights notice sent to newly enrolled participants during the year. Included as part of standard administration.' },
+        { label: 'Initial/general rights notices at setup or renewal (optional)', amount: 3, unit: 'per notice', description: 'If you would like ABY to mail the general rights notice to your entire covered population at setup or renewal, it is $3 per notice mailed.' },
+        { label: 'COBRA participants', amount: 0, unit: 'per participant per month', description: 'There is no separate per-person charge for individuals actively enrolled in COBRA; their administration is covered by your monthly admin fee.' },
+        { label: 'COBRA takeover', amount: 5, unit: 'per current participant (one-time)', description: 'A one-time fee to move existing COBRA participants from a prior administrator onto ABY\'s system, including their records, payment history, and remaining coverage timeline.' },
+        { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
+        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
+        { label: 'Open enrollment: generic renewal notice', amount: 0, description: 'A general open-enrollment notice to participants about renewal and any plan changes. Included.' },
+        { label: 'Open enrollment: full COBRA renewal packet mailed', amount: 15, unit: 'per packet', description: 'A complete printed renewal packet (new rates, plan summaries, and election materials) mailed to each COBRA participant at open enrollment.' }
       ],
       notes: [
         'Includes Texas State Continuation following COBRA for fully-insured groups.',
@@ -433,13 +433,13 @@ ABYQuote.pricing = {
         { maxCount: null, type: 'flat', amount: 35, label: 'all groups' }
       ],
       additionalFees: [
-        { label: 'Qualifying Event (QE) notices', amount: 0, description: '' },
+        { label: 'Qualifying Event (QE) notices', amount: 0, description: 'When an employee loses coverage (termination, reduction in hours, divorce, a dependent aging out), federal law requires a COBRA election notice. ABY prepares and mails these at no additional charge.' },
         { label: 'Initial Rights notices during plan year', amount: 0, unit: 'per notice', description: '' },
         { label: 'Initial Rights notices at setup or renewal', amount: 1.50, unit: 'per notice', description: '' },
         { label: 'Takeover participants', amount: 5, unit: 'per participant (one-time)', description: '' },
         { label: 'Continuation participants', amount: 0, unit: 'per month', description: '' },
-        { label: 'Open enrollment: generic renewal notice', amount: 0, description: '' },
-        { label: 'Open enrollment: full continuation packet mailed', amount: 15, unit: 'per packet', description: '' }
+        { label: 'Open enrollment: generic renewal notice', amount: 0, description: 'A general open-enrollment notice to participants about renewal and any plan changes. Included.' },
+        { label: 'Open enrollment: full continuation packet mailed', amount: 15, unit: 'per packet', description: 'A complete printed renewal packet mailed to each continuation participant at open enrollment.' }
       ]
     },
 
@@ -454,13 +454,13 @@ ABYQuote.pricing = {
       },
       additionalFees: [
         { label: 'Annual Notice Packet', amount: 125, unit: 'per year', description: 'Includes GINA, CHIP, Medicare Creditable Coverage, HIPAA Special Enrollment, and Notice of Exchange.' },
-        { label: 'FSA/DCAP language addition', amount: 125, unit: 'year 1', description: '' },
-        { label: 'FSA/DCAP NDT testing', amount: 175, unit: 'per year per test set', description: '' },
-        { label: 'Additional current-year NDT (after one included)', amount: 125, unit: 'per additional test', description: '' },
-        { label: 'Prior year NDT', amount: 300, unit: 'per prior year', description: '' },
-        { label: 'Annual hard copy', amount: 99, unit: 'each', description: '' },
-        { label: 'Additional USB (one included annually)', amount: 25, unit: 'each', description: '' },
-        { label: 'Audit services', amount: 175, unit: 'per hour', description: '' }
+        { label: 'FSA/DCAP language addition', amount: 125, unit: 'year 1', description: 'Adds Flexible Spending Account and/or Dependent Care Assistance Plan language to your wrap document. A one-time charge in the first year it is added.' },
+        { label: 'FSA/DCAP NDT testing', amount: 175, unit: 'per year per test set', description: 'Annual nondiscrimination testing for FSA/DCAP plans, confirming benefits do not disproportionately favor highly compensated or key employees.' },
+        { label: 'Additional current-year NDT (after one included)', amount: 125, unit: 'per additional test', description: 'One nondiscrimination test set is included with testing packages; any additional test for the current plan year is charged per test.' },
+        { label: 'Prior year NDT', amount: 300, unit: 'per prior year', description: 'Nondiscrimination testing for a prior plan year, typically requested to catch up or correct a year that was not tested.' },
+        { label: 'Annual hard copy', amount: 99, unit: 'each', description: 'A professionally printed copy of your wrap document and SPD. Documents are delivered electronically by default.' },
+        { label: 'Additional USB (one included annually)', amount: 25, unit: 'each', description: 'Your documents come on one USB drive each year at no charge; additional copies are charged each.' },
+        { label: 'Audit services', amount: 175, unit: 'per hour', description: 'Hands-on help responding to a Department of Labor or IRS audit or document request: gathering records, preparing responses, and supporting your team.' }
       ]
     },
 
