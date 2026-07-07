@@ -15,7 +15,11 @@ CREATE TABLE IF NOT EXISTS quotes (
   rep_phone           TEXT    NOT NULL DEFAULT '',
   rep_email           TEXT    NOT NULL DEFAULT '',
   commission_included INTEGER NOT NULL DEFAULT 1, -- 1 = yes (−C), 0 = no (−NC)
-  products            TEXT    NOT NULL DEFAULT '[]' -- JSON array
+  products            TEXT    NOT NULL DEFAULT '[]', -- JSON array
+  ran_by              TEXT    DEFAULT 'broker',      -- 'ABY' (logged-in) or 'broker'
+  state               TEXT    DEFAULT 'TX',          -- pricing state used
+  adjustment          TEXT,                          -- JSON of the ABY rate override, or NULL
+  adjustment_note     TEXT                           -- human description of the override (internal)
 );
 
 CREATE INDEX IF NOT EXISTS quotes_created_at   ON quotes (created_at DESC);
@@ -29,6 +33,17 @@ CREATE INDEX IF NOT EXISTS quotes_quote_number ON quotes (quote_number);
 --
 -- P = Pending (default), S = Sold, D = Dead
 -- COALESCE(status, 'P') in queries handles rows added before this migration.
+
+-- ── Migration: attribution columns (ran_by / state / adjustment) ─────────────
+-- For an existing database, either run these once, or just hit the gated
+-- endpoint /api/migrate while logged in as ABY (it runs them idempotently):
+--
+--   ALTER TABLE quotes ADD COLUMN ran_by TEXT;
+--   ALTER TABLE quotes ADD COLUMN state TEXT;
+--   ALTER TABLE quotes ADD COLUMN adjustment TEXT;
+--   ALTER TABLE quotes ADD COLUMN adjustment_note TEXT;
+--
+-- COALESCE(ran_by,'broker') / COALESCE(state,'TX') handle pre-migration rows.
 
 -- ── Commitments (employer intent-to-proceed) ─────────────────────────────────
 -- Run once: npx wrangler d1 execute aby-quotes --remote --file=schema.sql
