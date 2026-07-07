@@ -62,7 +62,10 @@ ABYQuote.renderer = (function () {
     var brokerContact = parts.length ? '<div class="broker-contact">' + parts.join('') + '</div>' : '';
     return [
       '<div class="topbar">',
-      '  <div class="logo-wrap"><img src="assets/images/aby-logo.png" alt="ABY Benefits LLC"></div>',
+      '  <div class="brand-col">',
+      '    <div class="logo-wrap"><img src="assets/images/aby-logo.png" alt="ABY Benefits LLC"></div>',
+      '    <div class="eyebrow eyebrow-onlight">Employee benefits administrative services proposal</div>',
+      '  </div>',
       '  <div class="prepared-for">',
       brokerLogo ? '    <div class="broker-logo-wrap">' + brokerLogo + '</div>' : '',
       brokerContact,
@@ -88,7 +91,6 @@ ABYQuote.renderer = (function () {
     meta.push('<div><span>Prepared by</span><strong>ABY Benefits LLC</strong></div>');
     return [
       '<div class="hero">',
-      '  <div class="eyebrow">Employee benefits administrative services proposal</div>',
       '  <h1>' + esc(proposalTitle(groups)) + '</h1>',
       (form.clientName ? '  <p class="hero-lead"><strong>Prepared for ' + esc(form.clientName) + '</strong></p>' : ''),
       '  <p>Administrative services and compliance support for your employee benefit plans.</p>',
@@ -493,7 +495,7 @@ ABYQuote.renderer = (function () {
     body.push(renderCrossSell(results.map(function (r) { return r.productId; })));
     body.push(renderNextSteps(form));
     if (opts.includeAuthorization) body.push(renderAuthorizationPage(form, groups, quoteNumber));
-    var warnings = renderWarnings(results);
+    var warnings = opts.includeWarnings ? renderWarnings(results) : '';
     return warnings +
       '<div class="aby-proposal">\n<div class="proposal-card">\n' +
       body.filter(Boolean).join('\n') +
