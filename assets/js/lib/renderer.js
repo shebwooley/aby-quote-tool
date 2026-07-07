@@ -49,28 +49,23 @@ ABYQuote.renderer = (function () {
   }
 
   function renderTopbar(form) {
-    var strongLine = form.clientName
-      ? '<strong>Prepared for ' + esc(form.clientName) + '</strong>'
-      : '<strong>Administrative Services Proposal</strong>';
-    var detailLines = [];
-    if (form.brokerName || form.brokerAgency) {
-      detailLines.push('Broker: ' + esc([form.brokerName, form.brokerAgency].filter(Boolean).join(', ')));
-    }
-    var brokerContact = [];
-    if (form.brokerPhone) brokerContact.push(esc(form.brokerPhone));
-    if (form.brokerEmail) brokerContact.push(esc(form.brokerEmail));
-    if (brokerContact.length) detailLines.push(brokerContact.join(' &nbsp;|&nbsp; '));
-    // strongLine is a block element, so detail lines follow directly (no leading <br>)
-    var preparedHtml = strongLine + detailLines.join('<br>');
+    // ABY logo left; broker logo + broker contact right. Client is in the hero.
     var brokerLogo = form.brokerLogoDataUrl
       ? '<img class="broker-logo" src="' + esc(form.brokerLogoDataUrl) + '" alt="Broker logo">'
       : '';
+    var parts = [];
+    if (form.brokerName || form.brokerAgency) parts.push('<div class="broker-name">' + esc([form.brokerName, form.brokerAgency].filter(Boolean).join(', ')) + '</div>');
+    var bc = [];
+    if (form.brokerPhone) bc.push(esc(form.brokerPhone));
+    if (form.brokerEmail) bc.push(esc(form.brokerEmail));
+    if (bc.length) parts.push('<div>' + bc.join(' &nbsp;|&nbsp; ') + '</div>');
+    var brokerContact = parts.length ? '<div class="broker-contact">' + parts.join('') + '</div>' : '';
     return [
       '<div class="topbar">',
       '  <div class="logo-wrap"><img src="assets/images/aby-logo.png" alt="ABY Benefits LLC"></div>',
       '  <div class="prepared-for">',
-      '    ' + preparedHtml,
-      brokerLogo ? '    <br>' + brokerLogo : '',
+      brokerLogo ? '    <div class="broker-logo-wrap">' + brokerLogo + '</div>' : '',
+      brokerContact,
       '  </div>',
       '</div>'
     ].filter(Boolean).join('\n');
@@ -95,8 +90,8 @@ ABYQuote.renderer = (function () {
       '<div class="hero">',
       '  <div class="eyebrow">Employee benefits administrative services proposal</div>',
       '  <h1>' + esc(proposalTitle(groups)) + '</h1>',
-      '  <p>Prepared' + (form.clientName ? ' for ' + esc(form.clientName) : '') +
-        ' to outline the administrative services, pricing, and compliance support described below.</p>',
+      (form.clientName ? '  <p class="hero-lead"><strong>Prepared for ' + esc(form.clientName) + '</strong></p>' : ''),
+      '  <p>Administrative services and compliance support for your employee benefit plans.</p>',
       '  <div class="hero-meta">' + meta.join('') + '</div>',
       '</div>'
     ].join('\n');
@@ -120,10 +115,10 @@ ABYQuote.renderer = (function () {
     return [
       '<section>',
       '  <div class="section-card">',
-      '    <div class="section-head"><h2>' + esc(a.heading) + '</h2><p>A Dallas–Fort Worth–based third-party administrator, founded in 1986 and headquartered in Plano, Texas.</p></div>',
+      '    <div class="section-head hero-head"><h2>' + esc(a.heading) + '</h2><p>A Dallas–Fort Worth–based third-party administrator, founded in 1986 and headquartered in Plano, Texas.</p></div>',
       '    <div class="section-body">',
       a.paragraphs.map(function (p) { return '      <p>' + esc(p) + '</p>'; }).join('\n'),
-      '      <div class="callout"><h3>Experience Highlights</h3><ul>' +
+      '      <div class="callout" style="margin-top:18px;"><h3>Experience Highlights</h3><ul>' +
         a.experienceHighlights.map(function (h) { return '<li>' + esc(h) + '</li>'; }).join('') + '</ul></div>',
       '    </div>',
       '  </div>',
@@ -136,16 +131,17 @@ ABYQuote.renderer = (function () {
     var items = s.items.map(function (item) {
       var text = (item && typeof item === 'object') ? item.text : item;
       var isFeature = (item && typeof item === 'object' && item.bold && /account manager/i.test(text));
-      if (/fees guaranteed/i.test(text)) return '';
-      return '<div class="service-item' + (isFeature ? ' feature' : '') + '">' + esc(text) + '</div>';
-    }).filter(Boolean).join('\n');
+      var isGuarantee = /fees guaranteed/i.test(text);
+      var cls = 'service-item' + (isFeature ? ' feature' : '') + (isGuarantee ? ' guarantee-item' : '');
+      var content = isGuarantee ? ('&#10003; ' + esc(text)) : esc(text);
+      return '<div class="' + cls + '">' + content + '</div>';
+    }).join('\n');
     return [
       '<section>',
       '  <div class="section-card">',
-      '    <div class="section-head green"><h2>' + esc(s.heading) + '</h2><p>' + esc(s.intro) + '</p></div>',
+      '    <div class="section-head hero-head"><h2>' + esc(s.heading) + '</h2><p>' + esc(s.intro) + '</p></div>',
       '    <div class="section-body">',
       '      <div class="service-list">' + items + '</div>',
-      '      <div class="guarantee">✓ ' + esc(L.feeGuarantee || 'All fees guaranteed for three (3) years.') + '</div>',
       '      <p class="muted" style="margin-top:14px;">' + esc(s.closing) + '</p>',
       '    </div>',
       '  </div>',
@@ -153,11 +149,11 @@ ABYQuote.renderer = (function () {
     ].join('\n');
   }
 
-  function renderLearnMore(productId) {
+  function renderLearnMore(productId, skipFirst) {
     var lang = L.products[productId];
     if (!lang) return '';
     var body = [];
-    (lang.paragraphs || []).forEach(function (p) { body.push('<p>' + esc(p) + '</p>'); });
+    (lang.paragraphs || []).slice(skipFirst ? 1 : 0).forEach(function (p) { body.push('<p>' + esc(p) + '</p>'); });
     if (lang.bulletHeading) body.push('<p>' + esc(lang.bulletHeading) + '</p>');
     if (lang.bullets) body.push('<ul>' + lang.bullets.map(function (b) { return '<li>' + esc(b) + '</li>'; }).join('') + '</ul>');
     (lang.closing || []).forEach(function (p) { body.push('<p>' + esc(p) + '</p>'); });
@@ -235,19 +231,24 @@ ABYQuote.renderer = (function () {
     var items = fees.map(function (f) {
       var amt = (f.amount === 0) ? 'Included' : u.money(f.amount);
       var unit = (f.amount !== 0 && f.unit) ? ' <span class="fee-unit">' + esc(f.unit) + '</span>' : '';
-      var explain = f.description ? '<div class="fee-explain">' + esc(f.description) + '</div>' : '';
+      if (!f.description) {
+        return '<div class="fee-item"><div class="fee-static">' +
+          '<span class="fee-name">' + esc(f.label) + '</span>' +
+          '<span class="fee-amount">' + amt + unit + '</span></div></div>';
+      }
       return '<details class="fee-item">' +
         '<summary>' + CHEV + '<span class="fee-name">' + esc(f.label) + '</span>' +
         '<span class="fee-amount">' + amt + unit + '</span></summary>' +
-        explain + '</details>';
+        '<div class="fee-explain">' + esc(f.description) + '</div></details>';
     }).join('\n');
+    var anyExpandable = fees.some(function (f) { return !!f.description; });
     return [
       '<div class="fees-wrap">',
       '  <div class="fees-title">Additional Services Fee Schedule: ' + esc(meta.shortName || meta.name) + '</div>',
-      '  <p class="fee-hint">Tap any line to see what it covers.</p>',
+      anyExpandable ? '  <p class="fee-hint">Tap any line with an arrow to see what it covers.</p>' : '',
       items,
       '</div>'
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   }
 
   function renderProductSection(group, form) {
@@ -268,10 +269,10 @@ ABYQuote.renderer = (function () {
     return [
       '<section>',
       '  <div class="section-card">',
-      '    <div class="section-head"><h2>' + esc(lang.heading || meta.name) + '</h2></div>',
+      '    <div class="section-head hero-head"><h2>' + esc(lang.heading || meta.name) + '</h2></div>',
       '    <div class="section-body">',
       intro,
-      renderLearnMore(group.productId),
+      renderLearnMore(group.productId, true),
       pricing,
       renderFeeSchedule(first, meta),
       notesHtml,
@@ -331,9 +332,39 @@ ABYQuote.renderer = (function () {
     return [
       '<section>',
       '  <div class="section-card">',
-      '    <div class="section-head green"><h2>' + esc(section.heading) + '</h2>' +
+      '    <div class="section-head hero-head"><h2>' + esc(section.heading) + '</h2>' +
         (section.intro ? '<p>' + esc(section.intro) + '</p>' : '') + '</div>',
       '    <div class="section-body"><div class="cross-sell-grid">' + cards + '</div></div>',
+      '  </div>',
+      '</section>'
+    ].join('\n');
+  }
+
+  function renderNextSteps(form) {
+    var broker = [];
+    if (form.brokerName || form.brokerAgency) broker.push(esc([form.brokerName, form.brokerAgency].filter(Boolean).join(', ')));
+    if (form.brokerPhone) broker.push(esc(form.brokerPhone));
+    if (form.brokerEmail) broker.push(esc(form.brokerEmail));
+    var rep = [];
+    rep.push(esc((form.repName ? form.repName + ', ' : '') + 'ABY Benefits LLC'));
+    if (form.repPhone) rep.push(esc(form.repPhone));
+    if (form.repEmail) rep.push(esc(form.repEmail));
+    var cards = '';
+    if (broker.length) cards += '<div class="contact-card"><strong>Broker Contact:</strong> ' + broker.join(' &nbsp;|&nbsp; ') + '</div>';
+    cards += '<div class="contact-card"><strong>ABY Contact:</strong> ' + rep.join(' &nbsp;|&nbsp; ') + '</div>';
+    return [
+      '<section>',
+      '  <div class="section-card">',
+      '    <div class="section-head hero-head"><h2>Recommended Next Steps</h2><p>A few simple steps to move forward.</p></div>',
+      '    <div class="section-body">',
+      '      <ol class="steps">',
+      '        <li><span class="step-num">1</span><span>Decide which administrative services you would like ABY to assist with.</span></li>',
+      '        <li><span class="step-num">2</span><span>Complete the Employer Authorization page below and submit it to ABY.</span></li>',
+      '        <li><span class="step-num">3</span><span>Upon receipt, ABY will email you the additional paperwork needed to set up the specific services you selected.</span></li>',
+      '      </ol>',
+      '      <p style="margin-top:10px;">If you have questions about this proposal or would like to adjust the services, contact your broker or your ABY representative.</p>',
+      '      <div class="contact-strip">' + cards + '</div>',
+      '    </div>',
       '  </div>',
       '</section>'
     ].join('\n');
@@ -353,23 +384,37 @@ ABYQuote.renderer = (function () {
   }
 
   function renderAuthorizationPage(form, groups, quoteNumber) {
+    function feeSummary(r) {
+      var parts = [];
+      if (r.setupFee) parts.push('Setup ' + u.money(r.setupFee.amount));
+      if (r.docsFee) parts.push('Documents ' + u.money(r.docsFee.amount));
+      if (r.renewalFee != null) parts.push('Renewal ' + u.money(r.renewalFee.amount) + '/yr');
+      if (r.annualFee != null) parts.push(u.money(r.annualFee.amount) + '/yr');
+      if (r.monthlyFee) parts.push(u.money(r.monthlyFee.amount) + '/mo' + (r.monthlyFee.tierLabel ? ' (' + r.monthlyFee.tierLabel + ')' : ''));
+      return parts.join('  |  ');
+    }
     var picker = groups.map(function (g, i) {
       var meta = findProduct(g.productId);
       var name = meta ? (meta.shortName || meta.name) : g.productId;
-      var tier = '';
+      var tier = '', desc = '';
       if (g.results.length > 1) {
         var rec = (form.recommendedPackages || {})[g.productId];
         var opts = g.results.map(function (r) {
           var pkg = findPackage(meta, r.packageId) || {};
           var parsed = splitPackageName(pkg.name || r.packageId);
           var label = parsed.name + (parsed.detail ? ': ' + parsed.detail : '');
+          var fs = feeSummary(r);
+          if (fs) label += '  (' + fs + ')';
           var sel = (rec && r.packageId === rec) ? ' selected' : '';
           return '<option value="' + esc(parsed.name) + '"' + sel + '>' + esc(label) + '</option>';
         }).join('');
         tier = '<div class="opt-tier"><label>Option:</label><select class="opt-tier-select">' + opts + '</select></div>';
+      } else {
+        var fs2 = feeSummary(g.results[0]);
+        if (fs2) desc = '<div class="opt-desc">' + esc(fs2) + '</div>';
       }
       return '<div class="opt-row"><input type="checkbox" class="opt-check" data-label="' + esc(name) + '" checked>' +
-        '<div class="opt-main"><div class="opt-title">' + esc(name) + '</div>' + tier + '</div></div>';
+        '<div class="opt-main"><div class="opt-title">' + esc(name) + '</div>' + desc + tier + '</div></div>';
     }).join('\n');
 
     function field(label, fname, val, full, type) {
@@ -446,6 +491,7 @@ ABYQuote.renderer = (function () {
     body.push(renderDisclosures());
     body.push(renderFileFeed());
     body.push(renderCrossSell(results.map(function (r) { return r.productId; })));
+    body.push(renderNextSteps(form));
     if (opts.includeAuthorization) body.push(renderAuthorizationPage(form, groups, quoteNumber));
     var warnings = renderWarnings(results);
     return warnings +
