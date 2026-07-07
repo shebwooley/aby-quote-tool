@@ -390,7 +390,7 @@ ABYQuote.renderer = (function () {
       if (r.docsFee) parts.push('Documents ' + u.money(r.docsFee.amount));
       if (r.renewalFee != null) parts.push('Renewal ' + u.money(r.renewalFee.amount) + '/yr');
       if (r.annualFee != null) parts.push(u.money(r.annualFee.amount) + '/yr');
-      if (r.monthlyFee) parts.push(u.money(r.monthlyFee.amount) + '/mo' + (r.monthlyFee.tierLabel ? ' (' + r.monthlyFee.tierLabel + ')' : ''));
+      if (r.monthlyFee) parts.push(r.monthlyFee.breakdown || (u.money(r.monthlyFee.amount) + '/mo'));
       return parts.join('  |  ');
     }
     var picker = groups.map(function (g, i) {
