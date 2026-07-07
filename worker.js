@@ -533,7 +533,9 @@ async function isAuthed(request, env) {
 // The public bundle is never modified; the overlay is only referenced here.
 async function serveAbyTool(request, env) {
   const url = new URL(request.url);
-  const res = await env.ASSETS.fetch(new Request(new URL('/index.html', url), request));
+  // Fetch the root ('/'), not '/index.html': the asset handler redirects
+  // '/index.html' -> '/' with an empty body, which would strip the app scripts.
+  const res = await env.ASSETS.fetch(new Request(new URL('/', url), request));
   let html = await res.text();
   const inject = '<script>window.ABY_INTERNAL=true;</script>\n<script src="/internal/aby.js"></script>\n</body>';
   html = html.includes('</body>') ? html.replace('</body>', inject) : (html + inject);
