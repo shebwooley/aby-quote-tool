@@ -5,8 +5,8 @@
    are guaranteed to look identical. */
 
 .aby-proposal {
-  --aby-blue: #155c8f;
-  --aby-blue-dark: #0d3f64;
+  --aby-blue: #205aa6;
+  --aby-blue-dark: #143c73;
   --aby-green: #6aa84f;
   --soft-blue: #eef7fc;
   --soft-green: #f2f8ef;
@@ -14,6 +14,8 @@
   --ink: #1f2933;
   --muted: #5f6b76;
   --line: #dbe5ec;
+  --aby-silver: #aeb4bd;
+  --aby-silver-soft: #eef1f5;
   --paper: #ffffff;
   --shadow: 0 18px 45px rgba(19, 58, 83, 0.12);
   font-family: Arial, Helvetica, sans-serif;
@@ -23,18 +25,23 @@
 .aby-proposal * { box-sizing: border-box; }
 .aby-proposal .proposal-card { background: var(--paper); border-radius: 24px; box-shadow: var(--shadow); overflow: hidden; border: 1px solid rgba(21,92,143,.12); }
 
-.aby-proposal .topbar { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 24px 30px; border-bottom: 1px solid var(--line); background: #fff; }
+.aby-proposal .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 22px; padding: 24px 30px; border-bottom: 2px solid var(--aby-silver); background: #fff; }
 .aby-proposal .logo-wrap img { width: 185px; max-width: 100%; height: auto; display: block; }
 .aby-proposal .prepared-for { text-align: right; font-size: 14px; color: var(--muted); }
 .aby-proposal .prepared-for strong { display: block; color: var(--aby-blue-dark); font-size: 16px; margin-bottom: 6px; }
-.aby-proposal .broker-logo { max-width: 150px; max-height: 60px; margin-top: 8px; display: inline-block; }
+.aby-proposal .broker-logo-wrap { margin-bottom: 8px; }
+.aby-proposal .broker-logo { max-height: 58px; max-width: 185px; display: inline-block; }
+.aby-proposal .broker-contact { font-size: 14px; color: var(--muted); }
+.aby-proposal .broker-name { font-weight: 700; color: var(--aby-blue-dark); font-size: 15px; margin-bottom: 4px; }
 
-.aby-proposal .hero { position: relative; padding: 44px 34px 38px; background: radial-gradient(circle at 15% 10%, rgba(106,168,79,.20), transparent 28%), linear-gradient(135deg, var(--aby-blue-dark) 0%, var(--aby-blue) 68%, #2c7baa 100%); color: #ffffff; }
+.aby-proposal .hero { position: relative; padding: 44px 34px 38px; background: radial-gradient(circle at 15% 10%, rgba(106,168,79,.20), transparent 28%), linear-gradient(135deg, var(--aby-blue-dark) 0%, var(--aby-blue) 70%, #3a72c0 100%); color: #ffffff; }
 .aby-proposal .eyebrow { display: inline-block; padding: 6px 12px; border-radius: 999px; background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.28); font-size: 13px; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 14px; }
 .aby-proposal .hero h1 { margin: 0 0 12px; font-size: clamp(28px, 5vw, 46px); line-height: 1.05; letter-spacing: -.035em; color: #fff; }
-.aby-proposal .hero p { max-width: 850px; margin: 0; font-size: 17px; color: rgba(255,255,255,.9); }
+.aby-proposal .hero p { max-width: 850px; margin: 0 0 8px; font-size: 17px; color: rgba(255,255,255,.9); }
+.aby-proposal .hero p:last-of-type { margin-bottom: 0; }
+.aby-proposal .hero-lead strong { font-size: 18px; }
 .aby-proposal .hero-meta { display: flex; flex-wrap: wrap; gap: 22px; margin-top: 20px; }
-.aby-proposal .hero-meta div span { display: block; text-transform: uppercase; letter-spacing: .08em; font-size: 11px; color: rgba(255,255,255,.6); }
+.aby-proposal .hero-meta div span { display: block; text-transform: uppercase; letter-spacing: .08em; font-size: 11px; color: #c7ccd4; }
 .aby-proposal .hero-meta div strong { font-size: 15px; color: #fff; font-weight: 700; }
 
 .aby-proposal .hero-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 24px 30px 8px; background: #ffffff; }
@@ -49,6 +56,9 @@
 .aby-proposal .section-card:last-child { margin-bottom: 0; }
 .aby-proposal .section-head { padding: 24px 26px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, #fff, #fbfdfe); }
 .aby-proposal .section-head.green { background: linear-gradient(180deg, #fff, var(--soft-green)); }
+.aby-proposal .section-head.hero-head { background: linear-gradient(135deg, var(--aby-blue-dark) 0%, var(--aby-blue) 100%); border-bottom: 0; }
+.aby-proposal .section-head.hero-head h2 { color: #fff; }
+.aby-proposal .section-head.hero-head p { color: rgba(255,255,255,.85); }
 .aby-proposal h2 { margin: 0 0 7px; color: var(--aby-blue-dark); font-size: 28px; line-height: 1.15; letter-spacing: -.02em; }
 .aby-proposal .section-head p, .aby-proposal .muted { margin: 0; color: var(--muted); }
 .aby-proposal .section-body { padding: 24px 26px; }
@@ -94,6 +104,7 @@
 .aby-proposal .fee-name { flex: 1 1 auto; }
 .aby-proposal .fee-amount { flex: 0 0 auto; white-space: nowrap; font-weight: 700; color: var(--aby-blue-dark); }
 .aby-proposal .fee-amount .fee-unit { color: var(--muted); font-weight: 500; font-size: 12px; }
+.aby-proposal .fee-static { display: flex; align-items: center; gap: 12px; padding: 11px 16px 11px 44px; font-size: 14px; }
 .aby-proposal .fee-explain { padding: 0 16px 13px 44px; color: var(--muted); font-size: 13px; }
 
 .aby-proposal .learn-more { border: 1px solid var(--line); border-left: 4px solid var(--aby-blue); border-radius: 12px; margin-top: 16px; background: #fbfdff; overflow: hidden; }
@@ -108,6 +119,7 @@
 
 .aby-proposal .service-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
 .aby-proposal .service-item { border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px; background: #fff; font-size: 14.5px; }
+.aby-proposal .service-item.guarantee-item { font-weight: 800; color: var(--aby-blue-dark); background: var(--soft-green); border-color: rgba(106,168,79,.45); }
 .aby-proposal .service-item.feature { font-size: 18px; font-weight: 900; color: var(--aby-blue-dark); border-color: rgba(21,92,143,.35); background: var(--soft-blue); grid-column: 1 / -1; }
 .aby-proposal .guarantee { margin-top: 18px; border-radius: 18px; padding: 16px 18px; background: var(--soft-green); border: 2px solid rgba(106,168,79,.35); color: var(--aby-blue-dark); font-size: 20px; font-weight: 900; text-align: center; }
 
@@ -119,6 +131,9 @@
 .aby-proposal .cross-sell-card h3 { margin: 0 0 8px; color: var(--aby-blue-dark); font-size: 16px; }
 .aby-proposal .cross-sell-card p { margin: 0; font-size: 13.5px; color: var(--muted); }
 
+.aby-proposal .steps { list-style: none; margin: 4px 0 0; padding: 0; }
+.aby-proposal .steps li { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+.aby-proposal .step-num { flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; background: var(--aby-blue); color: #fff; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; }
 .aby-proposal .contact-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; }
 .aby-proposal .contact-card { border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; background: #fff; font-size: 14px; }
 .aby-proposal .contact-card strong { color: var(--aby-blue-dark); }
@@ -146,7 +161,9 @@
 }
 
 @media print {
+  .aby-proposal, .aby-proposal * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .aby-proposal .no-print { display: none !important; }
+  .aby-proposal .hero { padding: 30px 32px !important; }
   .aby-proposal .proposal-card { box-shadow: none; border: 0; border-radius: 0; }
   .aby-proposal section { padding: 12px 0; }
   .aby-proposal .section-card { break-inside: auto; }
