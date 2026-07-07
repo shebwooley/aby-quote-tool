@@ -27,6 +27,8 @@
 
 .aby-proposal .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 22px; padding: 24px 30px; border-bottom: 2px solid var(--aby-silver); background: #fff; }
 .aby-proposal .logo-wrap img { width: 185px; max-width: 100%; height: auto; display: block; }
+.aby-proposal .brand-col { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
+.aby-proposal .eyebrow-onlight { background: rgba(32,90,166,.08); border-color: rgba(32,90,166,.25); color: var(--aby-blue-dark); margin-bottom: 0; }
 .aby-proposal .prepared-for { text-align: right; font-size: 14px; color: var(--muted); }
 .aby-proposal .prepared-for strong { display: block; color: var(--aby-blue-dark); font-size: 16px; margin-bottom: 6px; }
 .aby-proposal .broker-logo-wrap { margin-bottom: 8px; }
