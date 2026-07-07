@@ -1,17 +1,27 @@
-// ABY Quote Tool — Quote renderer
+// ABY Quote Tool — Quote renderer (2026 redesign)
 // Takes form data + engine results and produces the full quote HTML.
+// Output is wrapped in a single .aby-proposal root so quote.css styles it in
+// isolation, and the same markup + stylesheet are reused for the downloadable
+// client file (see app.js downloadQuoteAsHtml) so preview and PDF always match.
 
 window.ABYQuote = window.ABYQuote || {};
 
 ABYQuote.renderer = (function () {
 
-  var u = null; // bound at runtime to ABYQuote.utils
-  var L = null; // bound at runtime to ABYQuote.language
+  var u = null;
+  var L = null;
 
-  function init() {
-    u = ABYQuote.utils;
-    L = ABYQuote.language;
-  }
+  var CHEV = '<svg class="fee-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4"/></svg>';
+  var LM_CHEV = '<svg class="lm-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4"/></svg>';
+
+  var FEED_PROVIDERS = [
+    'ADP', 'Bswift', 'Ceridian', 'Employee Navigator', 'Exponent HR',
+    'Netchex', 'Paycom', 'Paycor', 'Paychex', 'Selerix',
+    'UKG', 'Workday', 'Workforce Now'
+  ];
+
+  function init() { u = ABYQuote.utils; L = ABYQuote.language; }
+  function esc(s) { return u.escapeHtml(s == null ? '' : String(s)); }
 
   function findProduct(productId) {
     for (var i = 0; i < ABYQuote.products.length; i++) {
@@ -19,7 +29,6 @@ ABYQuote.renderer = (function () {
     }
     return null;
   }
-
   function findPackage(productMeta, packageId) {
     if (!productMeta || !productMeta.packages) return null;
     for (var i = 0; i < productMeta.packages.length; i++) {
@@ -27,413 +36,423 @@ ABYQuote.renderer = (function () {
     }
     return null;
   }
+  function firstSentence(text) {
+    if (!text) return '';
+    var m = String(text).match(/^[\s\S]*?[.!?](\s|$)/);
+    return (m ? m[0] : String(text)).trim();
+  }
+  function splitPackageName(name) {
+    if (!name) return { name: '', detail: '' };
+    var parts = String(name).split(/\s*[:–—]\s*/);
+    if (parts.length < 2) return { name: parts[0].trim(), detail: '' };
+    return { name: parts[0].trim(), detail: parts.slice(1).join(': ').trim() };
+  }
 
-  // -------------------------------------------------------------
-  // Header section: title, presented by, client, quote number
-  // -------------------------------------------------------------
-
-  function renderHeader(form, quoteNumber) {
-    var brokerLogoHtml = '';
-    if (form.brokerLogoDataUrl) {
-      brokerLogoHtml = '<img class="broker-logo" src="' + u.escapeHtml(form.brokerLogoDataUrl) + '" alt="Broker logo">';
+  function renderTopbar(form) {
+    var strongLine = form.clientName
+      ? '<strong>Prepared for ' + esc(form.clientName) + '</strong>'
+      : '<strong>Administrative Services Proposal</strong>';
+    var detailLines = [];
+    if (form.brokerName || form.brokerAgency) {
+      detailLines.push('Broker: ' + esc([form.brokerName, form.brokerAgency].filter(Boolean).join(', ')));
     }
-
-    var clientBlock = '';
-    if (form.clientName) {
-      clientBlock =
-        '<div class="quote-client">' +
-        '  <div class="client-label">Prepared for</div>' +
-        '  <div class="client-name">' + u.escapeHtml(form.clientName) + '</div>' +
-        '</div>';
-    }
-
+    var brokerContact = [];
+    if (form.brokerPhone) brokerContact.push(esc(form.brokerPhone));
+    if (form.brokerEmail) brokerContact.push(esc(form.brokerEmail));
+    if (brokerContact.length) detailLines.push(brokerContact.join(' &nbsp;|&nbsp; '));
+    // strongLine is a block element, so detail lines follow directly (no leading <br>)
+    var preparedHtml = strongLine + detailLines.join('<br>');
+    var brokerLogo = form.brokerLogoDataUrl
+      ? '<img class="broker-logo" src="' + esc(form.brokerLogoDataUrl) + '" alt="Broker logo">'
+      : '';
     return [
-      '<header class="quote-header">',
-      '  <div class="logo-row">',
-      '    <div class="aby-logo">',
-      '      <img src="assets/images/aby-logo.png" alt="ABY Benefits LLC">',
-      '    </div>',
-      brokerLogoHtml ? '    <div class="broker-logo-wrap">' + brokerLogoHtml + '</div>' : '',
+      '<div class="topbar">',
+      '  <div class="logo-wrap"><img src="assets/images/aby-logo.png" alt="ABY Benefits LLC"></div>',
+      '  <div class="prepared-for">',
+      '    ' + preparedHtml,
+      brokerLogo ? '    <br>' + brokerLogo : '',
       '  </div>',
-      '  <h1 class="quote-title">Administrative Proposal</h1>',
-      clientBlock,
-      '  <div class="quote-meta">',
-      form.effectiveDate ? '    <div class="meta-row"><span class="meta-label">Effective date</span> <span class="meta-value">' + u.escapeHtml(u.formatDateLong(form.effectiveDate)) + '</span></div>' : '',
-      '    <div class="meta-row"><span class="meta-label">Quote number</span> <span class="meta-value">' + u.escapeHtml(quoteNumber) + '</span></div>',
-      '  </div>',
-      renderPartyBlocks(form),
-      '</header>'
+      '</div>'
     ].filter(Boolean).join('\n');
   }
 
-  function renderPartyBlocks(form) {
-    var hasBroker = form.brokerName || form.brokerAgency || form.brokerPhone || form.brokerEmail;
-    var hasRep = form.repName || form.repPhone || form.repEmail;
-    if (!hasBroker && !hasRep) return '';
-
-    var parts = ['<div class="party-blocks">'];
-    if (hasBroker) {
-      parts.push('  <div class="party-block">');
-      parts.push('    <div class="party-label">Presented by</div>');
-      if (form.brokerAgency) parts.push('    <div class="party-name">' + u.escapeHtml(form.brokerAgency) + '</div>');
-      if (form.brokerName) parts.push('    <div>' + u.escapeHtml(form.brokerName) + '</div>');
-      if (form.brokerPhone) parts.push('    <div>' + u.escapeHtml(form.brokerPhone) + '</div>');
-      if (form.brokerEmail) parts.push('    <div>' + u.escapeHtml(form.brokerEmail) + '</div>');
-      parts.push('  </div>');
-    }
-    parts.push('  <div class="party-block">');
-    parts.push('    <div class="party-label">' + (hasBroker ? 'In partnership with' : 'Presented by') + '</div>');
-    parts.push('    <div class="party-name">ABY Benefits LLC</div>');
-    if (hasRep) {
-      if (form.repName) parts.push('    <div>' + u.escapeHtml(form.repName) + '</div>');
-      if (form.repPhone) parts.push('    <div>' + u.escapeHtml(form.repPhone) + '</div>');
-      if (form.repEmail) parts.push('    <div>' + u.escapeHtml(form.repEmail) + '</div>');
-    }
-    parts.push('  </div>');
-    parts.push('</div>');
-    return parts.join('\n');
+  function proposalTitle(groups) {
+    var names = groups.map(function (g) {
+      var meta = findProduct(g.productId);
+      return meta ? (meta.shortName || meta.name) : g.productId;
+    });
+    if (names.length === 0) return 'Administrative Services Proposal';
+    if (names.length <= 3) return names.join(' & ');
+    return 'Employee Benefits Administrative Services Proposal';
   }
 
-  // -------------------------------------------------------------
-  // Proposal Contents (TOC list of selected products)
-  // -------------------------------------------------------------
-
-  function renderProposalContents(selections) {
-    var items = selections.map(function (s) {
-      var meta = findProduct(s.productId);
-      if (!meta) return '';
-      var label = meta.shortName || meta.name;
-      if (s.packageId && meta.packages) {
-        var pkg = findPackage(meta, s.packageId);
-        if (pkg) label += ' — ' + pkg.name.replace(/\s*\(.*?\)\s*$/, '');
-      }
-      return '<li>' + u.escapeHtml(label) + '</li>';
-    }).filter(Boolean).join('\n');
-
+  function renderHero(form, groups, quoteNumber) {
+    var meta = [];
+    if (form.effectiveDate) meta.push('<div><span>Effective date</span><strong>' + esc(u.formatDateLong(form.effectiveDate)) + '</strong></div>');
+    meta.push('<div><span>Quote number</span><strong>' + esc(quoteNumber) + '</strong></div>');
+    meta.push('<div><span>Prepared by</span><strong>ABY Benefits LLC</strong></div>');
     return [
-      '<section class="proposal-contents">',
-      '  <h2>Proposal Contents</h2>',
-      '  <p>This proposal contains pricing and services for the following:</p>',
-      '  <ul>' + items + '</ul>',
-      '</section>'
+      '<div class="hero">',
+      '  <div class="eyebrow">Employee benefits administrative services proposal</div>',
+      '  <h1>' + esc(proposalTitle(groups)) + '</h1>',
+      '  <p>Prepared' + (form.clientName ? ' for ' + esc(form.clientName) : '') +
+        ' to outline the administrative services, pricing, and compliance support described below.</p>',
+      '  <div class="hero-meta">' + meta.join('') + '</div>',
+      '</div>'
     ].join('\n');
   }
 
-  // -------------------------------------------------------------
-  // About ABY (always shown, shaded box)
-  // -------------------------------------------------------------
+  function renderHeroTiles(groups) {
+    if (groups.length === 0) return '';
+    var cls = groups.length === 1 ? ' cols-1' : (groups.length === 2 ? ' cols-2' : '');
+    var tiles = groups.map(function (g) {
+      var meta = findProduct(g.productId);
+      var lang = L.products[g.productId];
+      var title = meta ? (meta.shortName || meta.name) : g.productId;
+      var blurb = lang && lang.paragraphs ? firstSentence(lang.paragraphs[0]) : '';
+      return '<div class="hero-tile"><h3>' + esc(title) + '</h3><p>' + esc(blurb) + '</p></div>';
+    }).join('\n');
+    return '<div class="hero-grid' + cls + '">\n' + tiles + '\n</div>';
+  }
 
   function renderAboutABY() {
+    var a = L.aboutABY;
     return [
-      '<section class="about-aby boxed">',
-      '  <h2>' + u.escapeHtml(L.aboutABY.heading) + '</h2>',
-      u.paragraphs(L.aboutABY.paragraphs),
-      '  <h3>Experience Highlights</h3>',
-      '  <ul>' + u.bullets(L.aboutABY.experienceHighlights) + '</ul>',
+      '<section>',
+      '  <div class="section-card">',
+      '    <div class="section-head"><h2>' + esc(a.heading) + '</h2><p>A Dallas–Fort Worth–based third-party administrator, founded in 1986 and headquartered in Plano, Texas.</p></div>',
+      '    <div class="section-body">',
+      a.paragraphs.map(function (p) { return '      <p>' + esc(p) + '</p>'; }).join('\n'),
+      '      <div class="callout"><h3>Experience Highlights</h3><ul>' +
+        a.experienceHighlights.map(function (h) { return '<li>' + esc(h) + '</li>'; }).join('') + '</ul></div>',
+      '    </div>',
+      '  </div>',
       '</section>'
     ].join('\n');
   }
-
-  // -------------------------------------------------------------
-  // Standard Services (always shown)
-  // -------------------------------------------------------------
 
   function renderStandardServices() {
-    var itemsHtml = L.standardServices.items.map(function (item) {
-      if (item && typeof item === 'object' && item.bold) {
-        return '<li><strong>' + u.escapeHtml(item.text) + '</strong></li>';
-      }
-      return '<li>' + u.escapeHtml(item) + '</li>';
-    }).join('\n');
+    var s = L.standardServices;
+    var items = s.items.map(function (item) {
+      var text = (item && typeof item === 'object') ? item.text : item;
+      var isFeature = (item && typeof item === 'object' && item.bold && /account manager/i.test(text));
+      if (/fees guaranteed/i.test(text)) return '';
+      return '<div class="service-item' + (isFeature ? ' feature' : '') + '">' + esc(text) + '</div>';
+    }).filter(Boolean).join('\n');
     return [
-      '<section class="standard-services">',
-      '  <h2>' + u.escapeHtml(L.standardServices.heading) + '</h2>',
-      '  <p>' + u.escapeHtml(L.standardServices.intro) + '</p>',
-      '  <ul>' + itemsHtml + '</ul>',
-      '  <p>' + u.escapeHtml(L.standardServices.closing) + '</p>',
+      '<section>',
+      '  <div class="section-card">',
+      '    <div class="section-head green"><h2>' + esc(s.heading) + '</h2><p>' + esc(s.intro) + '</p></div>',
+      '    <div class="section-body">',
+      '      <div class="service-list">' + items + '</div>',
+      '      <div class="guarantee">✓ ' + esc(L.feeGuarantee || 'All fees guaranteed for three (3) years.') + '</div>',
+      '      <p class="muted" style="margin-top:14px;">' + esc(s.closing) + '</p>',
+      '    </div>',
+      '  </div>',
       '</section>'
     ].join('\n');
   }
 
-  // -------------------------------------------------------------
-  // Per-product overview (language block from language.js)
-  // -------------------------------------------------------------
-
-  function renderProductOverview(productId) {
+  function renderLearnMore(productId) {
     var lang = L.products[productId];
     if (!lang) return '';
-
-    var html = ['<section class="product-overview">'];
-    html.push('  <h2>' + u.escapeHtml(lang.heading) + '</h2>');
-    if (lang.paragraphs) {
-      html.push(u.paragraphs(lang.paragraphs));
-    }
-    if (lang.bulletHeading) {
-      html.push('  <p>' + u.escapeHtml(lang.bulletHeading) + '</p>');
-    }
-    if (lang.bullets) {
-      html.push('  <ul>' + u.bullets(lang.bullets) + '</ul>');
-    }
-    if (lang.closing) {
-      html.push(u.paragraphs(lang.closing));
-    }
-    html.push('</section>');
-    return html.join('\n');
-  }
-
-  // -------------------------------------------------------------
-  // Per-product pricing table
-  // -------------------------------------------------------------
-
-  function renderPricingTable(result) {
-    var meta = findProduct(result.productId);
-    if (!meta) return '';
-
-    var rows = [];
-
-    if (result.packageLabel) {
-      rows.push('<tr><td class="row-label">Plan selected</td><td colspan="2" class="row-value">' + u.escapeHtml(result.packageLabel) + '</td></tr>');
-    }
-
-    if (result.setupFee) {
-      rows.push(feeRow(result.setupFee.label, u.money(result.setupFee.amount), 'one-time'));
-    }
-    if (result.docsFee) {
-      rows.push(feeRow(result.docsFee.label, u.money(result.docsFee.amount), 'one-time'));
-    }
-    if (result.renewalFee != null) {
-      rows.push(feeRow(result.renewalFee.label, u.money(result.renewalFee.amount), 'annual'));
-    }
-    if (result.annualFee != null) {
-      rows.push(feeRow(result.annualFee.label, u.money(result.annualFee.amount), 'annual'));
-      var hasAnnualFormula = !!result.formulaBreakdown;
-      var hasAnnualCount  = result.annualFee.count != null && !!meta.countLabel;
-      if (hasAnnualFormula || hasAnnualCount) {
-        var annualLeft  = hasAnnualCount  ? 'Estimated based on <strong>' + result.annualFee.count + ' ' + u.escapeHtml(meta.countLabel) + '</strong>' : '';
-        var annualRight = hasAnnualFormula ? '<em>' + u.escapeHtml(result.formulaBreakdown) + '</em>' : '';
-        rows.push('<tr class="breakdown-row"><td class="row-label count-cell">' + annualLeft + '</td><td colspan="2">' + annualRight + '</td></tr>');
-      }
-    }
-    if (result.monthlyFee) {
-      var monthlyValue = u.money(result.monthlyFee.amount);
-      var note = result.monthlyFee.tierLabel ? ' <span class="tier-note">(' + u.escapeHtml(result.monthlyFee.tierLabel) + ')</span>' : '';
-      rows.push('<tr><td class="row-label">' + u.escapeHtml(result.monthlyFee.label) + '</td>' +
-                '<td class="row-value">' + monthlyValue + note + '</td>' +
-                '<td class="row-cadence">monthly</td></tr>');
-      var hasMonthlyBreakdown = !!result.monthlyFee.breakdown;
-      var hasMonthlyCount     = result.monthlyFee.count != null;
-      if (hasMonthlyBreakdown || hasMonthlyCount) {
-        var countTerm    = (meta.countLabel || 'enrollees');
-        var monthlyLeft  = hasMonthlyCount     ? 'Estimated based on <strong>' + result.monthlyFee.count + ' ' + u.escapeHtml(countTerm) + '</strong>' : '';
-        var monthlyRight = hasMonthlyBreakdown ? '<em>' + u.escapeHtml(result.monthlyFee.breakdown) + '</em>' : '';
-        rows.push('<tr class="breakdown-row"><td class="row-label count-cell">' + monthlyLeft + '</td><td colspan="2">' + monthlyRight + '</td></tr>');
-      }
-    }
-
-    if (rows.length === 0) {
-      rows.push('<tr><td colspan="3"><em>Pricing pending — provide selection details.</em></td></tr>');
-    }
-
-    var heading = (meta.shortName || meta.name) + ' — Fees';
-
+    var body = [];
+    (lang.paragraphs || []).forEach(function (p) { body.push('<p>' + esc(p) + '</p>'); });
+    if (lang.bulletHeading) body.push('<p>' + esc(lang.bulletHeading) + '</p>');
+    if (lang.bullets) body.push('<ul>' + lang.bullets.map(function (b) { return '<li>' + esc(b) + '</li>'; }).join('') + '</ul>');
+    (lang.closing || []).forEach(function (p) { body.push('<p>' + esc(p) + '</p>'); });
+    if (body.length === 0) return '';
+    var shortName = (findProduct(productId) || {}).shortName || (lang.heading || '');
     return [
-      '<section class="pricing-table-wrap">',
-      '  <h3>' + u.escapeHtml(heading) + '</h3>',
-      '  <table class="pricing-table">',
-      '    <tbody>',
-      rows.join('\n'),
-      '    </tbody>',
-      '  </table>',
-      renderProductNotes(result),
-      renderAdditionalFees(result),
-      '</section>'
-    ].join('\n');
-  }
-
-  function feeRow(label, value, cadence) {
-    return '<tr><td class="row-label">' + u.escapeHtml(label) + '</td>' +
-           '<td class="row-value">' + value + '</td>' +
-           '<td class="row-cadence">' + u.escapeHtml(cadence) + '</td></tr>';
-  }
-
-  function renderProductNotes(result) {
-    var notes = (result.notes || []).filter(function (n) { return n && n.indexOf('TODO') !== 0; });
-    if (notes.length === 0) return '';
-    var html = ['<div class="product-notes">'];
-    notes.forEach(function (n) { html.push('<p>' + u.escapeHtml(n) + '</p>'); });
-    html.push('</div>');
-    return html.join('\n');
-  }
-
-  function renderAdditionalFees(result) {
-    var fees = result.additionalFees || [];
-    if (fees.length === 0) return '';
-    var rows = fees.map(function (f) {
-      var amt = (f.amount === 0) ? 'Included' : u.money(f.amount);
-      // Suppress the "per X" unit when the fee is included at no charge
-      var unit = (f.amount !== 0 && f.unit) ? ' <span class="fee-unit">' + u.escapeHtml(f.unit) + '</span>' : '';
-      var mainRow = '<tr class="fee-row"><td>' + u.escapeHtml(f.label) + '</td>' +
-                    '<td class="fee-amount">' + amt + unit + '</td></tr>';
-      var descRow = '';
-      if (f.description) {
-        descRow = '<tr class="fee-description-row"><td colspan="2">' +
-                  u.escapeHtml(f.description) + '</td></tr>';
-      }
-      return mainRow + descRow;
-    }).join('\n');
-    return [
-      '<details class="additional-fees" open>',
-      '  <summary>Additional Services Fee Schedule</summary>',
-      '  <table class="additional-fees-table">',
-      '    <tbody>' + rows + '</tbody>',
-      '  </table>',
+      '<details class="learn-more">',
+      '  <summary>' + LM_CHEV + 'Learn more about ' + esc(shortName) + ' compliance</summary>',
+      '  <div class="lm-body">' + body.join('\n') + '</div>',
       '</details>'
     ].join('\n');
   }
 
-  // -------------------------------------------------------------
-  // "Additional Services ABY Offers" — cross-sell page at the end
-  // -------------------------------------------------------------
-
-  function renderAdditionalServices(selectedProductIds) {
-    var section = L.additionalServices;
-    if (!section || !section.services || section.services.length === 0) return '';
-
-    var quotedIds = {};
-    selectedProductIds.forEach(function (id) { quotedIds[id] = true; });
-
-    var available = section.services.filter(function (s) { return !quotedIds[s.id]; });
-    var max = section.maxToShow || 6;
-    var shown = available.slice(0, max);
-    if (shown.length === 0) return '';
-
-    var cards = shown.map(function (s) {
-      return [
-        '<div class="cross-sell-card">',
-        '  <h3>' + u.escapeHtml(s.name) + '</h3>',
-        '  <p>' + u.escapeHtml(s.description) + '</p>',
-        '</div>'
-      ].join('\n');
+  function renderPricingCards(result, meta) {
+    var cards = [];
+    if (result.setupFee) cards.push({ label: result.setupFee.label || 'Setup fee', price: u.money(result.setupFee.amount), note: 'One-time setup.' });
+    if (result.docsFee) cards.push({ label: result.docsFee.label || 'Documents', price: u.money(result.docsFee.amount), note: 'One-time.' });
+    if (result.renewalFee != null) cards.push({ label: result.renewalFee.label || 'Annual renewal', price: u.money(result.renewalFee.amount), note: 'Per year.' });
+    if (result.annualFee != null) {
+      var aNote = (result.annualFee.count != null && meta.countLabel) ? 'Estimated for ' + result.annualFee.count + ' ' + meta.countLabel + '.' : 'Per year.';
+      if (result.formulaBreakdown) aNote = result.formulaBreakdown;
+      cards.push({ label: result.annualFee.label || 'Annual fee', price: u.money(result.annualFee.amount), note: aNote });
+    }
+    if (result.monthlyFee) {
+      var mNote = [];
+      if (result.monthlyFee.tierLabel) mNote.push(esc(result.monthlyFee.tierLabel));
+      if (result.monthlyFee.breakdown) mNote.push(esc(result.monthlyFee.breakdown));
+      cards.push({
+        label: result.monthlyFee.label || 'Monthly administration',
+        price: u.money(result.monthlyFee.amount) + ' <small>monthly</small>',
+        note: mNote.join(' '),
+        featured: true,
+        badge: (result.monthlyFee.count != null) ? 'Est. this group' : ''
+      });
+    }
+    if (cards.length === 0) {
+      cards.push({ label: 'Pricing', price: 'On request', note: 'Provide selection details for a quote.' });
+    }
+    var cls = cards.length === 1 ? ' cols-1' : (cards.length === 2 ? ' cols-2' : '');
+    var html = cards.map(function (c) {
+      return '<div class="price-box' + (c.featured ? ' featured' : '') + '">' +
+        (c.badge ? '<span class="badge">' + esc(c.badge) + '</span>' : '') +
+        '<div class="price-label">' + esc(c.label) + '</div>' +
+        '<div class="price">' + c.price + '</div>' +
+        (c.note ? '<p class="muted">' + c.note + '</p>' : '') +
+        '</div>';
     }).join('\n');
+    return '<div class="pricing-grid' + cls + '">\n' + html + '\n</div>';
+  }
 
+  function renderOptionsTable(group, meta, recommendedPackageId) {
+    var rows = group.results.map(function (r) {
+      var pkg = findPackage(meta, r.packageId) || {};
+      var parsed = splitPackageName(pkg.name || r.packageLabel || r.packageId);
+      var isRec = recommendedPackageId && r.packageId === recommendedPackageId;
+      var setup = r.setupFee ? u.money(r.setupFee.amount) : (r.annualFee ? u.money(r.annualFee.amount) : 'n/a');
+      var renew = (r.renewalFee != null) ? u.money(r.renewalFee.amount) : 'n/a';
+      return '<tr' + (isRec ? ' class="recommended"' : '') + '>' +
+        '<td>' + esc(parsed.name) + (isRec ? '<span class="rec-tag">Recommended</span>' : '') + '</td>' +
+        '<td>' + esc(parsed.detail || pkg.description || '') + '</td>' +
+        '<td>' + setup + '</td>' +
+        '<td>' + renew + '</td></tr>';
+    }).join('\n');
     return [
-      '<section class="additional-services page-break-before">',
-      '  <h2>' + u.escapeHtml(section.heading) + '</h2>',
-      section.intro ? '  <p class="cross-sell-intro">' + u.escapeHtml(section.intro) + '</p>' : '',
-      '  <div class="cross-sell-grid">',
-      cards,
+      '<table class="options-table">',
+      '  <thead><tr><th>Option</th><th>What is included</th><th>Setup fee</th><th>Annual renewal</th></tr></thead>',
+      '  <tbody>' + rows + '</tbody>',
+      '</table>'
+    ].join('\n');
+  }
+
+  function renderFeeSchedule(result, meta) {
+    var fees = result.additionalFees || [];
+    if (fees.length === 0) return '';
+    var items = fees.map(function (f) {
+      var amt = (f.amount === 0) ? 'Included' : u.money(f.amount);
+      var unit = (f.amount !== 0 && f.unit) ? ' <span class="fee-unit">' + esc(f.unit) + '</span>' : '';
+      var explain = f.description ? '<div class="fee-explain">' + esc(f.description) + '</div>' : '';
+      return '<details class="fee-item">' +
+        '<summary>' + CHEV + '<span class="fee-name">' + esc(f.label) + '</span>' +
+        '<span class="fee-amount">' + amt + unit + '</span></summary>' +
+        explain + '</details>';
+    }).join('\n');
+    return [
+      '<div class="fees-wrap">',
+      '  <div class="fees-title">Additional Services Fee Schedule: ' + esc(meta.shortName || meta.name) + '</div>',
+      '  <p class="fee-hint">Tap any line to see what it covers.</p>',
+      items,
+      '</div>'
+    ].join('\n');
+  }
+
+  function renderProductSection(group, form) {
+    var meta = findProduct(group.productId);
+    if (!meta) return '';
+    var lang = L.products[group.productId] || {};
+    var recMap = form.recommendedPackages || {};
+    var isOptions = group.results.length > 1;
+    var pricing = isOptions
+      ? renderOptionsTable(group, meta, recMap[group.productId])
+      : renderPricingCards(group.results[0], meta);
+    var first = group.results[0];
+    var notes = (first.notes || []).filter(function (n) { return n && n.indexOf('TODO') !== 0; });
+    var notesHtml = notes.length
+      ? '<p class="muted" style="font-size:12.5px;margin-top:12px;">' + notes.map(esc).join(' ') + '</p>'
+      : '';
+    var intro = (lang.paragraphs && lang.paragraphs[0]) ? '<p>' + esc(lang.paragraphs[0]) + '</p>' : '';
+    return [
+      '<section>',
+      '  <div class="section-card">',
+      '    <div class="section-head"><h2>' + esc(lang.heading || meta.name) + '</h2></div>',
+      '    <div class="section-body">',
+      intro,
+      renderLearnMore(group.productId),
+      pricing,
+      renderFeeSchedule(first, meta),
+      notesHtml,
+      '    </div>',
       '  </div>',
       '</section>'
     ].filter(Boolean).join('\n');
   }
 
-  // -------------------------------------------------------------
-  // File Feed Integration card
-  // -------------------------------------------------------------
-
-  function renderFileFeedCard() {
-    var providers = [
-      'ADP', 'Bswift', 'Ceridian', 'Employee Navigator', 'Exponent HR',
-      'Netchex', 'Paycom', 'Paycor', 'Paychex', 'Selerix',
-      'UKG', 'Workday', 'Workforce Now'
-    ];
-    var chips = providers.map(function (p) {
-      return '<span class="feed-chip">' + u.escapeHtml(p) + '</span>';
-    }).join('');
+  function renderDisclosures() {
+    var d = L.disclaimer;
     return [
-      '<section class="file-feed-card">',
-      '  <h2>File Feed Integration</h2>',
-      '  <p>ABY is integrated with numerous HRIS and payroll providers. ABY is also able to set up file feeds with new providers as long as our SFTPs are used. A partial list of current integrations:</p>',
-      '  <div class="feed-chips">',
-      '    ' + chips,
+      '<section>',
+      '  <div class="section-card">',
+      '    <div class="section-head"><h2>' + esc(d.heading) + '</h2></div>',
+      '    <div class="section-body">',
+      '      <p class="disclaimer-text">' + esc(d.text) + '</p>',
+      '    </div>',
       '  </div>',
       '</section>'
     ].join('\n');
   }
 
-  // -------------------------------------------------------------
-  // Disclaimer (always at bottom)
-  // -------------------------------------------------------------
-
-  function renderDisclaimer() {
+  function renderFileFeed() {
+    var chips = FEED_PROVIDERS.map(function (p) { return '<span class="feed-chip">' + esc(p) + '</span>'; }).join('');
     return [
-      '<section class="disclaimer">',
-      '  <h2>' + u.escapeHtml(L.disclaimer.heading) + '</h2>',
-      '  <p>' + u.escapeHtml(L.disclaimer.text) + '</p>',
+      '<section>',
+      '  <div class="section-card">',
+      '    <div class="section-head"><h2>File Feed Integration</h2><p>ABY is integrated with numerous HRIS and payroll providers, and can set up file feeds with new providers using our SFTPs. A partial list of current integrations:</p></div>',
+      '    <div class="section-body"><div class="feed-chips">' + chips + '</div></div>',
+      '  </div>',
       '</section>'
     ].join('\n');
   }
 
-  // -------------------------------------------------------------
-  // Internal warning banner (only shown to broker, hidden in print)
-  // -------------------------------------------------------------
+  function applyBundlingRules(quotedIds, candidates) {
+    var q = {};
+    quotedIds.forEach(function (id) { q[id] = true; });
+    return candidates.filter(function (s) {
+      if (q[s.id]) return false;
+      if (s.id === 'stateContinuation' && q.cobra) return false;
+      if (s.id === 'cobra' && q.stateContinuation) return false;
+      if (s.id === 'pop' && q.fsa) return false;
+      return true;
+    });
+  }
+
+  function renderCrossSell(quotedIds) {
+    var section = L.additionalServices;
+    if (!section || !section.services) return '';
+    var available = applyBundlingRules(quotedIds, section.services);
+    var shown = available.slice(0, section.maxToShow || 6);
+    if (shown.length === 0) return '';
+    var cards = shown.map(function (s) {
+      return '<div class="cross-sell-card"><h3>' + esc(s.name) + '</h3><p>' + esc(s.description) + '</p></div>';
+    }).join('\n');
+    return [
+      '<section>',
+      '  <div class="section-card">',
+      '    <div class="section-head green"><h2>' + esc(section.heading) + '</h2>' +
+        (section.intro ? '<p>' + esc(section.intro) + '</p>' : '') + '</div>',
+      '    <div class="section-body"><div class="cross-sell-grid">' + cards + '</div></div>',
+      '  </div>',
+      '</section>'
+    ].join('\n');
+  }
 
   function renderWarnings(results) {
     var warnings = [];
     results.forEach(function (r) {
-      (r.warnings || []).forEach(function (w) {
-        warnings.push({ productId: r.productId, message: w });
-      });
+      (r.warnings || []).forEach(function (w) { warnings.push({ productId: r.productId, message: w }); });
     });
     if (warnings.length === 0) return '';
     var items = warnings.map(function (w) {
       var meta = findProduct(w.productId);
-      var label = meta ? meta.shortName : w.productId;
-      return '<li><strong>' + u.escapeHtml(label) + ':</strong> ' + u.escapeHtml(w.message) + '</li>';
-    }).join('\n');
-    return [
-      '<aside class="quote-warnings no-print">',
-      '  <h4>Internal notes (hidden in print)</h4>',
-      '  <ul>' + items + '</ul>',
-      '</aside>'
-    ].join('\n');
+      return '<li><strong>' + esc(meta ? meta.shortName : w.productId) + ':</strong> ' + esc(w.message) + '</li>';
+    }).join('');
+    return '<aside class="quote-warnings no-print"><h4>Internal notes (hidden in print / client file)</h4><ul>' + items + '</ul></aside>';
   }
 
-  // -------------------------------------------------------------
-  // Top-level render
-  // -------------------------------------------------------------
-
-  function render(form, results, quoteNumber) {
-    init();
-
-    var sections = [];
-    sections.push(renderWarnings(results));
-    sections.push(renderHeader(form, quoteNumber));
-    if (results.length > 0) {
-      sections.push(renderProposalContents(results.map(function (r) {
-        return { productId: r.productId, packageId: r.packageId };
-      })));
-    }
-    sections.push(renderAboutABY());
-    sections.push(renderStandardServices());
-
-    // Group consecutive results by productId so the product overview renders
-    // once even when multiple packages are quoted for the same product (e.g. ERISA).
-    var productGroups = [];
-    results.forEach(function (r) {
-      var last = productGroups[productGroups.length - 1];
-      if (last && last.productId === r.productId) {
-        last.results.push(r);
-      } else {
-        productGroups.push({ productId: r.productId, results: [r] });
+  function renderAuthorizationPage(form, groups, quoteNumber) {
+    var picker = groups.map(function (g, i) {
+      var meta = findProduct(g.productId);
+      var name = meta ? (meta.shortName || meta.name) : g.productId;
+      var tier = '';
+      if (g.results.length > 1) {
+        var rec = (form.recommendedPackages || {})[g.productId];
+        var opts = g.results.map(function (r) {
+          var pkg = findPackage(meta, r.packageId) || {};
+          var parsed = splitPackageName(pkg.name || r.packageId);
+          var label = parsed.name + (parsed.detail ? ': ' + parsed.detail : '');
+          var sel = (rec && r.packageId === rec) ? ' selected' : '';
+          return '<option value="' + esc(parsed.name) + '"' + sel + '>' + esc(label) + '</option>';
+        }).join('');
+        tier = '<div class="opt-tier"><label>Option:</label><select class="opt-tier-select">' + opts + '</select></div>';
       }
-    });
-    productGroups.forEach(function (group) {
-      sections.push('<div class="product-block">');
-      sections.push(renderProductOverview(group.productId));
-      group.results.forEach(function (r) {
-        sections.push(renderPricingTable(r));
-      });
-      sections.push('</div>');
-    });
+      return '<div class="opt-row"><input type="checkbox" class="opt-check" data-label="' + esc(name) + '" checked>' +
+        '<div class="opt-main"><div class="opt-title">' + esc(name) + '</div>' + tier + '</div></div>';
+    }).join('\n');
 
-    sections.push(renderDisclaimer());
-    sections.push(renderFileFeedCard());
-    var selectedIds = results.map(function (r) { return r.productId; });
-    sections.push(renderAdditionalServices(selectedIds));
+    function field(label, fname, val, full, type) {
+      return '<div class="ack-field' + (full ? ' full' : '') + '"><label>' + esc(label) + '</label>' +
+        '<input type="' + (type || 'text') + '" name="' + fname + '"' + (val ? ' value="' + esc(val) + '"' : '') + '></div>';
+    }
 
-    return sections.filter(Boolean).join('\n');
+    return [
+      '<section class="ack-page">',
+      '  <div class="ack-card">',
+      '    <div class="ack-head">',
+      '      <div class="ack-brand">ABY Benefits LLC</div>',
+      '      <h2>Employer Acceptance &amp; Authorization</h2>',
+      '      <div class="ack-sub">Non-binding letter of intent, quote number: <strong>' + esc(quoteNumber) + '</strong></div>',
+      '      <div class="ack-guarantee">All ABY admin fees guaranteed for 3 years</div>',
+      '    </div>',
+      '    <div class="ack-group"><div class="ack-group-label">Select the Services You Are Authorizing</div>',
+      picker,
+      '      <p class="fee-hint" style="padding-left:2px;">Uncheck any service you are not moving forward with. Your selections are sent to ABY with this authorization.</p>',
+      '    </div>',
+      '    <form id="commitForm" onsubmit="submitCommitment(event)">',
+      '      <input type="hidden" name="quoteNumber" value="' + esc(quoteNumber) + '">',
+      '      <input type="hidden" name="products" id="productsField" value="">',
+      '      <div class="ack-group"><div class="ack-group-label">Employer Information</div><div class="ack-field-grid">',
+      field('Employer Name', 'employerName', form.clientName || '', true),
+      field('Address', 'address', ''),
+      field('City / State / Zip', 'cityStateZip', ''),
+      '      </div></div>',
+      '      <div class="ack-group"><div class="ack-group-label">Authorized Signer</div><div class="ack-field-grid">',
+      '        <div class="ack-field"><label>Name</label><input type="text" name="authSigner" id="authSignerInput" oninput="abySign(this.value)"></div>',
+      field('Title', 'authTitle', ''),
+      field('Email', 'authEmail', '', false, 'email'),
+      field('Phone', 'authPhone', '', false, 'tel'),
+      '      </div></div>',
+      '      <div class="ack-group"><div class="ack-group-label">HR / Benefits Contact (if different)</div><div class="ack-field-grid">',
+      field('Name', 'hrContact', ''),
+      field('Title', 'hrTitle', ''),
+      field('Email', 'hrEmail', '', false, 'email'),
+      field('Phone', 'hrPhone', '', false, 'tel'),
+      '      </div></div>',
+      '      <div class="ack-group"><div class="ack-field-grid">',
+      field('Proposed Administrative Start Date', 'startDate', form.effectiveDate || '', false, 'date'),
+      '      </div></div>',
+      '      <div class="ack-group"><div class="ack-group-label">Authorization</div><div class="ack-sign-grid">',
+      '        <div><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:6px;">Accepted: Printed Name</label><div id="printPreview" class="sign-preview print-name"></div><input type="hidden" name="acceptedPrint" id="acceptedPrint"></div>',
+      '        <div><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:6px;">Accepted: Electronic Signature</label><div id="signPreview" class="sign-preview signature"></div><input type="hidden" name="acceptedSign" id="acceptedSign"><div class="sign-hint">Type your name in the Authorized Signer field above to sign.</div></div>',
+      '      </div>',
+      '      <div style="margin-top:16px;max-width:220px;"><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:4px;">Date</label><input type="date" name="signDate" id="signDate" style="width:100%;padding:9px 11px;border:1px solid #c4d2dd;border-radius:8px;font:inherit;font-size:14px;"></div>',
+      '      </div>',
+      '      <div class="ack-submit"><button type="submit" id="commitBtn">Submit Authorization to ABY</button><div class="submit-note">This is a non-binding letter of intent. ABY will follow up to confirm implementation details.</div><div id="commitMsg" style="margin-top:12px;font-size:13px;display:none;"></div></div>',
+      '    </form>',
+      '    <p class="ack-disclaimer">This proposal is a summary of the services and pricing offered based on the information provided. Rates may be affected by actual enrollment and transferred information. This proposal does not constitute a final offer or agreement. Final service terms and plan details should be confirmed during setup.</p>',
+      '  </div>',
+      '</section>'
+    ].filter(Boolean).join('\n');
+  }
+
+  function render(form, results, quoteNumber, opts) {
+    opts = opts || {};
+    init();
+    var groups = [];
+    results.forEach(function (r) {
+      var last = groups[groups.length - 1];
+      if (last && last.productId === r.productId) last.results.push(r);
+      else groups.push({ productId: r.productId, results: [r] });
+    });
+    var body = [];
+    body.push(renderTopbar(form));
+    body.push(renderHero(form, groups, quoteNumber));
+    body.push(renderHeroTiles(groups));
+    body.push(renderAboutABY());
+    body.push(renderStandardServices());
+    groups.forEach(function (g) { body.push(renderProductSection(g, form)); });
+    body.push(renderDisclosures());
+    body.push(renderFileFeed());
+    body.push(renderCrossSell(results.map(function (r) { return r.productId; })));
+    if (opts.includeAuthorization) body.push(renderAuthorizationPage(form, groups, quoteNumber));
+    var warnings = renderWarnings(results);
+    return warnings +
+      '<div class="aby-proposal">\n<div class="proposal-card">\n' +
+      body.filter(Boolean).join('\n') +
+      '\n</div>\n</div>';
   }
 
   return { render: render };
-})()
+})();
