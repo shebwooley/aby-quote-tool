@@ -12,13 +12,13 @@ window.ABYQuote = window.ABYQuote || {};
 // Helper to build the seven ACA packages — same shape both rate sets
 function buildAcaPackages(rates) {
   return {
-    smallB:    { description: 'Small Group / Self/Level/Balance Funded — Forms 1094/1095-B', formula: { base: 450, perForm: rates.smallB_perForm }, requiresCount: true },
-    fullLt100: { description: 'ALE — Forms 1094/1095-C, Full Service (<100 forms)',          annualFee: rates.fullLt100 },
-    fullMid:   { description: 'ALE — Forms 1094/1095-C, Full Service (100–249 forms)',       annualFee: rates.fullMid },
-    fullHigh:  { description: 'ALE — Forms 1094/1095-C, Full Service (250–499 forms)',       annualFee: rates.fullHigh },
-    selfLt100: { description: 'ALE — Forms 1094/1095-C, Self Service (<100 forms)',          annualFee: rates.selfLt100 },
-    selfMid:   { description: 'ALE — Forms 1094/1095-C, Self Service (100–249 forms)',       annualFee: rates.selfMid },
-    selfHigh:  { description: 'ALE — Forms 1094/1095-C, Self Service (250–499 forms)',       annualFee: rates.selfHigh }
+    smallB:    { description: 'Small Group / Self/Level/Balance Funded: Forms 1094/1095-B', formula: { base: 450, perForm: rates.smallB_perForm }, requiresCount: true },
+    fullLt100: { description: 'ALE: Forms 1094/1095-C, Full Service (<100 forms)',          annualFee: rates.fullLt100 },
+    fullMid:   { description: 'ALE: Forms 1094/1095-C, Full Service (100–249 forms)',       annualFee: rates.fullMid },
+    fullHigh:  { description: 'ALE: Forms 1094/1095-C, Full Service (250–499 forms)',       annualFee: rates.fullHigh },
+    selfLt100: { description: 'ALE: Forms 1094/1095-C, Self Service (<100 forms)',          annualFee: rates.selfLt100 },
+    selfMid:   { description: 'ALE: Forms 1094/1095-C, Self Service (100–249 forms)',       annualFee: rates.selfMid },
+    selfHigh:  { description: 'ALE: Forms 1094/1095-C, Self Service (250–499 forms)',       annualFee: rates.selfHigh }
   };
 }
 
@@ -31,7 +31,7 @@ ABYQuote.pricing = {
     pop: {
       type: 'package',
       packages: {
-        docsOnly: { annualFee: 99,  commissionable: false, description: 'POP plan doc only — no testing' },
+        docsOnly: { annualFee: 99,  commissionable: false, description: 'POP plan doc only: no testing' },
         popHsa:   { setupFee: 350,  renewalFee: 350,       description: 'POP plan doc + annual NDT for POP & HSA' },
         full:     { setupFee: 550,  renewalFee: 550,       description: 'POP plan doc + annual NDT for POP, FSA, LFSA, DCAP & HSA' }
       },
@@ -111,7 +111,7 @@ ABYQuote.pricing = {
           description: 'Full administration including documents, SPD, and ongoing administration',
           requiresCount: true
         },
-        docsOnly: { setupFee: 350, renewalFee: 350, description: 'Plan documents only — no monthly administration', requiresCount: false }
+        docsOnly: { setupFee: 350, renewalFee: 350, description: 'Plan documents only: no monthly administration', requiresCount: false }
       },
       additionalFees: [
         { label: 'Standard file feed integration', amount: 0, description: '' },
@@ -137,8 +137,8 @@ ABYQuote.pricing = {
         { label: 'COBRA takeover', amount: 5, unit: 'per current participant (one-time)', description: '' },
         { label: 'Standard file feed integration', amount: 0, description: '' },
         { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: '' },
-        { label: 'Open enrollment — generic renewal notice', amount: 0, description: '' },
-        { label: 'Open enrollment — full COBRA renewal packet mailed', amount: 15, unit: 'per packet', description: '' }
+        { label: 'Open enrollment: generic renewal notice', amount: 0, description: '' },
+        { label: 'Open enrollment: full COBRA renewal packet mailed', amount: 15, unit: 'per packet', description: '' }
       ],
       notes: [
         'Includes Texas State Continuation following COBRA for fully-insured groups.',
@@ -158,8 +158,8 @@ ABYQuote.pricing = {
         { label: 'Initial Rights notices at setup or renewal', amount: 1.50, unit: 'per notice', description: '' },
         { label: 'Takeover participants', amount: 5, unit: 'per participant (one-time)', description: '' },
         { label: 'Continuation participants', amount: 0, unit: 'per month', description: '' },
-        { label: 'Open enrollment — generic renewal notice', amount: 0, description: '' },
-        { label: 'Open enrollment — full continuation packet mailed', amount: 15, unit: 'per packet', description: '' }
+        { label: 'Open enrollment: generic renewal notice', amount: 0, description: '' },
+        { label: 'Open enrollment: full continuation packet mailed', amount: 15, unit: 'per packet', description: '' }
       ]
     },
 
@@ -173,7 +173,7 @@ ABYQuote.pricing = {
         whiteGlove: { setupFee: 1100, renewalFee: 750, description: 'Full SPD + Section 125 POP w/Testing + 5500 Filing + Compliance Binder' }
       },
       additionalFees: [
-        { label: 'Annual Notice Packet', amount: 125, unit: 'per year', description: 'Includes GINA, CHIPS, Medicare Creditable Coverage, HIPAA Special Enrollment, and Notice of Exchange.' },
+        { label: 'Annual Notice Packet', amount: 125, unit: 'per year', description: 'Includes GINA, CHIP, Medicare Creditable Coverage, HIPAA Special Enrollment, and Notice of Exchange.' },
         { label: 'FSA/DCAP language addition', amount: 125, unit: 'year 1', description: '' },
         { label: 'FSA/DCAP NDT testing', amount: 175, unit: 'per year per test set', description: '' },
         { label: 'Additional current-year NDT (after one included)', amount: 125, unit: 'per additional test', description: '' },
@@ -193,6 +193,113 @@ ABYQuote.pricing = {
         // NOTE: Per Eric's pricing template, Self Service 250–499 is the same as 100–249 ($1600).
       }),
       additionalFees: []
+    },
+
+    mpra: {
+      type: 'package-with-count',
+      packages: {
+        fullAdmin: {
+          setupFee: 125, renewalFee: 125,
+          monthlyTiers: [
+            { maxCount: null, type: 'flat', amount: 85, minMonthly: 85, label: 'monthly administration (under 20 participants)' }
+          ],
+          description: 'Full administration including plan document, SPD, and monthly administration',
+          requiresCount: true
+        },
+        docsOnly: { setupFee: 350, renewalFee: 350, description: 'Plan document and SPD only: no monthly administration', requiresCount: false }
+      },
+      additionalFees: [
+        { label: 'Standard file feed integration', amount: 0, description: 'Automated eligibility feed from a supported payroll or HRIS system, in ABY format.' },
+        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built feed for a provider not already integrated with ABY.' },
+        { label: 'Direct deposits', amount: 0, description: 'Reimbursements paid to participants by ACH at no per-transaction charge.' },
+        { label: 'Paper checks', amount: 5, unit: 'per check', description: 'Issued when a participant is paid by mailed check instead of direct deposit.' },
+        { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' },
+        { label: 'Paper enrollment package', amount: 2, unit: 'per printed packet', description: 'Printed enrollment materials when the electronic package is not used.' },
+        { label: 'Paper form / PDF setup or renewal', amount: 5, unit: 'per participant ($500 minimum)', description: 'Only billed if paper or PDF is used for setup or renewal instead of the ABY template.' }
+      ],
+      notes: ['Medicare HRA requires an employer with fewer than 20 employees and an ACA-compliant group medical plan. The minimum monthly administration fee is $85.']
+    },
+
+    section127: {
+      type: 'package-with-count',
+      packages: {
+        fullAdmin: {
+          setupFee: 125, renewalFee: 125,
+          monthlyTiers: [
+            { maxCount: 50,   type: 'pppm', amount: 4.00, minMonthly: 65, label: '2 to 50 participants' },
+            { maxCount: 100,  type: 'pppm', amount: 3.75, label: '51 to 100 participants' },
+            { maxCount: null, type: 'pppm', amount: 3.50, label: '101 to 250 participants' }
+          ],
+          description: 'Full administration including plan document, annual nondiscrimination testing, and monthly administration',
+          requiresCount: true
+        },
+        docsOnly: { setupFee: 350, renewalFee: 350, description: 'Standalone Section 127 EDU/SLRP documents only', requiresCount: false }
+      },
+      additionalFees: [
+        { label: 'Standard file feed integration', amount: 0, description: 'Automated eligibility feed from a supported payroll or HRIS system.' }
+      ],
+      notes: ['The $125 plan setup and annual renewal fee includes plan design consultation, plan amendments and changes, annual nondiscrimination testing, legal updates, and PDF print-ready required notices.']
+    },
+
+    section132: {
+      type: 'package-with-count',
+      packages: {
+        fullAdmin: {
+          setupFee: 125, renewalFee: 125,
+          monthlyTiers: [
+            { maxCount: 15,   type: 'flat', amount: 80, minMonthly: 80, label: '2 to 15 participants' },
+            { maxCount: 50,   type: 'pppm', amount: 4.50, label: '16 to 50 participants' },
+            { maxCount: 100,  type: 'pppm', amount: 4.25, label: '51 to 100 participants' },
+            { maxCount: null, type: 'pppm', amount: 4.00, label: '101 to 200 participants' }
+          ],
+          description: 'Full administration including plan document, annual nondiscrimination testing, and monthly administration',
+          requiresCount: true
+        },
+        docsOnly: { setupFee: 350, renewalFee: 350, description: 'Standalone Section 132 QTB documents only', requiresCount: false }
+      },
+      additionalFees: [
+        { label: 'Debit cards', amount: 0, unit: 'monthly', description: 'No monthly charge for participant debit cards.' },
+        { label: 'Debit card order', amount: 2, unit: 'per card order', description: 'Charged when new or replacement cards are ordered. A single fee applies when enrolled in both Parking and Transit.' },
+        { label: 'Standard file feed integration', amount: 0, description: 'Automated eligibility feed from a supported payroll or HRIS system.' }
+      ],
+      notes: ['The $125 plan setup and annual renewal fee includes plan design consultation, plan amendments and changes, annual nondiscrimination testing, and legal updates.']
+    },
+
+    lifestyle: {
+      type: 'package-with-count',
+      packages: {
+        fullAdmin: {
+          setupFee: 125, renewalFee: 125,
+          monthlyTiers: [
+            { maxCount: 50,   type: 'pppm', amount: 4.00, minMonthly: 65, label: '2 to 50 participants' },
+            { maxCount: 100,  type: 'pppm', amount: 3.75, label: '51 to 100 participants' },
+            { maxCount: 250,  type: 'pppm', amount: 3.50, label: '101 to 250 participants' },
+            { maxCount: null, type: 'pppm', amount: 3.25, label: '251 to 500 participants' }
+          ],
+          description: 'Full administration including plan document, monthly administration, and required notices',
+          requiresCount: true
+        },
+        docsOnly: { setupFee: 250, renewalFee: 250, description: 'Standalone Lifestyle Benefit Plan documents only', requiresCount: false }
+      },
+      additionalFees: [
+        { label: 'Debit cards', amount: 0, unit: 'monthly', description: 'No monthly charge for participant debit cards.' },
+        { label: 'Debit card order', amount: 2, unit: 'per card order', description: 'Charged when new or replacement cards are ordered.' },
+        { label: 'Standard file feed integration', amount: 0, description: 'Automated eligibility feed from a supported payroll or HRIS system.' }
+      ],
+      notes: ['The $125 plan setup and annual renewal fee includes plan design consultation, plan changes, and PDF print-ready required notices.']
+    },
+
+    directBilling: {
+      type: 'tiered',
+      setupFee: 250, renewalFee: 250,
+      monthlyTiers: [
+        { maxCount: null, type: 'pppm', amount: 3.00, minMonthly: 75, label: 'per participant per month' }
+      ],
+      additionalFees: [
+        { label: 'Notices', amount: 2.50, unit: 'per notice', description: 'Billing statements and required notices sent to participants.' },
+        { label: 'Standard file feed integration', amount: 0, description: 'Automated eligibility feed from a supported payroll or HRIS system.' }
+      ],
+      notes: ['Direct Billing handles premium collection, remittance, and tracking for retiree, leave-of-absence, and other non-COBRA continued-coverage situations. The minimum monthly fee is $75.']
     }
   },
 
@@ -204,7 +311,7 @@ ABYQuote.pricing = {
     pop: {
       type: 'package',
       packages: {
-        docsOnly: { annualFee: 99,  commissionable: false, description: 'POP plan doc only — no testing' },
+        docsOnly: { annualFee: 99,  commissionable: false, description: 'POP plan doc only: no testing' },
         popHsa:   { setupFee: 325,  renewalFee: 325,       description: 'POP plan doc + annual NDT for POP & HSA' },
         full:     { setupFee: 500,  renewalFee: 500,       description: 'POP plan doc + annual NDT for POP, FSA, LFSA, DCAP & HSA' }
       },
@@ -284,7 +391,7 @@ ABYQuote.pricing = {
           description: 'Full administration including documents, SPD, and ongoing administration',
           requiresCount: true
         },
-        docsOnly: { setupFee: 325, renewalFee: 325, description: 'Plan documents only — no monthly administration', requiresCount: false }
+        docsOnly: { setupFee: 325, renewalFee: 325, description: 'Plan documents only: no monthly administration', requiresCount: false }
       },
       additionalFees: [
         { label: 'Standard file feed integration', amount: 0, description: '' },
@@ -310,8 +417,8 @@ ABYQuote.pricing = {
         { label: 'COBRA takeover', amount: 5, unit: 'per current participant (one-time)', description: '' },
         { label: 'Standard file feed integration', amount: 0, description: '' },
         { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: '' },
-        { label: 'Open enrollment — generic renewal notice', amount: 0, description: '' },
-        { label: 'Open enrollment — full COBRA renewal packet mailed', amount: 15, unit: 'per packet', description: '' }
+        { label: 'Open enrollment: generic renewal notice', amount: 0, description: '' },
+        { label: 'Open enrollment: full COBRA renewal packet mailed', amount: 15, unit: 'per packet', description: '' }
       ],
       notes: [
         'Includes Texas State Continuation following COBRA for fully-insured groups.',
@@ -331,8 +438,8 @@ ABYQuote.pricing = {
         { label: 'Initial Rights notices at setup or renewal', amount: 1.50, unit: 'per notice', description: '' },
         { label: 'Takeover participants', amount: 5, unit: 'per participant (one-time)', description: '' },
         { label: 'Continuation participants', amount: 0, unit: 'per month', description: '' },
-        { label: 'Open enrollment — generic renewal notice', amount: 0, description: '' },
-        { label: 'Open enrollment — full continuation packet mailed', amount: 15, unit: 'per packet', description: '' }
+        { label: 'Open enrollment: generic renewal notice', amount: 0, description: '' },
+        { label: 'Open enrollment: full continuation packet mailed', amount: 15, unit: 'per packet', description: '' }
       ]
     },
 
@@ -346,7 +453,7 @@ ABYQuote.pricing = {
         whiteGlove: { setupFee: 1025, renewalFee: 700, description: 'Full SPD + Section 125 POP w/Testing + 5500 Filing + Compliance Binder' }
       },
       additionalFees: [
-        { label: 'Annual Notice Packet', amount: 125, unit: 'per year', description: 'Includes GINA, CHIPS, Medicare Creditable Coverage, HIPAA Special Enrollment, and Notice of Exchange.' },
+        { label: 'Annual Notice Packet', amount: 125, unit: 'per year', description: 'Includes GINA, CHIP, Medicare Creditable Coverage, HIPAA Special Enrollment, and Notice of Exchange.' },
         { label: 'FSA/DCAP language addition', amount: 125, unit: 'year 1', description: '' },
         { label: 'FSA/DCAP NDT testing', amount: 175, unit: 'per year per test set', description: '' },
         { label: 'Additional current-year NDT (after one included)', amount: 125, unit: 'per additional test', description: '' },

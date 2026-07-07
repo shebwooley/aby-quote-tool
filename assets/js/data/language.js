@@ -15,7 +15,7 @@ ABYQuote.language = {
     paragraphs: [
       'ABY Benefits LLC is a Dallas–Fort Worth–based third-party administrator (TPA) specializing in flexible benefit plans and employer compliance solutions. Founded in 1986 and headquartered in Plano, Texas, ABY partners with employers nationwide to reduce healthcare costs while delivering strong, competitive benefit programs.',
       'We provide comprehensive administration for Health Reimbursement Arrangements (HRAs), Flexible Spending Accounts (FSAs), Health Savings Accounts (HSAs), Dependent Care Assistance Plans (DCAPs), COBRA, HIPAA, and related compliance services, including ERISA Wrap Documents and ACA Forms 1094/1095-C.',
-      'Today, ABY supports more than 1,500 active employer clients and administers thousands of benefit plans across a wide range of industries. Our experienced team is built to scale—supporting small employers as well as organizations with complex plan designs or compliance requirements. Over the past three years, ABY has maintained steady annual growth while remaining focused on responsive service, accuracy, and long-term client relationships.'
+      'Today, ABY supports more than 1,500 active employer clients and administers thousands of benefit plans across a wide range of industries. Our experienced team is built to scale, supporting small employers as well as organizations with complex plan designs or compliance requirements. Over the past three years, ABY has maintained steady annual growth while remaining focused on responsive service, accuracy, and long-term client relationships.'
     ],
     experienceHighlights: [
       '100+ years of combined industry experience across FSA/POP, HRA, COBRA, HSA, and group health benefits',
@@ -71,7 +71,7 @@ ABYQuote.language = {
       { id: 'fsa',               name: 'Flexible Spending Accounts (FSA / DCAP / LFSA)', description: 'FSAs and Dependent Care Assistance Plans let employees set aside pre-tax income for qualified healthcare and dependent care expenses, with payroll tax savings for employers and increased take-home pay for participants. Includes debit card and mobile app access.' },
       { id: 'hsa',               name: 'Health Savings Account (HSA) Administration',  description: 'HSAs pair with high-deductible health plans to give participants a triple tax advantage on healthcare savings. ABY coordinates account setup, payroll integration, debit cards, and ongoing administration with the HSA custodian.' },
       { id: 'hra',               name: 'Section 105 Health Reimbursement Arrangement (HRA)', description: 'A Section 105 HRA is an employer-funded benefit plan that reimburses employees for qualified medical expenses on a tax-free basis. Highly flexible plan design, with full administrative support and reimbursement processing.' },
-      { id: 'ichra',             name: 'ICHRA / QSEHRA',                               description: 'Individual Coverage HRAs and Qualified Small Employer HRAs allow employers to reimburse employees—on a tax-free basis—for individual health insurance and qualified medical expenses, in lieu of (or alongside) a traditional group health plan.' },
+      { id: 'ichra',             name: 'ICHRA / QSEHRA',                               description: 'Individual Coverage HRAs and Qualified Small Employer HRAs allow employers to reimburse employees (on a tax-free basis) for individual health insurance and qualified medical expenses, in lieu of (or alongside) a traditional group health plan.' },
       { id: 'cobra',             name: 'COBRA Administration',                         description: 'ABY administers the full COBRA lifecycle on the employer behalf, including required notices, election processing, premium collection, carrier coordination, and HIPAA-compliant participant communications.' },
       { id: 'stateContinuation', name: 'Texas State Continuation (Mini-COBRA)',         description: 'Texas State Continuation extends group medical coverage for employees of small fully-insured employers. Always included with COBRA administration at no additional cost; standalone administration is also available.' },
       { id: 'erisa',             name: 'ERISA Wrap Document & Compliance',              description: 'ABY prepares and maintains a customized ERISA Wrap Document and Summary Plan Description that consolidates an employer benefit plans, closing common compliance gaps and helping meet ongoing ERISA disclosure requirements.' },
@@ -82,7 +82,8 @@ ABYQuote.language = {
       { id: 'section132',   name: 'Section 132 Commuter Benefits',            description: 'Section 132 commuter benefit plans allow employees to use pre-tax dollars to pay for eligible parking and transit expenses, generating payroll tax savings for the employer.' },
       { id: 'section127',   name: 'Section 127 Educational Assistance / SLRP', description: 'Section 127 plans allow employers to provide up to $5,250 per employee per year in tax-free tuition reimbursement or qualifying student loan repayment.' },
       { id: 'lifestyle',    name: 'Lifestyle Benefit Plans',                  description: 'Lifestyle Benefit Plans give employers a flexible way to fund employee wellness, fitness, and lifestyle expenses through a structured, employer-managed reimbursement program.' },
-      { id: 'directBilling', name: 'Direct Billing',                          description: 'ABY Direct Billing service handles premium collection, remittance, and tracking for retiree, leave-of-absence, or other non-COBRA continued-coverage scenarios where the employer needs to invoice participants directly.' }
+      { id: 'directBilling', name: 'Direct Billing',                          description: 'ABY Direct Billing service handles premium collection, remittance, and tracking for retiree, leave-of-absence, or other non-COBRA continued-coverage scenarios where the employer needs to invoice participants directly.' },
+      { id: 'mpra',          name: 'Medicare Premium Reimbursement (Medicare HRA)', description: 'For small employers under 20 employees, ABY reimburses eligible employees on a tax-free basis for Medicare Part B, C, D, and supplemental premiums through an employer-funded Medicare HRA.' }
     ],
     maxToShow: 6
   },
@@ -97,18 +98,18 @@ ABYQuote.language = {
       heading: 'Section 125 Premium Only Plan (POP) / Cafeteria Plan Overview',
       paragraphs: [
         'A Section 125 Premium Only Plan (POP), also known as a Cafeteria Plan, allows eligible employees to pay for certain employer-sponsored benefits on a pre-tax basis. This structure reduces employees taxable income while generating payroll tax savings for the employer.',
-        'Under a properly administered POP, employees may pay for qualified benefits—such as group health insurance premiums and dependent care—using pre-tax dollars. As a result, employees increase take-home pay, and employers reduce payroll taxes, including FICA, on those pre-tax contributions.',
+        'Under a properly administered POP, employees may pay for qualified benefits (such as group health insurance premiums and dependent care) using pre-tax dollars. As a result, employees increase take-home pay, and employers reduce payroll taxes, including FICA, on those pre-tax contributions.',
         'Section 125 plans are subject to annual nondiscrimination testing, which is required by the Internal Revenue Code to ensure the plan does not disproportionately favor Highly Compensated Employees (HCEs) or Key Employees. This testing is similar in concept to 401(k) nondiscrimination testing and evaluates both eligibility and benefit utilization across employee groups.'
       ],
       bulletHeading: 'Required Section 125 nondiscrimination testing includes:',
       bullets: [
-        'Eligibility Test — Confirms that a sufficient number of non-HCEs are eligible to participate',
-        'Contributions and Benefits Test — Ensures benefit levels are not skewed in favor of HCEs',
-        'Key Employee Concentration Test — Limits pre-tax benefits for key employees to no more than 25% of total plan benefits'
+        'Eligibility Test: Confirms that a sufficient number of non-HCEs are eligible to participate',
+        'Contributions and Benefits Test: Ensures benefit levels are not skewed in favor of HCEs',
+        'Key Employee Concentration Test: Limits pre-tax benefits for key employees to no more than 25% of total plan benefits'
       ],
       closing: [
         'If a Section 125 plan fails nondiscrimination testing, affected benefits may become taxable to HCEs or key employees, and the employer may be exposed to additional IRS scrutiny or penalties. For this reason, ongoing plan administration and annual testing are critical components of maintaining a compliant POP.',
-        'ABY administers Section 125 Premium Only Plans by preparing required plan documents, performing annual nondiscrimination testing based on employer-provided data, and providing corrective action guidance when testing results indicate potential issues—helping employers maintain compliance while preserving the intended tax advantages of the plan.',
+        'ABY administers Section 125 Premium Only Plans by preparing required plan documents, performing annual nondiscrimination testing based on employer-provided data, and providing corrective action guidance when testing results indicate potential issues, helping employers maintain compliance while preserving the intended tax advantages of the plan.',
         'For employers who purchase Flexible Spending Account (FSA) administration or certain ERISA compliance services, the required POP documentation and nondiscrimination testing are included as part of those services. In these cases, a separate standalone POP purchase is not required.'
       ]
     },
@@ -147,7 +148,7 @@ ABYQuote.language = {
     hra: {
       heading: 'Section 105 Health Reimbursement Arrangement (HRA) Overview',
       paragraphs: [
-        'A Section 105 Health Reimbursement Arrangement (HRA) is an employer-funded benefit plan designed to reimburse employees for qualified medical expenses and, in some plan designs, individual insurance premiums. HRAs are funded entirely by the employer—employees do not contribute—and reimbursements are generally tax-free to the employee and tax-deductible to the employer.',
+        'A Section 105 Health Reimbursement Arrangement (HRA) is an employer-funded benefit plan designed to reimburse employees for qualified medical expenses and, in some plan designs, individual insurance premiums. HRAs are funded entirely by the employer (employees do not contribute) and reimbursements are generally tax-free to the employee and tax-deductible to the employer.',
         'HRAs are highly customizable. Employers may design the plan to cover all or a portion of group health plan deductibles and copays, to reimburse dental and vision expenses, or to reimburse a specifically defined list of eligible expenses, depending on the employer benefit goals.',
         'HRAs may often be paired with other tax-advantaged accounts, including Health Savings Accounts (HSAs), depending on how the HRA is structured and which expenses it reimburses.',
         'HRAs are subject to specific IRS rules, including nondiscrimination requirements and proper documentation of reimbursements. ABY assists employers with plan design, plan documents, ongoing administration, and reimbursement processing to help maintain the plan tax-advantaged status.'
@@ -157,7 +158,7 @@ ABYQuote.language = {
     ichra: {
       heading: 'Individual Coverage HRA (ICHRA) / Qualified Small Employer HRA (QSEHRA) Overview',
       paragraphs: [
-        'Individual Coverage HRAs (ICHRAs) and Qualified Small Employer HRAs (QSEHRAs) allow employers to reimburse employees—on a tax-free basis—for individual health insurance premiums and qualified medical expenses, in lieu of (or alongside) a traditional group health plan.',
+        'Individual Coverage HRAs (ICHRAs) and Qualified Small Employer HRAs (QSEHRAs) allow employers to reimburse employees (on a tax-free basis) for individual health insurance premiums and qualified medical expenses, in lieu of (or alongside) a traditional group health plan.',
         'An ICHRA is available to employers of any size and is generally used by employers who want to offer a defined-contribution benefit instead of, or in addition to, a group health plan. Employees must be enrolled in an ACA-compliant individual health plan to receive ICHRA reimbursements. Employers may segment employees into permitted classes (such as full-time vs. part-time, or salaried vs. hourly) and offer different reimbursement amounts to each class, subject to applicable rules.',
         'A QSEHRA is available only to small employers with fewer than 50 full-time and full-time-equivalent employees that do not offer a group health plan. Employees must maintain minimum essential coverage (MEC) to receive tax-free reimbursements. The arrangement must generally be offered to all eligible employees on the same terms, with limited variations permitted based on family status and age.',
         'Both arrangements are funded entirely by the employer; employees do not contribute. ABY assists employers with plan design, required plan documents, employee notices, and ongoing reimbursement administration in accordance with applicable IRS and ACA rules.'
@@ -190,7 +191,7 @@ ABYQuote.language = {
     erisa: {
       heading: 'ERISA Wrap Document & Compliance Administration Overview',
       paragraphs: [
-        'ERISA compliance is built on one core principle: timely and accurate communication with plan participants. The Employee Retirement Income Security Act (ERISA) applies to all employers—regardless of size—who offer employer-sponsored welfare benefit plans, and it establishes strict requirements around plan documentation, disclosure, and participant communication.',
+        'ERISA compliance is built on one core principle: timely and accurate communication with plan participants. The Employee Retirement Income Security Act (ERISA) applies to all employers (regardless of size) who offer employer-sponsored welfare benefit plans, and it establishes strict requirements around plan documentation, disclosure, and participant communication.',
         'ABY provides ERISA compliance administration by preparing and maintaining a customized ERISA Wrap Document that consolidates an employer benefit plans into a single, compliant framework. This ensures required plan terms, eligibility provisions, and administrative details are properly documented and communicated to employees in accordance with ERISA standards.',
         'As part of this service, ABY produces and maintains the required Summary Plan Description (SPD) and supporting compliance materials, helping employers meet ongoing disclosure obligations and respond to audit or participant inquiries. The wrap document is designed to wrap around carrier-provided certificates and summaries, closing common compliance gaps that occur when benefits are offered through multiple vendors.',
         'ABY ERISA Wrap Document services also include a Section 125 Premium Only Plan (POP), allowing eligible employee benefit contributions to be made on a pre-tax basis. This structure helps employers take advantage of current tax laws, generate FICA tax savings, and offer enhanced benefit options, while allowing employees to pay for qualified benefits and dependent care expenses with pre-tax dollars.',
@@ -201,9 +202,54 @@ ABYQuote.language = {
     aca: {
       heading: 'ACA Forms 1094/1095 Reporting Overview',
       paragraphs: [
-        'The Affordable Care Act (ACA) requires applicable employers to file annual information returns with the IRS and furnish related statements to employees. Forms 1094-B and 1095-B apply to insurers and certain small or self-funded employers, while Forms 1094-C and 1095-C apply to Applicable Large Employers (ALEs)—generally those with 50 or more full-time and full-time-equivalent employees.',
+        'The Affordable Care Act (ACA) requires applicable employers to file annual information returns with the IRS and furnish related statements to employees. Forms 1094-B and 1095-B apply to insurers and certain small or self-funded employers, while Forms 1094-C and 1095-C apply to Applicable Large Employers (ALEs), generally those with 50 or more full-time and full-time-equivalent employees.',
         'ABY prepares and files ACA Forms 1094 and 1095 on the employer\'s behalf, helping employers meet annual reporting obligations and avoid IRS penalties for incorrect or missed filings. Both self-service and full-service options are available for ALE filings, allowing employers to choose the level of preparation and review support that fits their needs. Pricing is tiered by total form count.',
         'Small group, self-funded, level-funded, and balance-funded employers filing Forms 1094-B / 1095-B are quoted with a flat annual base fee plus a per-form fee that scales with the number of covered individuals reported.'
+      ]
+    },
+
+    mpra: {
+      heading: 'Medicare Premium Reimbursement Arrangement (Medicare HRA) Overview',
+      paragraphs: [
+        'A Medicare Health Reimbursement Arrangement (HRA) is an employer-funded benefit that reimburses eligible employees, on a tax-free basis, for Medicare premiums. The account is funded entirely by the employer, and employees do not contribute or pay tax on the amounts reimbursed.',
+        'This arrangement is generally available to employers with fewer than 20 employees, where Medicare is primary to the group health plan. The employer must offer an ACA-compliant group medical plan, the employee must voluntarily waive that plan, and the employee must be enrolled in Medicare. Employers choose which premiums to reimburse, including Medicare Part B, Part C, Part D, and supplemental coverage.',
+        'ABY administers the Medicare HRA by preparing the plan document and Summary Plan Description, verifying eligible premiums, and issuing monthly reimbursements to participating employees, with mobile app and online account access included.'
+      ]
+    },
+
+    section127: {
+      heading: 'Section 127 Educational Assistance (EDU) and Student Loan Reimbursement (SLRP) Overview',
+      paragraphs: [
+        'A Section 127 Educational Assistance Program allows an employer to provide up to $5,250 per employee per year in tax-free educational assistance. Under current rules, qualifying student loan repayments (SLRP) are also eligible, giving employers a flexible way to help employees with tuition or existing student debt.',
+        'Amounts provided under a qualified Section 127 plan are excluded from the employee taxable income and are generally deductible to the employer. The plan must be documented, offered on a nondiscriminatory basis, and cannot favor highly compensated employees or their dependents.',
+        'ABY administers Section 127 EDU and SLRP plans by preparing the required plan document, performing annual nondiscrimination testing, providing legal updates and required notices, and handling monthly administration and reimbursements.'
+      ]
+    },
+
+    section132: {
+      heading: 'Section 132 Qualified Commuter Benefits (QTB) Overview',
+      paragraphs: [
+        'A Section 132 Qualified Transportation (Commuter) Benefit lets employees set aside pre-tax dollars to pay for eligible parking and transit expenses, up to the monthly limits set by the IRS. Both the employee and the employer save on payroll taxes on the amounts contributed.',
+        'The benefit is employer-sponsored and funded through pre-tax employee elections. Parking and transit are tracked separately, and participants can adjust their elections as commuting needs change.',
+        'ABY administers Section 132 plans by preparing the plan document, performing annual nondiscrimination testing, providing legal updates, and handling monthly administration, debit cards, and claims.'
+      ]
+    },
+
+    lifestyle: {
+      heading: 'Lifestyle Benefit Plan (LSB) Overview',
+      paragraphs: [
+        'A Lifestyle Benefit Plan gives employers a flexible, employer-funded way to support employee wellness, fitness, and lifestyle expenses through a structured reimbursement or spending account. The employer defines which expenses are eligible and the amount available to each participant.',
+        'Because the benefit is employer-designed, it can be tailored to the goals of the organization, from wellness and fitness to broader lifestyle categories, while ABY handles the administration and substantiation.',
+        'ABY administers Lifestyle Benefit Plans by preparing the plan document, providing required notices, and handling monthly administration, debit cards, and reimbursements.'
+      ]
+    },
+
+    directBilling: {
+      heading: 'Direct Billing Administration Overview',
+      paragraphs: [
+        'ABY Direct Billing handles premium collection, remittance, and tracking for individuals who need to continue coverage outside of COBRA, such as retirees, employees on a leave of absence, or other continued-coverage situations where the employer needs to invoice participants directly.',
+        'ABY invoices each participant, collects the premium, remits it according to the employer instructions, and tracks payment status and grace periods, removing the manual billing burden from the employer.',
+        'Notices and billing statements are provided to participants, and standard file feed integration is included so eligibility stays current.'
       ]
     }
   }
