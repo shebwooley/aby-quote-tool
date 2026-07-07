@@ -1,473 +1,196 @@
-/* ABY Quote Tool — Quote document styling
-   Used both inside the broker-facing app and (later) for standalone HTML downloads.
-*/
+/* ABY Quote Tool - quote document styles (2026 redesign)
+   Everything is scoped under .aby-proposal so these rules style ONLY the
+   generated quote, never the app form shell. The same file is inlined into
+   the downloadable client HTML, so the broker preview and the client PDF
+   are guaranteed to look identical. */
 
-.quote {
-  background: #fff;
-  border: 1px solid var(--aby-border, #d1d5db);
-  border-radius: var(--aby-radius, 10px);
-  padding: 56px 56px 48px;
-  font-family: 'Georgia', 'Cambria', 'Times New Roman', serif;
-  color: #1f2937;
+.aby-proposal {
+  --aby-blue: #155c8f;
+  --aby-blue-dark: #0d3f64;
+  --aby-green: #6aa84f;
+  --soft-blue: #eef7fc;
+  --soft-green: #f2f8ef;
+  --soft-gold: #fff9df;
+  --ink: #1f2933;
+  --muted: #5f6b76;
+  --line: #dbe5ec;
+  --paper: #ffffff;
+  --shadow: 0 18px 45px rgba(19, 58, 83, 0.12);
+  font-family: Arial, Helvetica, sans-serif;
   line-height: 1.55;
-  font-size: 14.5px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  color: var(--ink);
 }
+.aby-proposal * { box-sizing: border-box; }
+.aby-proposal .proposal-card { background: var(--paper); border-radius: 24px; box-shadow: var(--shadow); overflow: hidden; border: 1px solid rgba(21,92,143,.12); }
 
-.quote h1, .quote h2, .quote h3, .quote h4 {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  color: #1f4e8b;
-  letter-spacing: -0.01em;
-}
+.aby-proposal .topbar { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 24px 30px; border-bottom: 1px solid var(--line); background: #fff; }
+.aby-proposal .logo-wrap img { width: 185px; max-width: 100%; height: auto; display: block; }
+.aby-proposal .prepared-for { text-align: right; font-size: 14px; color: var(--muted); }
+.aby-proposal .prepared-for strong { display: block; color: var(--aby-blue-dark); font-size: 16px; margin-bottom: 6px; }
+.aby-proposal .broker-logo { max-width: 150px; max-height: 60px; margin-top: 8px; display: inline-block; }
 
-.quote h1 { font-size: 26px; margin: 0 0 8px; font-weight: 600; }
-.quote h2 { font-size: 18px; margin: 28px 0 10px; font-weight: 600; }
-.quote h3 { font-size: 15px; margin: 22px 0 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: #143b6b; }
-.quote h4 { font-size: 14px; margin: 16px 0 6px; font-weight: 600; }
-.quote p { margin: 0 0 10px; }
-.quote ul { margin: 0 0 10px 0; padding-left: 22px; }
-.quote ul li { margin-bottom: 4px; }
+.aby-proposal .hero { position: relative; padding: 44px 34px 38px; background: radial-gradient(circle at 15% 10%, rgba(106,168,79,.20), transparent 28%), linear-gradient(135deg, var(--aby-blue-dark) 0%, var(--aby-blue) 68%, #2c7baa 100%); color: #ffffff; }
+.aby-proposal .eyebrow { display: inline-block; padding: 6px 12px; border-radius: 999px; background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.28); font-size: 13px; letter-spacing: .04em; text-transform: uppercase; margin-bottom: 14px; }
+.aby-proposal .hero h1 { margin: 0 0 12px; font-size: clamp(28px, 5vw, 46px); line-height: 1.05; letter-spacing: -.035em; color: #fff; }
+.aby-proposal .hero p { max-width: 850px; margin: 0; font-size: 17px; color: rgba(255,255,255,.9); }
+.aby-proposal .hero-meta { display: flex; flex-wrap: wrap; gap: 22px; margin-top: 20px; }
+.aby-proposal .hero-meta div span { display: block; text-transform: uppercase; letter-spacing: .08em; font-size: 11px; color: rgba(255,255,255,.6); }
+.aby-proposal .hero-meta div strong { font-size: 15px; color: #fff; font-weight: 700; }
 
-/* ----- Quote header ----- */
+.aby-proposal .hero-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 24px 30px 8px; background: #ffffff; }
+.aby-proposal .hero-grid.cols-1 { grid-template-columns: 1fr; }
+.aby-proposal .hero-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.aby-proposal .hero-tile { background: linear-gradient(180deg, #ffffff, #f8fbfd); border: 1px solid var(--line); border-radius: 18px; padding: 18px; }
+.aby-proposal .hero-tile h3 { margin: 0 0 8px; color: var(--aby-blue-dark); font-size: 17px; }
+.aby-proposal .hero-tile p { margin: 0; font-size: 14.5px; color: var(--muted); }
 
-.quote-header {
-  border-bottom: 1px solid #d1d5db;
-  padding-bottom: 24px;
-  margin-bottom: 24px;
-}
+.aby-proposal section { padding: 16px 34px; }
+.aby-proposal .section-card { border: 1px solid var(--line); border-radius: 20px; background: #fff; overflow: hidden; margin-bottom: 20px; }
+.aby-proposal .section-card:last-child { margin-bottom: 0; }
+.aby-proposal .section-head { padding: 24px 26px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, #fff, #fbfdfe); }
+.aby-proposal .section-head.green { background: linear-gradient(180deg, #fff, var(--soft-green)); }
+.aby-proposal h2 { margin: 0 0 7px; color: var(--aby-blue-dark); font-size: 28px; line-height: 1.15; letter-spacing: -.02em; }
+.aby-proposal .section-head p, .aby-proposal .muted { margin: 0; color: var(--muted); }
+.aby-proposal .section-body { padding: 24px 26px; }
+.aby-proposal .section-body > p { margin: 0 0 12px; }
+.aby-proposal .section-body > p:last-child { margin-bottom: 0; }
+.aby-proposal .section-body h3 { color: var(--aby-blue-dark); }
 
-.quote-header .logo-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-  min-height: 48px;
-}
+.aby-proposal .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.aby-proposal .callout { border-left: 6px solid var(--aby-blue); background: #fbfdff; padding: 16px 18px; border-radius: 16px; }
+.aby-proposal .callout.green { border-left-color: var(--aby-green); background: var(--soft-green); }
+.aby-proposal .callout.gold { border-left-color: #d9bd3f; background: var(--soft-gold); }
+.aby-proposal .callout h3 { margin: 0 0 8px; color: var(--aby-blue-dark); font-size: 20px; }
+.aby-proposal .callout p { margin: 0; }
+.aby-proposal ul { margin: 10px 0 0 20px; padding: 0; }
+.aby-proposal li { margin: 6px 0; }
 
-.aby-logo img {
-  max-height: 72px;
-  max-width: 240px;
-  object-fit: contain;
-  display: block;
-}
+.aby-proposal .pricing-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 18px; }
+.aby-proposal .pricing-grid.cols-1 { grid-template-columns: 1fr; }
+.aby-proposal .pricing-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.aby-proposal .price-box { border: 1px solid var(--line); border-radius: 18px; padding: 18px; background: #fff; }
+.aby-proposal .price-box.featured { border: 3px solid var(--aby-green); background: linear-gradient(180deg, #fff, #f7fbf4); position: relative; }
+.aby-proposal .badge { display: inline-block; background: var(--aby-green); color: #fff; border-radius: 999px; padding: 5px 10px; font-weight: 800; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 8px; }
+.aby-proposal .price-label { color: var(--muted); font-weight: 800; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; min-height: 18px; }
+.aby-proposal .price { color: var(--aby-blue-dark); font-size: 32px; font-weight: 900; letter-spacing: -.04em; line-height: 1; margin: 8px 0; }
+.aby-proposal .price small { font-size: 15px; font-weight: 700; color: var(--muted); letter-spacing: 0; }
 
-.broker-logo {
-  max-height: 56px;
-  max-width: 200px;
-  object-fit: contain;
-}
+.aby-proposal .options-table { width: 100%; border-collapse: collapse; margin-top: 15px; overflow: hidden; border-radius: 14px; border: 1px solid var(--line); }
+.aby-proposal .options-table th, .aby-proposal .options-table td { padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.aby-proposal .options-table th { background: var(--soft-blue); color: var(--aby-blue-dark); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; }
+.aby-proposal .options-table tr:last-child td { border-bottom: 0; }
+.aby-proposal .options-table th:nth-child(3), .aby-proposal .options-table th:nth-child(4), .aby-proposal .options-table td:nth-child(3), .aby-proposal .options-table td:nth-child(4) { text-align: center; }
+.aby-proposal .options-table .recommended td { background: #f7fbf4; font-weight: 700; }
+.aby-proposal .options-table .rec-tag { display: inline-block; background: var(--aby-green); color: #fff; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; margin-left: 6px; }
 
-.quote-title {
-  text-align: center;
-  margin: 8px 0 14px;
-  font-size: 28px;
-  color: #1f4e8b;
-}
+.aby-proposal .fees-wrap { border: 1px solid var(--line); border-radius: 14px; margin-top: 16px; overflow: hidden; background: #fff; }
+.aby-proposal .fees-title { padding: 13px 16px; background: var(--soft-blue); color: var(--aby-blue-dark); font-weight: 800; font-size: 14px; letter-spacing: .02em; }
+.aby-proposal .fee-hint { font-size: 12px; color: var(--muted); font-weight: 500; padding: 8px 16px 0; font-style: italic; }
+.aby-proposal .fee-item { border-top: 1px solid var(--line); }
+.aby-proposal .fee-item > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 11px 16px; font-size: 14px; }
+.aby-proposal .fee-item > summary::-webkit-details-marker { display: none; }
+.aby-proposal .fee-chevron { flex: 0 0 auto; width: 16px; height: 16px; color: var(--aby-blue); transition: transform .18s ease; }
+.aby-proposal .fee-item[open] > summary .fee-chevron { transform: rotate(90deg); }
+.aby-proposal .fee-name { flex: 1 1 auto; }
+.aby-proposal .fee-amount { flex: 0 0 auto; white-space: nowrap; font-weight: 700; color: var(--aby-blue-dark); }
+.aby-proposal .fee-amount .fee-unit { color: var(--muted); font-weight: 500; font-size: 12px; }
+.aby-proposal .fee-explain { padding: 0 16px 13px 44px; color: var(--muted); font-size: 13px; }
 
-.quote-client {
-  text-align: center;
-  margin: 6px 0 22px;
-}
+.aby-proposal .learn-more { border: 1px solid var(--line); border-left: 4px solid var(--aby-blue); border-radius: 12px; margin-top: 16px; background: #fbfdff; overflow: hidden; }
+.aby-proposal .learn-more > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 13px 16px; font-weight: 800; font-size: 14px; color: var(--aby-blue-dark); }
+.aby-proposal .learn-more > summary::-webkit-details-marker { display: none; }
+.aby-proposal .lm-chevron { width: 16px; height: 16px; color: var(--aby-blue); transition: transform .18s ease; flex: 0 0 auto; }
+.aby-proposal .learn-more[open] > summary .lm-chevron { transform: rotate(90deg); }
+.aby-proposal .lm-body { padding: 2px 18px 16px; }
+.aby-proposal .lm-body p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink); }
+.aby-proposal .lm-body p:last-child { margin-bottom: 0; }
+.aby-proposal .lm-body ul { margin: 4px 0 10px 20px; }
 
-.quote-client .client-label {
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 11px;
-  color: #6b7280;
-  font-weight: 600;
-  margin-bottom: 4px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
+.aby-proposal .service-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.aby-proposal .service-item { border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px; background: #fff; font-size: 14.5px; }
+.aby-proposal .service-item.feature { font-size: 18px; font-weight: 900; color: var(--aby-blue-dark); border-color: rgba(21,92,143,.35); background: var(--soft-blue); grid-column: 1 / -1; }
+.aby-proposal .guarantee { margin-top: 18px; border-radius: 18px; padding: 16px 18px; background: var(--soft-green); border: 2px solid rgba(106,168,79,.35); color: var(--aby-blue-dark); font-size: 20px; font-weight: 900; text-align: center; }
 
-.quote-client .client-name {
-  font-size: 24px;
-  font-weight: 700;
-  color: #143b6b;
-  letter-spacing: -0.01em;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
+.aby-proposal .feed-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.aby-proposal .feed-chip { border: 1px solid var(--line); background: #fbfdff; border-radius: 999px; padding: 6px 13px; font-size: 13px; font-weight: 700; color: var(--aby-blue-dark); }
 
-.quote-meta {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 4px 24px;
-  margin-bottom: 18px;
-}
+.aby-proposal .cross-sell-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 18px; }
+.aby-proposal .cross-sell-card { border: 1px solid var(--line); border-radius: 16px; padding: 18px; background: linear-gradient(180deg, #ffffff, #f8fbfd); }
+.aby-proposal .cross-sell-card h3 { margin: 0 0 8px; color: var(--aby-blue-dark); font-size: 16px; }
+.aby-proposal .cross-sell-card p { margin: 0; font-size: 13.5px; color: var(--muted); }
 
-.meta-row { font-size: 14px; text-align: center; }
-.meta-label {
-  color: #6b7280;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  display: block;
-}
-.meta-value {
-  font-weight: 500;
-  color: #1f2937;
-}
+.aby-proposal .contact-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; }
+.aby-proposal .contact-card { border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; background: #fff; font-size: 14px; }
+.aby-proposal .contact-card strong { color: var(--aby-blue-dark); }
 
-.party-blocks {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
-  margin-top: 18px;
-}
+.aby-proposal .disclaimer-text { color: var(--ink); }
+.aby-proposal .quote-warnings { background: #fff8e8; border: 1px solid #f0d79a; border-radius: 14px; padding: 14px 18px; margin-bottom: 18px; color: #574210; }
+.aby-proposal .quote-warnings h4 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; }
 
-.party-block {
-  background: #f8fafd;
-  border: 1px solid #e5eaf2;
-  border-radius: 8px;
-  padding: 14px 16px;
-  font-size: 13.5px;
-  text-align: center;
-}
-
-.party-label {
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-size: 11px;
-  color: #6b7280;
-  margin-bottom: 4px;
-  font-weight: 600;
-}
-
-.party-name {
-  font-weight: 600;
-  color: #1f4e8b;
-  font-size: 15px;
-  margin-bottom: 2px;
-}
-
-/* ----- Proposal contents (TOC) ----- */
-
-.proposal-contents {
-  background: #f8fafd;
-  border: 1px solid #e5eaf2;
-  border-radius: 8px;
-  padding: 14px 18px;
-  margin-bottom: 24px;
-}
-.proposal-contents h2 { margin-top: 0; }
-.proposal-contents ul { margin: 6px 0 0; }
-
-/* ----- About ABY (shaded box, rounded — per spec) ----- */
-
-.boxed {
-  background: #f1f4fa;
-  border-radius: 12px;
-  padding: 22px 26px;
-  margin: 24px 0;
-}
-
-.about-aby h3 {
-  margin-top: 16px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-size: 13px;
-  color: #143b6b;
-}
-
-/* ----- Standard services ----- */
-
-.standard-services { margin: 24px 0; }
-
-/* ----- Per-product blocks ----- */
-
-.product-block {
-  margin-top: 28px;
-  padding-top: 24px;
-  border-top: 1px solid #e5eaf2;
-}
-
-.product-block:first-of-type { border-top: none; }
-
-.product-overview h2 { color: #143b6b; }
-
-/* ----- Pricing tables ----- */
-
-.pricing-table-wrap { margin-top: 16px; }
-
-.pricing-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 8px;
-  font-size: 14px;
-}
-
-.pricing-table td {
-  padding: 8px 10px;
-  border-top: 1px solid #e5eaf2;
-  vertical-align: top;
-}
-
-.pricing-table tr:first-child td { border-top: none; }
-
-.pricing-table .row-label {
-  width: 50%;
-  color: #1f2937;
-  font-weight: 500;
-}
-
-.pricing-table .row-value {
-  font-weight: 600;
-  color: #143b6b;
-}
-
-.pricing-table .row-cadence {
-  color: #6b7280;
-  font-size: 12.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  text-align: right;
-  width: 100px;
-  white-space: nowrap;
-}
-
-.pricing-table .tier-note {
-  font-size: 12.5px;
-  color: #6b7280;
-  font-weight: 400;
-  font-style: italic;
-}
-
-.pricing-table .breakdown-row td {
-  border-top: none;
-  padding-top: 0;
-  color: #6b7280;
-  font-size: 12.5px;
-}
-
-.pricing-table .count-summary-row td {
-  border-top: none;
-  padding-top: 2px;
-  padding-bottom: 8px;
-  color: #143b6b;
-  font-size: 13px;
-}
-
-.pricing-table .breakdown-row .count-cell {
-  color: #143b6b;
-  font-size: 13px;
-  font-weight: 400;
-}
-
-.product-notes {
-  margin-top: 10px;
-  padding: 10px 14px;
-  background: #f8fafd;
-  border-left: 3px solid #2c7be5;
-  border-radius: 0 6px 6px 0;
-  font-size: 13px;
-  color: #1f2937;
-}
-
-.product-notes p { margin: 0 0 4px; }
-.product-notes p:last-child { margin-bottom: 0; }
-
-/* ----- Additional services fee schedule ----- */
-
-.additional-fees {
-  margin-top: 16px;
-  border: 1px solid #e5eaf2;
-  border-radius: 8px;
-  padding: 0 14px;
-}
-
-.additional-fees summary {
-  cursor: pointer;
-  font-weight: 600;
-  color: #143b6b;
-  padding: 12px 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.additional-fees-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 0 0 12px;
-  font-size: 13.5px;
-}
-
-.additional-fees-table td {
-  padding: 6px 0;
-  border-top: 1px solid #eef1f7;
-  vertical-align: top;
-}
-
-.additional-fees-table tr:first-child td { border-top: none; }
-
-.additional-fees-table .fee-amount {
-  text-align: right;
-  font-weight: 600;
-  color: #143b6b;
-  white-space: nowrap;
-  width: 200px;
-}
-
-.additional-fees-table .fee-unit {
-  font-weight: 400;
-  color: #6b7280;
-  font-style: italic;
-  font-size: 12.5px;
-  margin-left: 4px;
-}
-
-/* ----- Disclaimer ----- */
-
-.disclaimer {
-  margin-top: 32px;
-  padding-top: 18px;
-  border-top: 1px solid #d1d5db;
-  font-size: 13px;
-  color: #6b7280;
-}
-
-.disclaimer h2 {
-  font-size: 14px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin-bottom: 8px;
-  color: #143b6b;
-}
-
-.disclaimer .fee-guarantee {
-  margin-top: 12px;
-  font-size: 14px;
-  color: #1f4e8b;
-}
-
-/* ----- Additional fees: descriptions ----- */
-
-.additional-fees-table .fee-description-row td {
-  padding: 0 0 8px 0;
-  border-top: none;
-  font-size: 12.5px;
-  color: #6b7280;
-  font-style: italic;
-  line-height: 1.4;
-}
-
-/* ----- Cross-sell page: "Additional Services ABY Offers" ----- */
-
-.additional-services {
-  margin-top: 24px;
-  padding-top: 0;
-}
-
-.additional-services h2 {
-  text-align: left;
-  font-size: 22px;
-  margin-top: 0;
-  margin-bottom: 6px;
+@media (max-width: 800px) {
+  .aby-proposal .topbar, .aby-proposal .hero-grid, .aby-proposal .two-col,
+  .aby-proposal .pricing-grid, .aby-proposal .cross-sell-grid, .aby-proposal .contact-strip,
+  .aby-proposal .service-list { grid-template-columns: 1fr; }
+  .aby-proposal .prepared-for { text-align: left; }
+  .aby-proposal .topbar { align-items: flex-start; flex-direction: column; }
+  .aby-proposal section, .aby-proposal .hero { padding-left: 22px; padding-right: 22px; }
+  .aby-proposal { font-size: 16.5px; }
+  .aby-proposal .section-body > p, .aby-proposal .section-head p, .aby-proposal .muted,
+  .aby-proposal .disclaimer-text, .aby-proposal .callout p, .aby-proposal .lm-body p,
+  .aby-proposal .price-box p, .aby-proposal .cross-sell-card p, .aby-proposal .contact-card,
+  .aby-proposal .service-item, .aby-proposal .hero-tile p, .aby-proposal .hero p { font-size: 16px; }
+  .aby-proposal .fee-item > summary, .aby-proposal .fee-explain,
+  .aby-proposal .options-table th, .aby-proposal .options-table td,
+  .aby-proposal .fees-title { font-size: 15px; }
+  .aby-proposal .ack-field input, .aby-proposal .opt-desc { font-size: 15px; }
 }
 
 @media print {
-  .additional-services {
-    margin-top: 0;
-  }
+  .aby-proposal .no-print { display: none !important; }
+  .aby-proposal .proposal-card { box-shadow: none; border: 0; border-radius: 0; }
+  .aby-proposal section { padding: 12px 0; }
+  .aby-proposal .section-card { break-inside: auto; }
+  .aby-proposal .section-head { break-after: avoid; }
+  .aby-proposal h1, .aby-proposal h2, .aby-proposal h3 { break-after: avoid; }
+  .aby-proposal .price-box, .aby-proposal .callout, .aby-proposal .hero-tile,
+  .aby-proposal .contact-card, .aby-proposal .cross-sell-card, .aby-proposal .service-item,
+  .aby-proposal .fee-item, .aby-proposal .guarantee, .aby-proposal .options-table tr,
+  .aby-proposal .pricing-grid, .aby-proposal .two-col, .aby-proposal .ack-group { break-inside: avoid; }
+  .aby-proposal a { color: inherit; text-decoration: none; }
 }
 
-.cross-sell-intro {
-  text-align: left;
-  color: #4b5563;
-  margin: 0 0 22px;
-}
-
-.cross-sell-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 16px;
-}
-
-.cross-sell-card {
-  background: #f8fafd;
-  border: 1px solid #e5eaf2;
-  border-radius: 10px;
-  padding: 16px 18px;
-}
-
-.cross-sell-card h3 {
-  margin: 0 0 6px;
-  font-size: 14px;
-  color: #143b6b;
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 600;
-}
-
-.cross-sell-card p {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
-  color: #1f2937;
-}
-
-@media (max-width: 640px) {
-  .cross-sell-grid { grid-template-columns: 1fr; }
-}
-
-.page-break-before { page-break-before: always; }
-
-/* ----- Internal warning banner (broker-only) ----- */
-
-.quote-warnings {
-  background: #fff4e5;
-  border: 1px solid #f5c889;
-  border-radius: 8px;
-  padding: 12px 16px;
-  margin-bottom: 16px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-size: 13px;
-  color: #7c4a00;
-}
-.quote-warnings h4 {
-  margin: 0 0 6px;
-  font-size: 13px;
-  color: #7c4a00;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.quote-warnings ul { margin: 0; padding-left: 18px; }
-.quote-warnings li { margin-bottom: 3px; }
-
-/* ── File Feed Integration card ─────────────────────────────────────────── */
-.file-feed-card {
-  background: #eef4fb;
-  border: 1.5px solid #b3cde8;
-  border-left: 5px solid #143b6b;
-  border-radius: 8px;
-  padding: 20px 24px;
-  margin: 24px 0;
-}
-.file-feed-card h2 {
-  font-size: 15px;
-  font-weight: 700;
-  color: #143b6b;
-  margin: 0 0 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.file-feed-card p {
-  font-size: 13px;
-  color: #333;
-  margin: 0 0 14px;
-  line-height: 1.6;
-}
-.feed-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.feed-chip {
-  background: #143b6b;
-  color: #fff;
-  font-size: 11.5px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 20px;
-  letter-spacing: 0.02em;
-}
+/* ===== Employer Acceptance & Authorization page (interactive; posts to /api/commitments) ===== */
+.aby-proposal .ack-page { page-break-before: always; break-before: page; padding-top: 30px; }
+.aby-proposal .ack-card { border: 3px solid var(--aby-blue-dark); border-radius: 22px; padding: 30px 32px; background: #fff; }
+.aby-proposal .ack-head { text-align: center; margin-bottom: 24px; }
+.aby-proposal .ack-brand { font-size: 13px; font-weight: 800; color: var(--aby-blue-dark); letter-spacing: .1em; text-transform: uppercase; }
+.aby-proposal .ack-head h2 { margin: 6px 0; font-size: 26px; }
+.aby-proposal .ack-sub { font-size: 13px; color: var(--muted); }
+.aby-proposal .ack-guarantee { margin-top: 12px; display: inline-block; font-size: 13px; background: var(--soft-green); border: 1px solid rgba(106,168,79,.4); border-radius: 999px; padding: 7px 16px; font-weight: 800; color: var(--aby-blue-dark); }
+.aby-proposal .ack-group { margin-bottom: 22px; }
+.aby-proposal .ack-group-label { font-size: 12px; font-weight: 800; color: var(--aby-blue-dark); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 10px; }
+.aby-proposal .opt-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; margin-bottom: 10px; }
+.aby-proposal .opt-row:last-child { margin-bottom: 0; }
+.aby-proposal .opt-row input[type="checkbox"] { width: 20px; height: 20px; margin-top: 1px; accent-color: var(--aby-green); cursor: pointer; flex: 0 0 auto; }
+.aby-proposal .opt-main { flex: 1 1 auto; }
+.aby-proposal .opt-title { font-weight: 800; color: var(--aby-blue-dark); font-size: 15px; }
+.aby-proposal .opt-desc { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.aby-proposal .opt-tier { margin-top: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.aby-proposal .opt-tier label { font-size: 12px; font-weight: 700; color: var(--aby-blue-dark); }
+.aby-proposal .opt-tier select { padding: 8px 10px; border: 1px solid #c4d2dd; border-radius: 8px; font: inherit; font-size: 13px; background: #fff; }
+.aby-proposal .ack-field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+.aby-proposal .ack-field { display: flex; flex-direction: column; }
+.aby-proposal .ack-field.full { grid-column: 1 / -1; }
+.aby-proposal .ack-field label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.aby-proposal .ack-field input { width: 100%; padding: 9px 11px; border: 1px solid #c4d2dd; border-radius: 8px; font: inherit; font-size: 14px; background: #fff; }
+.aby-proposal .ack-field input:focus { outline: 2px solid rgba(21,92,143,.35); border-color: var(--aby-blue); }
+.aby-proposal .ack-sign-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; border-top: 1px solid var(--line); padding-top: 22px; }
+.aby-proposal .sign-preview { min-height: 46px; border-bottom: 1.5px solid #333; padding: 6px 2px; }
+.aby-proposal .sign-preview.print-name { font-size: 17px; color: #222; }
+.aby-proposal .sign-preview.signature { font-size: 28px; color: var(--aby-blue-dark); font-family: "Brush Script MT", "Segoe Script", cursive; }
+.aby-proposal .sign-hint { font-size: 10.5px; color: #9aa7b1; margin-top: 4px; }
+.aby-proposal .ack-submit { text-align: center; margin-top: 26px; }
+.aby-proposal .ack-submit button { border: 0; background: var(--aby-blue); color: #fff; font-weight: 800; border-radius: 999px; padding: 14px 40px; cursor: pointer; font-size: 15px; letter-spacing: .02em; }
+.aby-proposal .ack-submit .submit-note { margin-top: 10px; font-size: 11.5px; color: var(--muted); }
+.aby-proposal .ack-disclaimer { color: var(--muted); font-size: 12px; margin-top: 20px; border-top: 1px solid var(--line); padding-top: 14px; }
+@media print { .aby-proposal .ack-card { padding: 18px 20px; border-width: 2px; border-radius: 14px; } .aby-proposal .ack-head h2 { font-size: 18pt; } .aby-proposal .ack-sign-grid { break-inside: avoid; } }
