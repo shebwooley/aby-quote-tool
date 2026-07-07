@@ -21,8 +21,11 @@ ABYQuote.engine = (function () {
 
   // Pick the right rate set based on commission toggle.
   // Falls back to commissioned rates if a no-commission entry isn't defined yet.
-  function getProductRates(productId, commissioned) {
-    var pricing = ABYQuote.pricing;
+  function getProductRates(productId, commissioned, state) {
+    var root = ABYQuote.pricing;
+    // Multi-state: rates live under a state key (e.g. TX). If no state layer is
+    // present (older data), fall back to the root so nothing breaks.
+    var pricing = root[state || 'TX'] || root;
     if (commissioned) {
       return { rates: pricing.commissioned[productId], usedFallback: false };
     }
@@ -44,7 +47,8 @@ ABYQuote.engine = (function () {
         amount: first.type === 'flat' ? first.amount : (first.minMonthly || first.amount),
         tierLabel: first.label || '',
         breakdown: tierDescription(first),
-        countMissing: true
+        countMissing: true,
+        _m: { kind: first.type === 'flat' ? 'flat' : 'pppm', rate: first.amount, min: first.minMonthly || 0, count: null }
       };
     }
 
@@ -59,7 +63,8 @@ ABYQuote.engine = (function () {
             amount: tier.amount,
             tierLabel: tier.label || '',
             breakdown: ABYQuote.utils.money(tier.amount) + ' per month',
-            count: count
+            count: count,
+            _m: { kind: 'flat', rate: tier.amount, min: 0, count: count }
           };
         }
         // PPPM tier: rate × count, but not less than minMonthly
@@ -74,7 +79,8 @@ ABYQuote.engine = (function () {
           amount: monthly,
           tierLabel: tier.label || '',
           breakdown: explanation,
-          count: count
+          count: count,
+          _m: { kind: 'pppm', rate: tier.amount, min: min, count: count }
         };
       }
     }
@@ -221,8 +227,8 @@ ABYQuote.engine = (function () {
   // Top-level: calculate pricing for a single selection
   // -------------------------------------------------------------
 
-  function calculateProduct(selection, commissioned) {
-    var rateLookup = getProductRates(selection.productId, commissioned);
+  function calculateProduct(selection, commissioned, state) {
+    var rateLookup = getProductRates(selection.productId, commissioned, state);
     var rates = rateLookup.rates;
     if (!rates) return null;
 
@@ -252,17 +258,89 @@ ABYQuote.engine = (function () {
   }
 
   // Calculate all selected products. Returns an array of results.
-  function calculateAll(selections, commissioned) {
+  function calculateAll(selections, commissioned, state) {
     var results = [];
     for (var i = 0; i < selections.length; i++) {
-      var r = calculateProduct(selections[i], commissioned);
+      var r = calculateProduct(selections[i], commissioned, state);
       if (r) results.push(r);
     }
     return results;
   }
 
+  // Core fixed fees that a flat-dollar or percent override applies to.
+  var FIXED = ['setupFee', 'renewalFee', 'annualFee', 'docsFee'];
+
+  function scaleAmount(amount, adj) {
+    var out = adj.mode === 'percent' ? amount * (1 + (adj.amount / 100)) : amount + adj.amount;
+    if (out < 0) out = 0;
+    return Math.round(out * 100) / 100;
+  }
+  function scaleRate(rate, adj) {
+    // percent-only path (flat never touches per-participant rates)
+    var out = rate * (1 + (adj.amount / 100));
+    if (out < 0) out = 0;
+    return Math.round(out * 10000) / 10000;
+  }
+
+  function applyAdjustment(results, adjustment) {
+    if (!adjustment || !adjustment.amount) return results;
+    var adj = {
+      mode: adjustment.mode === 'flat' ? 'flat' : 'percent',
+      amount: Number(adjustment.amount) || 0,
+      scope: adjustment.scope || 'all'
+    };
+    if (!adj.amount) return results;
+    var money = ABYQuote.utils.money, moneyExact = ABYQuote.utils.moneyExact;
+
+    return results.map(function (r) {
+      if (adj.scope !== 'all' && adj.scope !== r.productId) return r;
+      var copy = JSON.parse(JSON.stringify(r));
+
+      FIXED.forEach(function (key) {
+        var fee = copy[key];
+        if (fee && typeof fee.amount === 'number') { fee.amount = scaleAmount(fee.amount, adj); fee.adjusted = true; }
+      });
+
+      // Monthly: only percent overrides adjust the per-participant/flat rate, and
+      // we rebuild the breakdown so the printed rate always matches the amount.
+      var m = copy.monthlyFee;
+      if (m && m._m && !m.tierExceeded && adj.mode === 'percent') {
+        var meta = m._m;
+        if (meta.kind === 'flat') {
+          meta.rate = scaleAmount(meta.rate, adj);
+          m.amount = meta.rate;
+          m.breakdown = money(meta.rate) + ' per month';
+        } else {
+          meta.rate = scaleRate(meta.rate, adj);
+          meta.min  = scaleAmount(meta.min || 0, adj);
+          var amt = meta.count ? Math.max(meta.rate * meta.count, meta.min) : (meta.min || meta.rate);
+          m.amount = Math.round(amt * 100) / 100;
+          var bd = moneyExact(meta.rate) + ' per participant per month';
+          if (meta.min > 0) bd += ' (minimum ' + money(meta.min) + '/month)';
+          m.breakdown = bd;
+        }
+        m.adjusted = true;
+      }
+
+      copy.adjusted = true;
+      return copy;
+    });
+  }
+
+  function describeAdjustment(adjustment) {
+    if (!adjustment || !adjustment.amount) return '';
+    var a = Number(adjustment.amount);
+    var scope = (!adjustment.scope || adjustment.scope === 'all') ? 'all products' : adjustment.scope;
+    if (adjustment.mode === 'flat') {
+      return (a >= 0 ? '+$' + a : '-$' + Math.abs(a)) + ' flat on ' + scope + ' (fixed fees only)';
+    }
+    return (a >= 0 ? '+' + a + '%' : a + '%') + ' on ' + scope;
+  }
+
   return {
     calculateProduct: calculateProduct,
-    calculateAll: calculateAll
+    calculateAll: calculateAll,
+    applyAdjustment: applyAdjustment,
+    describeAdjustment: describeAdjustment
   };
 })();

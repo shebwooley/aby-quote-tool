@@ -402,7 +402,7 @@
 
     var results = ABYQuote.engine.calculateAll(expanded, form.commissioned);
     var quoteNumber = ABYQuote.utils.generateQuoteNumber(form.effectiveDate, form.commissioned);
-    var html = ABYQuote.renderer.render(form, results, quoteNumber, { includeAuthorization: true });
+    var html = ABYQuote.renderer.render(form, results, quoteNumber, { includeAuthorization: true, includeWarnings: true });
 
     outputEl.innerHTML =
       '<div class="output-toolbar no-print">' +

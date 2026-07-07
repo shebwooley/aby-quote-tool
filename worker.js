@@ -76,6 +76,22 @@ export default {
       return Response.redirect(new URL('/admin', request.url).toString(), 302);
     }
 
+    // ── ABY internal door (server-gated; brokers cannot reach it) ───────────────
+    if (path === '/aby' || path === '/aby/') {
+      return withAuth(request, env, () => serveAbyTool(request, env));
+    }
+    // Internal overlay JS is served ONLY to a valid ABY session, never as a static
+    // asset, so the public bundle never contains the override / state code.
+    if (path === '/internal/aby.js') {
+      return withAuth(request, env, () => new Response(abyInternalJS(), {
+        headers: { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' },
+      }));
+    }
+    // One-time (idempotent) D1 migration to add the attribution columns.
+    if (path === '/api/migrate') {
+      return withAuth(request, env, () => handleMigrate(env));
+    }
+
     // ── Diagnostics ─────────────────────────────────────────────────────────────
     if (path === '/api/debug') {
       // Test DB connectivity and schema
@@ -159,21 +175,35 @@ async function handleSaveQuote(request, env, ctx) {
     repEmail           = '',
     commissionIncluded = true,
     products           = [],
+    state              = 'TX',
+    adjustment         = null,
+    adjustmentNote     = '',
   } = body;
+
+  // Attribution is decided on the SERVER from the session cookie, so a broker
+  // cannot spoof it: a valid aby_admin session => 'ABY', otherwise 'broker'.
+  const ranBy = (await isAuthed(request, env)) ? 'ABY' : 'broker';
+  // Brokers are TX-locked on the server: only an ABY session may set a non-TX state.
+  const stateCode = (ranBy === 'ABY') ? String(state || 'TX').toUpperCase().slice(0, 8) : 'TX';
+  // The override is ABY-only; ignore anything a non-ABY caller tries to attach.
+  const adjustmentJson = (ranBy === 'ABY' && adjustment) ? JSON.stringify(adjustment) : null;
+  const adjustmentNoteVal = (ranBy === 'ABY') ? String(adjustmentNote || '') : '';
 
   try {
     await env.DB.prepare(`
       INSERT INTO quotes
         (id, quote_number, created_at, client_name, effective_date,
          broker_name, broker_agency, broker_phone, broker_email,
-         rep_name, rep_phone, rep_email, commission_included, products)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         rep_name, rep_phone, rep_email, commission_included, products,
+         ran_by, state, adjustment, adjustment_note)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
       id, quoteNumber, now, clientName, effectiveDate,
       brokerName, brokerAgency, brokerPhone, brokerEmail,
       repName, repPhone, repEmail,
       commissionIncluded ? 1 : 0,
-      JSON.stringify(products)
+      JSON.stringify(products),
+      ranBy, stateCode, adjustmentJson, adjustmentNoteVal
     ).run();
   } catch (err) {
     console.error('DB insert failed:', err);
@@ -198,23 +228,30 @@ async function handleListQuotes(request, env) {
   const limit  = Math.min(parseInt(url.searchParams.get('limit')  || '300'), 500);
   const offset = parseInt(url.searchParams.get('offset') || '0');
 
-  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status";
+  const ranByFilter = (url.searchParams.get('ran_by') || '').trim();   // '', 'ABY', or 'broker'
+  const stateFilter  = (url.searchParams.get('state')  || '').trim().toUpperCase();
+  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, COALESCE(state, 'TX') AS state, adjustment, adjustment_note";
 
   try {
-    let result;
+    const where = [];
+    const args = [];
     if (q) {
       const like = `%${q}%`;
-      result = await env.DB.prepare(`
-        SELECT ${cols} FROM quotes
-        WHERE client_name LIKE ? OR broker_name LIKE ? OR broker_agency LIKE ?
-              OR quote_number LIKE ? OR rep_name LIKE ?
-        ORDER BY created_at DESC LIMIT ? OFFSET ?
-      `).bind(like, like, like, like, like, limit, offset).all();
-    } else {
-      result = await env.DB.prepare(
-        `SELECT ${cols} FROM quotes ORDER BY created_at DESC LIMIT ? OFFSET ?`
-      ).bind(limit, offset).all();
+      where.push('(client_name LIKE ? OR broker_name LIKE ? OR broker_agency LIKE ? OR quote_number LIKE ? OR rep_name LIKE ?)');
+      args.push(like, like, like, like, like);
     }
+    if (ranByFilter === 'ABY' || ranByFilter === 'broker') {
+      where.push("COALESCE(ran_by, 'broker') = ?");
+      args.push(ranByFilter);
+    }
+    if (stateFilter) {
+      where.push("COALESCE(state, 'TX') = ?");
+      args.push(stateFilter);
+    }
+    const whereSql = where.length ? ('WHERE ' + where.join(' AND ')) : '';
+    const result = await env.DB.prepare(
+      `SELECT ${cols} FROM quotes ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    ).bind(...args, limit, offset).all();
     return jsonResp({ quotes: result.results || [] });
   } catch (err) {
     console.error('handleListQuotes failed:', err);
@@ -483,6 +520,51 @@ function parseCookies(header) {
   return out;
 }
 
+// ─── ABY internal door ─────────────────────────────────────────────────────────
+
+// Boolean session check (does NOT block). Used to stamp ran_by on saves.
+async function isAuthed(request, env) {
+  const cookies = parseCookies(request.headers.get('Cookie') || '');
+  const token = cookies[COOKIE_NAME];
+  return !!(token && await verifyToken(token, env.ADMIN_PASSWORD));
+}
+
+// Serve the same front end as the public tool, plus the internal overlay script.
+// The public bundle is never modified; the overlay is only referenced here.
+async function serveAbyTool(request, env) {
+  const url = new URL(request.url);
+  const res = await env.ASSETS.fetch(new Request(new URL('/index.html', url), request));
+  let html = await res.text();
+  const inject = '<script>window.ABY_INTERNAL=true;</script>\n<script src="/internal/aby.js"></script>\n</body>';
+  html = html.includes('</body>') ? html.replace('</body>', inject) : (html + inject);
+  return new Response(html, {
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+  });
+}
+
+// Idempotent migration: add attribution columns if they do not exist yet.
+async function handleMigrate(env) {
+  const stmts = [
+    "ALTER TABLE quotes ADD COLUMN ran_by TEXT",
+    "ALTER TABLE quotes ADD COLUMN state TEXT",
+    "ALTER TABLE quotes ADD COLUMN adjustment TEXT",
+    "ALTER TABLE quotes ADD COLUMN adjustment_note TEXT",
+  ];
+  const applied = [];
+  for (const sql of stmts) {
+    try { await env.DB.prepare(sql).run(); applied.push(sql); }
+    catch (e) { /* duplicate column => already migrated; ignore */ }
+  }
+  return jsonResp({ ok: true, applied });
+}
+
+// The internal overlay: state selector + rate override, served ONLY to a valid
+// ABY session. It monkey-patches the engine at runtime (state + applyAdjustment)
+// and attaches state/adjustment to the save. No public file is touched.
+function abyInternalJS() {
+  return `` + ABY_INTERNAL_JS + ``;
+}
+
 // ─── Utilities ─────────────────────────────────────────────────────────────────
 
 function jsonResp(data, status = 200) {
@@ -603,6 +685,11 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 <div class="toolbar">
   <input type="text" id="search" placeholder="Search by client, broker, agency, or quote number…">
   <span class="count" id="count"></span>
+  <select id="ranByFilter" style="margin-left:auto;padding:.4rem .5rem;border:1px solid #ddd;border-radius:6px;font-size:.85rem">
+    <option value="">All sources</option>
+    <option value="ABY">ABY-run</option>
+    <option value="broker">Broker-run</option>
+  </select>
 </div>
 <div class="tabs">
   <button class="tab active" data-status="P">Pending</button>
@@ -624,11 +711,11 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
       <thead>
         <tr>
           <th>Date / Time</th><th>Client</th>
-          <th>Broker / Agency</th><th>Rep</th><th>Products</th><th>Comm</th>
+          <th>Broker / Agency</th><th>Rep</th><th>Products</th><th>Comm</th><th>Ran by</th>
         </tr>
       </thead>
       <tbody id="tbody">
-        <tr><td colspan="6" class="loading">Loading quotes…</td></tr>
+        <tr><td colspan="7" class="loading">Loading quotes…</td></tr>
       </tbody>
     </table>
   </div>
@@ -654,29 +741,34 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 let quotes = [];
 let expandedId = null;
 let activeTab = 'P';
+let ranByFilter = '';
+document.addEventListener('DOMContentLoaded', function(){
+  var sel = document.getElementById('ranByFilter');
+  if (sel) sel.addEventListener('change', function(){ ranByFilter = sel.value; render(); });
+});
 
 async function load(q) {
   q = q || '';
   const url = '/api/quotes' + (q ? ('?q=' + encodeURIComponent(q)) : '');
   const tbody = document.getElementById('tbody');
 
-  tbody.innerHTML = '<tr><td colspan="6" class="loading">Loading quotes…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading quotes…</td></tr>';
 
   let res;
   try {
     res = await fetch(url);
   } catch (netErr) {
-    tbody.innerHTML = '<tr><td colspan="6" class="error-msg">Network error: ' + netErr.message + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="error-msg">Network error: ' + netErr.message + '</td></tr>';
     return;
   }
 
   if (res.status === 401) {
-    tbody.innerHTML = '<tr><td colspan="6" class="error-msg">Session expired — <a href="/admin">click here to log in again</a>.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="error-msg">Session expired — <a href="/admin">click here to log in again</a>.</td></tr>';
     return;
   }
   if (!res.ok) {
     const errBody = await res.json().catch(function(){ return {}; });
-    tbody.innerHTML = '<tr><td colspan="6" class="error-msg">Server error ' + res.status + ': ' + (errBody.error || 'unknown error') + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="error-msg">Server error ' + res.status + ': ' + (errBody.error || 'unknown error') + '</td></tr>';
     return;
   }
 
@@ -684,7 +776,7 @@ async function load(q) {
   try {
     data = await res.json();
   } catch (parseErr) {
-    tbody.innerHTML = '<tr><td colspan="6" class="error-msg">Could not read server response: ' + parseErr.message + '</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="error-msg">Could not read server response: ' + parseErr.message + '</td></tr>';
     return;
   }
 
@@ -694,7 +786,11 @@ async function load(q) {
 
 function render() {
   const tbody = document.getElementById('tbody');
-  const filtered = quotes.filter(function(q){ return (q.status || 'P') === activeTab; });
+  const filtered = quotes.filter(function(q){
+    if ((q.status || 'P') !== activeTab) return false;
+    if (ranByFilter && (q.ran_by || 'broker') !== ranByFilter) return false;
+    return true;
+  });
 
   ['P','S','D'].forEach(function(s) {
     var btn = document.querySelector('.tab[data-status="' + s + '"]');
@@ -707,7 +803,7 @@ function render() {
   document.getElementById('count').textContent =
     filtered.length ? (filtered.length + ' quote' + (filtered.length !== 1 ? 's' : '')) : '';
   if (!filtered.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No quotes found.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No quotes found.</td></tr>';
     return;
   }
   tbody.innerHTML = '';
@@ -736,7 +832,12 @@ function render() {
       '<td>' + brokerCell + '</td>' +
       '<td>' + (q.rep_name ? esc(q.rep_name.split(' ')[0]) : '<span class="muted">—</span>') + '</td>' +
       '<td><div style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">' + chipHtml + '</div></td>' +
-      '<td><span class="badge ' + (isC ? 'badge-c' : 'badge-nc') + '">' + (isC ? 'C' : 'NC') + '</span></td>';
+      '<td><span class="badge ' + (isC ? 'badge-c' : 'badge-nc') + '">' + (isC ? 'C' : 'NC') + '</span></td>' +
+      '<td>' +
+        '<span class="badge" style="background:' + ((q.ran_by||"broker")==="ABY" ? "#205aa6" : "#777") + ';color:#fff">' + ((q.ran_by||"broker")==="ABY" ? "ABY" : "Broker") + '</span> ' +
+        '<span style="font-size:.78rem;color:#888">' + esc(q.state || "TX") + '</span>' +
+        (q.adjustment ? '<br><span style="font-size:.72rem;color:#b8860b" title="' + esc(q.adjustment_note || "") + '">rate override</span>' : '') +
+      '</td>';
 
     row.addEventListener('click', function(){ toggleDetail(q.id); });
     tbody.appendChild(row);
@@ -744,7 +845,7 @@ function render() {
     if (isExp) {
       const dr = document.createElement('tr');
       dr.className = 'detail-row';
-      dr.innerHTML = '<td colspan="6">' + detailHTML(q, products) + '</td>';
+      dr.innerHTML = '<td colspan="7">' + detailHTML(q, products) + '</td>';
       tbody.appendChild(dr);
     }
   }
@@ -1161,3 +1262,107 @@ document.getElementById('pw').addEventListener('keydown',e=>{if(e.key==='Enter')
 </body>
 </html>`;
 }
+
+// ─── Internal overlay source (served at /internal/aby.js to ABY sessions only) ──
+const ABY_INTERNAL_JS = `
+(function () {
+  'use strict';
+  if (!window.ABYQuote || !window.ABYQuote.engine) return;
+
+  // States ABY can quote. Add a state here once its pricing is provisioned.
+  var STATES = [{ code: 'TX', name: 'Texas' }];
+
+  window.ABY_STATE = 'TX';
+  window.ABY_ADJUSTMENT = null;   // { mode:'percent'|'flat', amount:Number, scope:'all'|productId }
+  window.ABY_ADJ_NOTE = '';
+
+  // 1) Route state + override through BOTH the preview and the downloaded file.
+  var origCalcAll = window.ABYQuote.engine.calculateAll;
+  window.ABYQuote.engine.calculateAll = function (selections, commissioned, state) {
+    var st = window.ABY_STATE || state || 'TX';
+    var results = origCalcAll.call(this, selections, commissioned, st);
+    if (window.ABY_ADJUSTMENT) results = window.ABYQuote.engine.applyAdjustment(results, window.ABY_ADJUSTMENT);
+    return results;
+  };
+
+  // 2) Attach state + adjustment to the save (internal only; never on client PDF).
+  var origFetch = window.fetch;
+  window.fetch = function (input, init) {
+    try {
+      var url = (typeof input === 'string') ? input : (input && input.url) || '';
+      if (init && (init.method || '').toUpperCase() === 'POST' && url.indexOf('/api/quotes') !== -1 && init.body) {
+        var b = JSON.parse(init.body);
+        b.state = window.ABY_STATE || 'TX';
+        if (window.ABY_ADJUSTMENT) {
+          b.adjustment = window.ABY_ADJUSTMENT;
+          b.adjustmentNote = window.ABYQuote.engine.describeAdjustment(window.ABY_ADJUSTMENT) +
+            (window.ABY_ADJ_NOTE ? (' — ' + window.ABY_ADJ_NOTE) : '');
+        }
+        init.body = JSON.stringify(b);
+      }
+    } catch (e) {}
+    return origFetch.apply(this, arguments);
+  };
+
+  function money(n) { return (n < 0 ? '-$' : '$') + Math.abs(n); }
+
+  function recompute(panel) {
+    var mode = panel.querySelector('#abyMode').value;
+    var amtEl = panel.querySelector('#abyAmt');
+    var amt = parseFloat(amtEl.value);
+    var scope = panel.querySelector('#abyScope').value;
+    window.ABY_STATE = panel.querySelector('#abyState').value || 'TX';
+    window.ABY_ADJ_NOTE = panel.querySelector('#abyNote').value || '';
+    var summary = panel.querySelector('#abySummary');
+    if (mode === 'none' || isNaN(amt) || amt === 0) {
+      window.ABY_ADJUSTMENT = null;
+      summary.textContent = 'No override. State: ' + window.ABY_STATE + '. Quotes run at standard ' + window.ABY_STATE + ' pricing.';
+      return;
+    }
+    window.ABY_ADJUSTMENT = { mode: mode, amount: amt, scope: scope };
+    summary.textContent = 'Applied: ' + window.ABYQuote.engine.describeAdjustment(window.ABY_ADJUSTMENT) +
+      '. State: ' + window.ABY_STATE + '. Re-generate the quote to apply.';
+  }
+
+  function build() {
+    var form = document.getElementById('quoteForm');
+    var host = form || document.body;
+
+    var stateOpts = STATES.map(function (s) { return '<option value="' + s.code + '">' + s.name + ' (' + s.code + ')</option>'; }).join('');
+    var prods = (window.ABYQuote.products || []);
+    var scopeOpts = '<option value="all">All products</option>' +
+      prods.map(function (p) { return '<option value="' + p.id + '">' + (p.shortName || p.name || p.id) + '</option>'; }).join('');
+
+    var panel = document.createElement('div');
+    panel.id = 'aby-internal-panel';
+    panel.style.cssText = 'border:2px solid #205aa6;background:#eef4fb;border-radius:12px;padding:16px 18px;margin:0 0 20px;font-family:Arial,Helvetica,sans-serif;';
+    panel.innerHTML =
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">' +
+        '<strong style="color:#143c73;font-size:15px;">ABY internal controls</strong>' +
+        '<span style="background:#205aa6;color:#fff;font-size:11px;padding:2px 8px;border-radius:999px;">not visible to brokers</span>' +
+      '</div>' +
+      '<p style="margin:0 0 12px;color:#4a5568;font-size:12.5px;">State pricing and rate overrides. Overrides change the quoted price; the override itself is recorded internally and never appears on the client proposal or PDF.</p>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">' +
+        '<label style="font-size:12px;color:#143c73;">State<br><select id="abyState" style="padding:6px;min-width:150px;">' + stateOpts + '</select></label>' +
+        '<label style="font-size:12px;color:#143c73;">Override<br><select id="abyMode" style="padding:6px;"><option value="none">None</option><option value="percent">Percent (%)</option><option value="flat">Flat ($)</option></select></label>' +
+        '<label style="font-size:12px;color:#143c73;">Amount<br><input id="abyAmt" type="number" step="0.01" placeholder="e.g. 10 or -15" style="padding:6px;width:130px;"></label>' +
+        '<label style="font-size:12px;color:#143c73;">Applies to<br><select id="abyScope" style="padding:6px;min-width:150px;">' + scopeOpts + '</select></label>' +
+        '<label style="font-size:12px;color:#143c73;flex:1;min-width:180px;">Reason (internal note)<br><input id="abyNote" type="text" placeholder="e.g. DFW regional / ABC brokerage discount" style="padding:6px;width:100%;box-sizing:border-box;"></label>' +
+      '</div>' +
+      '<div id="abySummary" style="margin-top:10px;font-size:12.5px;color:#143c73;font-weight:bold;"></div>';
+
+    if (host === form && form.parentNode) form.parentNode.insertBefore(panel, form);
+    else host.insertBefore(panel, host.firstChild);
+
+    ['abyState', 'abyMode', 'abyAmt', 'abyScope', 'abyNote'].forEach(function (id) {
+      var el = panel.querySelector('#' + id);
+      el.addEventListener('input', function () { recompute(panel); });
+      el.addEventListener('change', function () { recompute(panel); });
+    });
+    recompute(panel);
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', build);
+  else build();
+})();
+`;
