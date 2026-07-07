@@ -9,6 +9,15 @@
   // Build the product checkbox list from ABYQuote.products
   // -------------------------------------------------------------
 
+  var ABY_COMMIT_JS = [
+    'function abySign(v){v=(v||"").trim();var p=document.getElementById("printPreview"),s=document.getElementById("signPreview");if(p)p.textContent=v;if(s)s.textContent=v;}',
+    'function abyElectedProducts(){var list=[];document.querySelectorAll(".opt-row").forEach(function(row){var cb=row.querySelector(".opt-check");if(!cb||!cb.checked)return;var label=cb.getAttribute("data-label");var sel=row.querySelector(".opt-tier-select");if(sel)label+=": "+sel.value;list.push(label);});return list;}',
+    'function abyInitSignDate(){var d=document.getElementById("signDate");if(d&&!d.value)d.valueAsDate=new Date();}',
+    'async function submitCommitment(e){e.preventDefault();var form=e.target;var products=abyElectedProducts();var msg=document.getElementById("commitMsg");if(products.length===0){msg.style.display="block";msg.style.color="#c00";msg.textContent="Please select at least one service to authorize.";return;}document.getElementById("productsField").value=JSON.stringify(products);var authSigner=(form.authSigner.value||"").trim();form.acceptedPrint.value=authSigner;form.acceptedSign.value=authSigner;var btn=document.getElementById("commitBtn");btn.disabled=true;btn.textContent="Submitting...";var payload={};new FormData(form).forEach(function(v,k){payload[k]=v;});try{payload.products=JSON.parse(payload.products||"[]");}catch(_){payload.products=products;}try{var res=await fetch("https://aby-quote-tool.eric-185.workers.dev/api/commitments",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(res.ok){msg.style.display="block";msg.style.color="#1a5c3a";msg.innerHTML="✓ Authorization received. ABY Benefits has been notified and will be in touch shortly. You may print or save this page for your records.";btn.style.display="none";window.print();}else{msg.style.display="block";msg.style.color="#c00";msg.textContent="Submission failed. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}catch(err){msg.style.display="block";msg.style.color="#c00";msg.textContent="Network error. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}'
+  ].join('\n');
+  // Define the authorization-page helpers in-app so the on-screen preview is interactive too.
+  try { (0, eval)(ABY_COMMIT_JS); } catch (e) {}
+
   function buildProductList() {
     productListEl.innerHTML = '';
     ABYQuote.products.forEach(function (product) {
@@ -152,6 +161,25 @@
 
       wrap.appendChild(row);
     });
+
+    // Optional: let the broker mark one option as "recommended" (highlighted on the quote).
+    var recLabel = document.createElement('label');
+    recLabel.style.cssText = 'display:block;margin-top:10px;';
+    var recSpan = document.createElement('span');
+    recSpan.textContent = 'Highlight a recommended option (optional)';
+    var recSel = document.createElement('select');
+    recSel.dataset.recommended = product.id;
+    var noneOpt = document.createElement('option');
+    noneOpt.value = ''; noneOpt.textContent = 'None';
+    recSel.appendChild(noneOpt);
+    product.packages.forEach(function (pkg) {
+      var o = document.createElement('option');
+      o.value = pkg.id; o.textContent = pkg.name;
+      recSel.appendChild(o);
+    });
+    recLabel.appendChild(recSpan);
+    recLabel.appendChild(recSel);
+    wrap.appendChild(recLabel);
 
     return wrap;
   }
@@ -300,6 +328,11 @@
       data.selections.push(selection);
     });
 
+    data.recommendedPackages = {};
+    formEl.querySelectorAll('[data-recommended]').forEach(function (sel) {
+      if (sel.value) data.recommendedPackages[sel.dataset.recommended] = sel.value;
+    });
+
     return data;
   }
 
@@ -334,6 +367,19 @@
       return;
     }
 
+    // Medicare Secondary Payer (MSP) conflict check: COBRA implies 20+ employees,
+    // which triggers MSP rules that disqualify the group from a Medicare HRA.
+    var selectedIds = form.selections.map(function (s) { return s.productId; });
+    if (selectedIds.indexOf('cobra') !== -1 && selectedIds.indexOf('mpra') !== -1) {
+      var proceed = window.confirm(
+        'You selected COBRA, which indicates the group has 20 or more employees. ' +
+        'Groups that size are subject to the Medicare Secondary Payer (MSP) rules, which ' +
+        'disqualify them from a Medicare Premium Reimbursement Arrangement (Medicare HRA). ' +
+        'Are you sure you want to continue?'
+      );
+      if (!proceed) return;
+    }
+
     var brokerLogoFile = formEl.querySelector('[name="brokerLogo"]').files[0];
     if (brokerLogoFile) {
       var reader = new FileReader();
@@ -356,7 +402,7 @@
 
     var results = ABYQuote.engine.calculateAll(expanded, form.commissioned);
     var quoteNumber = ABYQuote.utils.generateQuoteNumber(form.effectiveDate, form.commissioned);
-    var html = ABYQuote.renderer.render(form, results, quoteNumber);
+    var html = ABYQuote.renderer.render(form, results, quoteNumber, { includeAuthorization: true });
 
     outputEl.innerHTML =
       '<div class="output-toolbar no-print">' +
@@ -365,6 +411,8 @@
       '  <button type="button" class="secondary" id="printBtn">Print</button>' +
       '</div>' +
       '<div class="quote">' + html + '</div>';
+
+    if (typeof abyInitSignDate === 'function') abyInitSignDate();
 
     var printBtn = document.getElementById('printBtn');
     if (printBtn) printBtn.addEventListener('click', function () { window.print(); });
@@ -423,348 +471,32 @@
   // -------------------------------------------------------------
 
   function downloadQuoteAsHtml(form, quoteNumber) {
-    var liveQuote = outputEl.querySelector('.quote');
-    if (!liveQuote) return;
+    var expanded = expandSelections(form.selections);
+    var results = ABYQuote.engine.calculateAll(expanded, form.commissioned);
+    var body = ABYQuote.renderer.render(form, results, quoteNumber, { includeAuthorization: true });
+    // Make the ABY logo load from the deployed worker when the client opens the saved file.
+    body = body.replace('assets/images/aby-logo.png', 'https://aby-quote-tool.eric-185.workers.dev/assets/images/aby-logo.png');
+    var title = ABYQuote.utils.escapeHtml((form.clientName || 'ABY Quote') + ' ' + quoteNumber);
+    var safeName = (form.clientName ? form.clientName.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') : 'ABY-Quote');
 
-    var element = liveQuote.cloneNode(true);
-    var hiddenEls = element.querySelectorAll('.no-print');
-    hiddenEls.forEach(function (el) { el.parentNode && el.parentNode.removeChild(el); });
-
-    var clientPart = (form.clientName || 'Quote').replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, ' ');
-    var filename = clientPart + ' - ' + quoteNumber + '.html';
-
-    // Inline the ABY logo so the file works without the server
-    var logoImg = element.querySelector('.aby-logo img');
-    var logoFetch = (logoImg && logoImg.src)
-      ? fetch(logoImg.src)
-          .then(function (r) { return r.blob(); })
-          .then(function (blob) {
-            return new Promise(function (resolve) {
-              var reader = new FileReader();
-              reader.onload = function () { logoImg.src = reader.result; resolve(); };
-              reader.readAsDataURL(blob);
-            });
-          })
-          .catch(function () {})
-      : Promise.resolve();
-
-    // Fetch stylesheets to embed
-    var cssFetch = Promise.all([
-      fetch('assets/css/quote.css').then(function (r) { return r.text(); }).catch(function () { return ''; }),
-      fetch('assets/css/print.css').then(function (r) { return r.text(); }).catch(function () { return ''; })
-    ]);
-
-    Promise.all([logoFetch, cssFetch]).then(function (resolved) {
-      var css = resolved[1].join('\n\n');
-      var titleText = (clientPart + ' \u2014 ' + quoteNumber)
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-      // Collect elected product names from the rendered quote
-      var productNames = [];
-      element.querySelectorAll('.product-overview h2').forEach(function (h) {
-        if (h.textContent.trim()) productNames.push(h.textContent.trim());
+    fetch('assets/css/quote.css')
+      .then(function (r) { return r.ok ? r.text() : ''; })
+      .catch(function () { return ''; })
+      .then(function (css) {
+        var html = '<!DOCTYPE html>\n<html lang="en"><head><meta charset="UTF-8">' +
+          '<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>' + title + '</title>' +
+          '<style>' + css + '\nbody{margin:0;background:linear-gradient(180deg,#eaf3f8 0%,#f4f7f9 42%,#fff 100%);}' +
+          '.wrap{max-width:1100px;margin:0 auto;padding:28px 18px 46px;}</style></head><body>' +
+          '<div class="wrap">' + body + '</div>' +
+          '<scr' + 'ipt>' + ABY_COMMIT_JS + '\nabyInitSignDate();</scr' + 'ipt></body></html>';
+        var blob = new Blob([html], { type: 'text/html' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = safeName + ' - ' + quoteNumber + '.html';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
       });
-      if (!productNames.length) {
-        element.querySelectorAll('.proposal-contents li').forEach(function (li) {
-          if (li.textContent.trim()) productNames.push(li.textContent.trim());
-        });
-      }
-
-      // Worker endpoint for commitment submissions (full URL so the file:// download can reach it)
-      var workerOrigin = window.location.origin;
-
-      var acceptanceForm = [
-        '<div id="acceptance-section" style="max-width:960px;margin:40px auto;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,sans-serif">',
-        '  <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600&display=swap" rel="stylesheet">',
-        '  <div style="background:#fff;border:1.5px solid #b3cde8;border-top:5px solid #143b6b;border-radius:8px;padding:36px 40px;box-shadow:0 2px 8px rgba(0,0,0,.07)">',
-        '    <div style="text-align:center;margin-bottom:28px">',
-        '      <div style="font-size:13px;font-weight:700;color:#143b6b;letter-spacing:.08em;text-transform:uppercase;margin-bottom:4px">ABY Benefits LLC</div>',
-        '      <h2 style="margin:0 0 6px;font-size:20px;color:#111">Employer Acceptance &amp; Authorization</h2>',
-        '<div style="font-size:12px;color:#777">Non-binding letter of intent — quote number: <strong>' + quoteNumber + '</strong></div>',
-        '      <div style="margin-top:10px;font-size:12px;background:#eef4fb;border:1px solid #b3cde8;border-radius:6px;padding:6px 12px;display:inline-block">',
-        '        <strong>★ All ABY Admin Fees Guaranteed for 3 Years ★</strong>',
-        '      </div>',
-        '    </div>',
-        '    <div style="margin-bottom:24px">',
-        '      <div style="font-size:11px;font-weight:700;color:#143b6b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Services to Proceed With</div>',
-        '      <div style="font-size:12px;color:#555;margin-bottom:10px">Please check each product you wish to move forward with:</div>',
-        '      <div id="product-checkboxes" style="background:#f7faff;border:1px solid #dde8f4;border-radius:6px;padding:14px 16px">',
-        '        <p style="color:#999;font-style:italic;margin:0;font-size:13px">Loading products from quote above...</p>',
-        '      </div>',
-        '    </div>',
-        '<form id="commitForm" onsubmit="submitCommitment(event)">',
-        '  <input type="hidden" name="quoteNumber" value="' + quoteNumber + '">',
-        '  <div style="margin-bottom:20px">',
-        '    <div style="font-size:11px;font-weight:700;color:#143b6b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Employer Information</div>',
-        '    <div style="margin-bottom:10px">',
-        '      <label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Employer Name</label>',
-        '      <input name="employerName" value="' + (form.clientName || '') + '" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px">',
-        '    </div>',
-        '    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">',
-        '      <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Address</label><input name="address" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px"></div>',
-        '      <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">City / State / Zip</label><input name="cityStateZip" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px"></div>',
-        '    </div>',
-        '  </div>',
-        '  <div style="margin-bottom:20px">',
-        '    <div style="font-size:11px;font-weight:700;color:#143b6b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Authorized Signer</div>',
-        '    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">',
-        '      <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Name</label><input name="authSigner" id="authSignerInput" oninput="document.getElementById(\'printPreview\').textContent=this.value;document.getElementById(\'signPreview\').textContent=this.value" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px"></div>',
-        '      <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Title</label><input name="authTitle" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px"></div>',
-        '    </div>',
-        '    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">',
-        '      <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Email</label><input type="email" name="authEmail" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px"></div>',
-        '      <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Phone</label><input type="tel" name="authPhone" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px"></div>',
-        '    </div>',
-        '  </div>',
-        '  <div style="margin-bottom:20px">',
-        '    <div style="font-size:11px;font-weight:700;color:#143b6b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">HR / Benefits Contact <span style="font-weight:400;color:#888">(if different)</span></div>',
-        '    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">',
-        '      <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Name</label><input name="hrContact" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px"></div>',
-        '      <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Title</label><input name="hrTitle" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px"></div>',
-        '    </div>',
-        '    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">',
-        '      <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Email</label><input type="email" name="hrEmail" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px"></div>',
-        '      <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Phone</label><input type="tel" name="hrPhone" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px"></div>',
-        '    </div>',
-        '  </div>',
-        '  <div style="display:grid;grid-template-columns:220px 1fr;gap:10px;margin-bottom:28px">',
-        '    <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Proposed Administrative Start Date</label><select name="startDate" id="startDateSel" required style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px;background:white"><option value="">Select start date...</option></select></div>',
-        '  </div>',
-        '  <div id="pricing-summary" style="display:none;margin-bottom:24px;background:#f7faff;border:1.5px solid #143b6b;border-radius:6px;padding:16px 18px">',
-        '    <div style="font-size:11px;font-weight:700;color:#143b6b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Selected Products &amp; Fees — I agree to the following:</div>',
-        '    <table id="summary-table" style="width:100%;border-collapse:collapse;font-size:13px"></table>',
-        '  </div>',
-        '  <div style="border-top:1px solid #dde;padding-top:24px;margin-bottom:24px">',
-        '    <div style="font-size:11px;font-weight:700;color:#143b6b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px">Authorization</div>',
-        '    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">',
-        '      <div>',
-        '        <label style="font-size:12px;color:#555;display:block;margin-bottom:6px">Accepted — Printed Name</label>',
-        '        <div id="printPreview" style="min-height:44px;border-bottom:1.5px solid #333;padding:6px 2px;font-size:16px;color:#222"></div>',
-        '        <input type="hidden" name="acceptedPrint" id="acceptedPrint">',
-        '      </div>',
-        '      <div>',
-        '        <label style="font-size:12px;color:#555;display:block;margin-bottom:6px">Accepted — Electronic Signature</label>',
-        '        <div id="signPreview" style="min-height:44px;border-bottom:1.5px solid #333;padding:6px 2px;font-size:26px;color:#143b6b;font-family:Dancing Script,cursive"></div>',
-        '        <input type="hidden" name="acceptedSign" id="acceptedSign">',
-        '        <div style="font-size:10px;color:#999;margin-top:3px">Type your name in the Authorized Signer field above to sign</div>',
-        '      </div>',
-        '    </div>',
-        '    <div style="margin-top:16px;display:grid;grid-template-columns:200px 1fr;gap:10px;align-items:end">',
-        '      <div><label style="font-size:12px;color:#555;display:block;margin-bottom:3px">Date</label><input type="date" name="signDate" id="signDate" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:5px;font-size:13px"></div>',
-        '    </div>',
-        '  </div>',
-        '  <div style="text-align:center">',
-        '    <button type="submit" id="commitBtn" style="background:#143b6b;color:#fff;font-size:14px;font-weight:600;padding:12px 36px;border:none;border-radius:6px;cursor:pointer;letter-spacing:.02em">Submit Authorization to ABY</button>',
-        '    <div style="margin-top:8px;font-size:11px;color:#888">This is a non-binding letter of intent. ABY will follow up to confirm implementation details.</div>',
-        '    <div id="commitMsg" style="margin-top:12px;font-size:13px;display:none"></div>',
-        '  </div>',
-        '</form>',
-        '</div>',
-        '<script>\n' +
-        'document.getElementById("signDate").valueAsDate = new Date();\n' +
-        'buildProductCheckboxes();\n' +
-        'buildStartDateSelect();\n' +
-        '\n' +
-        'function buildStartDateSelect() {\n' +
-        '  var sel = document.getElementById("startDateSel");\n' +
-        '  if (!sel) return;\n' +
-        '  var now = new Date();\n' +
-        '  var months = ["January","February","March","April","May","June",\n' +
-        '               "July","August","September","October","November","December"];\n' +
-        '  var iter = new Date(now.getFullYear(), now.getMonth(), 1);\n' +
-        '  for (var i = 0; i < 18; i++) {\n' +
-        '    var cutoff = new Date(iter.getFullYear(), iter.getMonth(), 16);\n' +
-        '    if (now < cutoff) {\n' +
-        '      var y = iter.getFullYear();\n' +
-        '      var m = iter.getMonth();\n' +
-        '      var val = y + "-" + String(m + 1).padStart(2, "0") + "-01";\n' +
-        '      var lbl = months[m] + " 1, " + y;\n' +
-        '      var opt = document.createElement("option");\n' +
-        '      opt.value = val;\n' +
-        '      opt.textContent = lbl;\n' +
-        '      sel.appendChild(opt);\n' +
-        '    }\n' +
-        '    iter.setMonth(iter.getMonth() + 1);\n' +
-        '  }\n' +
-        '}\n' +
-        '\n' +
-        'function buildProductCheckboxes() {\n' +
-        '  var wraps = document.querySelectorAll(".pricing-table-wrap");\n' +
-        '  var container = document.getElementById("product-checkboxes");\n' +
-        '  if (!wraps.length) {\n' +
-        '    container.innerHTML = "<p style=\\"color:#999;font-style:italic;margin:0;font-size:13px\\">No products found in the quote above.</p>";\n' +
-        '    return;\n' +
-        '  }\n' +
-        '  var html = "";\n' +
-        '  wraps.forEach(function(wrap, i) {\n' +
-        '    var h3 = wrap.querySelector("h3");\n' +
-        '    var rawName = h3 ? h3.textContent : "Product " + (i + 1);\n' +
-        '    var productName = rawName.replace(" \\u2014 Fees", "").replace(" - Fees", "").trim();\n' +
-        '    var rows = wrap.querySelectorAll(".pricing-table tr");\n' +
-        '    var fees = [];\n' +
-        '    rows.forEach(function(row) {\n' +
-        '      if (row.classList.contains("breakdown-row")) {\n' +
-        '        if (fees.length) {\n' +
-        '          var countCell = row.querySelector(".count-cell");\n' +
-        '          var cells = row.querySelectorAll("td");\n' +
-        '          var rateCell = cells.length > 1 ? cells[cells.length - 1] : null;\n' +
-        '          if (countCell && countCell.textContent.trim()) fees[fees.length-1].countNote = countCell.innerHTML.trim();\n' +
-        '          if (rateCell && rateCell.textContent.trim()) fees[fees.length-1].rateNote = rateCell.textContent.trim();\n' +
-        '        }\n' +
-        '        return;\n' +
-        '      }\n' +
-        '      var lbl = row.querySelector(".row-label");\n' +
-        '      var val = row.querySelector(".row-value");\n' +
-        '      var cad = row.querySelector(".row-cadence");\n' +
-        '      var labelTxt = lbl ? lbl.textContent.trim() : "";\n' +
-        '      if (lbl && val && labelTxt && labelTxt !== "Plan selected") {\n' +
-        '        var tierNoteEl = val.querySelector(".tier-note");\n' +
-        '        var tierNote = tierNoteEl ? tierNoteEl.textContent.replace(/[()]/g, "").trim() : "";\n' +
-        '        var valueClean = tierNote ? val.textContent.replace("(" + tierNote + ")", "").trim() : val.textContent.trim();\n' +
-        '        fees.push({ label: labelTxt, value: valueClean, cadence: cad ? cad.textContent.trim() : "", tierNote: tierNote });\n' +
-        '      }\n' +
-        '    });\n' +
-        '    var feeHtml = fees.map(function(f) {\n' +
-        '      var m = f.tierNote ? f.tierNote.match(/^(\\\\d+)\\\\+/) : null;\n' +
-        '      var labelDisplay = f.countNote ? f.label + " \u2014 " + f.countNote : f.label;\n' +
-        '      var line = "<div style=\\"font-size:12px;color:#555;margin:3px 0 0 26px\\">" + labelDisplay + ": <strong>" + f.value + "</strong>" + (f.cadence ? " " + f.cadence : "") + "</div>";\n' +
-        '      if (f.rateNote) {\n' +
-        '        var displayRate = m ? f.rateNote.replace(/(\\\\(minimum [^)]+\\\\))/, "$1 for groups under " + m[1] + " employees") : f.rateNote;\n' +
-        '        line += "<div style=\\"font-size:11px;color:#888;margin:1px 0 0 26px;font-style:italic\\">" + displayRate + "</div>";\n' +
-        '      }\n' +
-        '      return line;\n' +
-        '    }).join("");\n' +
-        '    var encoded = encodeURIComponent(JSON.stringify(fees));\n' +
-        '    html += "<div style=\\"margin-bottom:14px\\">" +\n' +
-        '      "<label style=\\"display:flex;align-items:flex-start;gap:10px;cursor:pointer\\">" +\n' +
-        '      "<input type=\\"checkbox\\" name=\\"selectedProduct\\" value=\\"" + productName + "\\" data-fees=\\"" + encoded + "\\" onchange=\\"updatePricingSummary()\\" style=\\"margin-top:2px;width:16px;height:16px;flex-shrink:0\\">" +\n' +
-        '      "<span style=\\"font-weight:600;font-size:14px;color:#143b6b\\">" + productName + "</span>" +\n' +
-        '      "</label>" + feeHtml + "</div>";\n' +
-        '  });\n' +
-        '  container.innerHTML = html;\n' +
-        '}\n' +
-        '\n' +
-        'function updatePricingSummary() {\n' +
-        '  var checked = document.querySelectorAll("[name=selectedProduct]:checked");\n' +
-        '  var summary = document.getElementById("pricing-summary");\n' +
-        '  var table   = document.getElementById("summary-table");\n' +
-        '  if (!checked.length) { summary.style.display = "none"; return; }\n' +
-        '  summary.style.display = "block";\n' +
-        '  var rows = "";\n' +
-        '  checked.forEach(function(cb) {\n' +
-        '    var fees = [];\n' +
-        '    try { fees = JSON.parse(decodeURIComponent(cb.dataset.fees || "[]")); } catch(e) {}\n' +
-        '    rows += "<tr><td colspan=\\"3\\" style=\\"padding:6px 0 2px;font-weight:700;color:#143b6b;font-size:13px\\">" + cb.value + "</td></tr>";\n' +
-        '    fees.forEach(function(f) {\n' +
-        '      var m = f.tierNote ? f.tierNote.match(/^(\\\\d+)\\\\+/) : null;\n' +
-        '      if (f.countNote) {\n' +
-        '        var displayRate = f.rateNote || "";\n' +
-        '        if (m && displayRate.indexOf("minimum") !== -1) displayRate = displayRate.replace(/(\\\\(minimum [^)]+\\\\))/, "$1 for groups under " + m[1] + " employees");\n' +
-        '        rows += "<tr><td colspan=\\"3\\" style=\\"padding:5px 0 1px 12px;font-size:12px;color:#555\\">" + f.label + " \u2014 " + f.countNote + "</td></tr>";\n' +
-        '        rows += "<tr><td style=\\"padding:1px 0 2px 12px\\"></td><td style=\\"padding:1px 8px 2px;font-size:12px;font-weight:700;text-align:right\\">" + f.value + "</td><td style=\\"padding:1px 0 2px;font-size:12px;color:#777\\">" + f.cadence + "</td></tr>";\n' +
-        '        if (displayRate) rows += "<tr><td colspan=\\"3\\" style=\\"padding:0 0 5px 12px;font-size:11px;color:#888;font-style:italic\\">" + displayRate + "</td></tr>";\n' +
-        '      } else {\n' +
-        '        rows += "<tr>" +\n' +
-        '          "<td style=\\"padding:2px 0 2px 12px;font-size:12px;color:#555\\">" + f.label + "</td>" +\n' +
-        '          "<td style=\\"padding:2px 8px;font-size:12px;font-weight:700;text-align:right\\">" + f.value + "</td>" +\n' +
-        '          "<td style=\\"padding:2px 0;font-size:12px;color:#777\\">" + f.cadence + "</td></tr>";\n' +
-        '      }\n' +
-        '    });\n' +
-        '  });\n' +
-        '  table.innerHTML = rows;\n' +
-        '}\n' +
-        '\n' +
-        'async function submitCommitment(e) {\n' +
-        '  e.preventDefault();\n' +
-        '  var checked = document.querySelectorAll("[name=selectedProduct]:checked");\n' +
-        '  if (!checked.length) { alert("Please select at least one product to proceed with."); return; }\n' +
-        '  var form = e.target;\n' +
-        '  var authSigner = form.authSigner.value.trim();\n' +
-        '  form.acceptedPrint.value = authSigner;\n' +
-        '  form.acceptedSign.value  = authSigner;\n' +
-        '  var btn = document.getElementById("commitBtn");\n' +
-        '  var msg = document.getElementById("commitMsg");\n' +
-        '  btn.disabled = true; btn.textContent = "Submitting\\u2026";\n' +
-        '  var products = [];\n' +
-        '  checked.forEach(function(cb) {\n' +
-        '    var fees = [];\n' +
-        '    try { fees = JSON.parse(decodeURIComponent(cb.dataset.fees || "[]")); } catch(e) {}\n' +
-        '    products.push({ name: cb.value, fees: fees });\n' +
-        '  });\n' +
-        '  var payload = {};\n' +
-        '  ["quoteNumber","employerName","address","cityStateZip","authSigner","authTitle","authEmail","authPhone","hrContact","hrTitle","hrEmail","hrPhone","startDate","acceptedPrint","acceptedSign"].forEach(function(k) {\n' +
-        '    payload[k] = form[k] ? form[k].value : "";\n' +
-        '  });\n' +
-        '  payload.products = products;\n' +
-        '  try {\n' +
-        '    var res = await fetch("' + workerOrigin + '/api/commitments", {\n' +
-        '      method: "POST",\n' +
-        '      headers: { "Content-Type": "application/json" },\n' +
-        '      body: JSON.stringify(payload)\n' +
-        '    });\n' +
-        '    if (res.ok) {\n' +
-        '      msg.style.display = "block"; msg.style.color = "#1a5c3a";\n' +
-        '      msg.innerHTML = "<strong>\\u2713 Authorization received.<\\/strong> ABY Benefits has been notified. You may print or save this page for your records.";\n' +
-        '      btn.style.display = "none";\n' +
-        '      window.print();\n' +
-        '    } else {\n' +
-        '      msg.style.display = "block"; msg.style.color = "#c00";\n' +
-        '      msg.textContent = "Submission failed. Please contact ABY Benefits directly.";\n' +
-        '      btn.disabled = false; btn.textContent = "Submit Authorization to ABY";\n' +
-        '    }\n' +
-        '  } catch(err) {\n' +
-        '    msg.style.display = "block"; msg.style.color = "#c00";\n' +
-        '    msg.textContent = "Network error. Please contact ABY Benefits directly.";\n' +
-        '    btn.disabled = false; btn.textContent = "Submit Authorization to ABY";\n' +
-        '  }\n' +
-        '}\n' +
-        '\n' +
-        '(function() {\n' +
-        '  function fmtPhone(v) {\n' +
-        '    var d = String(v||"").replace(/\\D/g,"");\n' +
-        '    if(d.length===11&&d[0]==="1")d=d.slice(1);\n' +
-        '    if(d.length!==10)return v;\n' +
-        '    return "("+d.slice(0,3)+") "+d.slice(3,6)+"-"+d.slice(6);\n' +
-        '  }\n' +
-        '  ["authPhone","hrPhone"].forEach(function(n){\n' +
-        '    var el=document.querySelector("[name="+n+"]");\n' +
-        '    if(el)el.addEventListener("blur",function(){this.value=fmtPhone(this.value);});\n' +
-        '  });\n' +
-        '})();\n' +
-        '<\/script>',
-        '</div>'
-      ].join('\n');
-
-      var doc = [
-        '<!DOCTYPE html>',
-        '<html lang="en">',
-        '<head>',
-        '<meta charset="UTF-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
-        '<title>' + titleText + '</title>',
-        '<link href=\"https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600&display=swap\" rel=\"stylesheet\">',
-        '<style>',
-        'body { margin: 40px auto; max-width: 960px; background: #f3f4f6; }',
-        css,
-        '</style>',
-        '</head>',
-        '<body>',
-        element.outerHTML,
-        acceptanceForm,
-        '</body>',
-        '</html>'
-      ].join('\n');
-
-      var blob = new Blob([doc], { type: 'text/html' });
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
-    });
   }
 
   function resetForm() {
