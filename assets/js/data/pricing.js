@@ -482,4 +482,10 @@ ABYQuote.pricing = {
   }
 };
 
+// ── Multi-state wrap ────────────────────────────────────────────
+// The rate set above is Texas pricing. We nest it under a state key so the
+// engine can read pricing[state]. TX is the only state in this public file;
+// other states are ABY-only and are supplied to the /aby view separately, so
+// broker (public) pages never contain non-TX pricing. Adding a state later is
+// a pure data addition: ABYQuote.pricing.CA = { commissioned:{...}, noCommission:{...} }.
 ABYQuote.pricing = { TX: ABYQuote.pricing };
