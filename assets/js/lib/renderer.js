@@ -207,21 +207,32 @@ ABYQuote.renderer = (function () {
   }
 
   function renderOptionsTable(group, meta, recommendedPackageId) {
+    // Products with a single annual fee (e.g. ERISA) show one "Annual fee"
+    // column instead of separate setup + renewal.
+    var annualOnly = group.results.every(function (r) { return !r.setupFee && r.renewalFee == null && r.annualFee != null; });
     var rows = group.results.map(function (r) {
       var pkg = findPackage(meta, r.packageId) || {};
       var parsed = splitPackageName(pkg.name || r.packageLabel || r.packageId);
       var isRec = recommendedPackageId && r.packageId === recommendedPackageId;
+      var recTag = isRec ? '<span class="rec-tag">Recommended</span>' : '';
+      var included = '<td>' + esc(parsed.detail || pkg.description || '') + '</td>';
+      var nameCell = '<td>' + esc(parsed.name) + recTag + '</td>';
+      if (annualOnly) {
+        return '<tr' + (isRec ? ' class="recommended"' : '') + '>' + nameCell + included +
+          '<td>' + (r.annualFee != null ? u.money(r.annualFee.amount) : 'n/a') + '</td></tr>';
+      }
       var setup = r.setupFee ? u.money(r.setupFee.amount) : (r.annualFee ? u.money(r.annualFee.amount) : 'n/a');
       var renew = (r.renewalFee != null) ? u.money(r.renewalFee.amount) : 'n/a';
-      return '<tr' + (isRec ? ' class="recommended"' : '') + '>' +
-        '<td>' + esc(parsed.name) + (isRec ? '<span class="rec-tag">Recommended</span>' : '') + '</td>' +
-        '<td>' + esc(parsed.detail || pkg.description || '') + '</td>' +
+      return '<tr' + (isRec ? ' class="recommended"' : '') + '>' + nameCell + included +
         '<td>' + setup + '</td>' +
         '<td>' + renew + '</td></tr>';
     }).join('\n');
+    var head = annualOnly
+      ? '  <thead><tr><th>Option</th><th>What is included</th><th>Annual fee</th></tr></thead>'
+      : '  <thead><tr><th>Option</th><th>What is included</th><th>Setup fee</th><th>Annual renewal</th></tr></thead>';
     return [
       '<table class="options-table">',
-      '  <thead><tr><th>Option</th><th>What is included</th><th>Setup fee</th><th>Annual renewal</th></tr></thead>',
+      head,
       '  <tbody>' + rows + '</tbody>',
       '</table>'
     ].join('\n');
