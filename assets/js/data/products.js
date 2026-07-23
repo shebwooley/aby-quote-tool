@@ -71,11 +71,12 @@ ABYQuote.products = [
     shortName: 'ERISA Wrap Document',
     inputType: 'multi-package',
     packages: [
-      { id: 'basic', name: 'Basic: Electronic Wrap "Legal Text" only' },
-      { id: 'buyUp', name: 'Buy-Up: Wrap + Section 125 POP (no NDT testing)' },
-      { id: 'enhanced', name: 'Enhanced: Wrap + Section 125 POP w/Testing for POP & HSA' },
-      { id: 'fullPlan', name: 'Full Plan: Full SPD + POP w/Testing + Compliance Binder' },
-      { id: 'whiteGlove', name: 'White Glove: Full SPD + POP w/Testing + 5500 Filing + Compliance Binder' }
+      { id: 'basic', name: 'Basic: Electronic wrap "legal text" only' },
+      { id: 'buyUp', name: 'Buy-Up: Electronic wrap "legal text" and Section 125 plan without testing' },
+      { id: 'enhanced', name: 'Enhanced: Electronic wrap "legal text" and Section 125 plan with POP/HSA testing' },
+      { id: 'fullSpd', name: 'Full SPD: Full SPD and Section 125 plan without testing' },
+      { id: 'fullSpdTesting', name: 'Full SPD + Testing: Full SPD and Section 125 plan with POP/HSA testing' },
+      { id: 'whiteGlove', name: 'White Glove: Full SPD, Section 125 plan with POP/HSA testing, and Form 5500 filing' }
     ]
   },
   {
