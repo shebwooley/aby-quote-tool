@@ -75,7 +75,7 @@ ABYQuote.pricing = {
         { label: 'Debit card order', amount: 5, unit: 'per order', description: 'Charged when new or replacement participant debit cards are ordered.' },
         { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' },
         { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
-        { label: 'Custom file feed integration', amount: 0, unit: 'fee depends on provider', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
+        { label: 'Custom file feed integration', amount: 750, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
         { label: 'Paper enrollment material', amount: 2, unit: 'per packet', description: '' }
       ],
       notes: ['Custodian: HSAToday. Participant-incurred ancillary fees (overdrafts, replacement cards, etc.) are billed directly to the account holder by the custodian.']
@@ -94,7 +94,7 @@ ABYQuote.pricing = {
         { label: 'Direct deposits', amount: 0, description: 'Participant reimbursements paid by ACH at no per-transaction charge.' },
         { label: 'Paper checks', amount: 5, unit: 'per check', description: 'Issued when a participant is paid by mailed check instead of direct deposit.' },
         { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' },
-        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' }
+        { label: 'Custom file feed integration', amount: 750, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' }
       ]
     },
 
@@ -104,9 +104,9 @@ ABYQuote.pricing = {
         fullAdmin: {
           setupFee: 125, renewalFee: 125,
           monthlyTiers: [
-            { maxCount: 17,   type: 'flat', amount: 85,   label: '<18 participants' },
-            { maxCount: 74,   type: 'pppm', amount: 4.50, minMonthly: 85, label: '18–74 participants' },
-            { maxCount: null, type: 'pppm', amount: 4.25, minMonthly: 85, label: '75+ participants' }
+            { maxCount: 19,   type: 'flat', amount: 85,   label: '<20 participants' },
+            { maxCount: 99,   type: 'pppm', amount: 4.50, minMonthly: 85, label: '20–99 participants' },
+            { maxCount: null, type: 'pppm', amount: 4.25, minMonthly: 85, label: '100+ participants' }
           ],
           description: 'Full administration including documents, SPD, and ongoing administration',
           requiresCount: true
@@ -115,7 +115,7 @@ ABYQuote.pricing = {
       },
       additionalFees: [
         { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
-        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
+        { label: 'Custom file feed integration', amount: 750, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
         { label: 'Direct deposits', amount: 0, description: 'Participant reimbursements paid by ACH at no per-transaction charge.' },
         { label: 'Paper checks', amount: 5, unit: 'per check', description: 'Issued when a participant is paid by mailed check instead of direct deposit.' },
         { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' }
@@ -135,8 +135,9 @@ ABYQuote.pricing = {
         { label: 'Initial/general rights notices at setup or renewal (optional)', amount: 3, unit: 'per notice', description: 'If you would like ABY to mail the general rights notice to your entire covered population at setup or renewal, it is $3 per notice mailed.' },
         { label: 'COBRA participants', amount: 0, unit: 'per participant per month', description: 'There is no separate per-person charge for individuals actively enrolled in COBRA; their administration is covered by your monthly admin fee.' },
         { label: 'COBRA takeover', amount: 5, unit: 'per current participant (one-time)', description: 'A one-time fee to move existing COBRA participants from a prior administrator onto ABY\'s system, including their records, payment history, and remaining coverage timeline.' },
+        { label: 'Retro notices', amount: 5, unit: 'per notice', description: 'A notice sent when COBRA coverage is applied or corrected retroactively.' },
         { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
-        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
+        { label: 'Custom file feed integration', amount: 750, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
         { label: 'Open enrollment: generic renewal notice', amount: 0, description: 'A general open-enrollment notice to participants about renewal and any plan changes. Included.' },
         { label: 'Open enrollment: full COBRA renewal packet mailed', amount: 15, unit: 'per packet', description: 'A complete printed renewal packet (new rates, plan summaries, and election materials) mailed to each COBRA participant at open enrollment.' }
       ],
@@ -157,6 +158,7 @@ ABYQuote.pricing = {
         { label: 'Initial Rights notices during plan year', amount: 0, unit: 'per notice', description: '' },
         { label: 'Initial Rights notices at setup or renewal', amount: 1.50, unit: 'per notice', description: '' },
         { label: 'Takeover participants', amount: 5, unit: 'per participant (one-time)', description: '' },
+        { label: 'Retro notices', amount: 5, unit: 'per notice', description: 'A notice sent when continuation coverage is applied or corrected retroactively.' },
         { label: 'Continuation participants', amount: 0, unit: 'per month', description: '' },
         { label: 'Open enrollment: generic renewal notice', amount: 0, description: 'A general open-enrollment notice to participants about renewal and any plan changes. Included.' },
         { label: 'Open enrollment: full continuation packet mailed', amount: 15, unit: 'per packet', description: 'A complete printed renewal packet mailed to each continuation participant at open enrollment.' }
@@ -166,11 +168,12 @@ ABYQuote.pricing = {
     erisa: {
       type: 'package',
       packages: {
-        basic:      { setupFee: 400,  renewalFee: 300, description: 'Electronic Wrap "Legal Text" only' },
-        buyUp:      { setupFee: 500,  renewalFee: 400, description: 'Electronic Wrap + Section 125 POP (no NDT testing)' },
-        enhanced:   { setupFee: 625,  renewalFee: 500, description: 'Electronic Wrap + Section 125 POP w/Testing for POP & HSA' },
-        fullPlan:   { setupFee: 950,  renewalFee: 625, description: 'Full SPD + Section 125 POP w/Testing + Compliance Binder' },
-        whiteGlove: { setupFee: 1100, renewalFee: 750, description: 'Full SPD + Section 125 POP w/Testing + 5500 Filing + Compliance Binder' }
+        basic:          { annualFee: 425,  description: 'Electronic wrap "legal text" only' },
+        buyUp:          { annualFee: 525,  description: 'Electronic wrap "legal text" and Section 125 plan without testing' },
+        enhanced:       { annualFee: 700,  description: 'Electronic wrap "legal text" and Section 125 plan with POP/HSA testing' },
+        fullSpd:        { annualFee: 700,  description: 'Full SPD and Section 125 plan without testing' },
+        fullSpdTesting: { annualFee: 875,  description: 'Full SPD and Section 125 plan with POP/HSA testing' },
+        whiteGlove:     { annualFee: 1100, description: 'Full SPD, Section 125 plan with POP/HSA testing, and Form 5500 filing' }
       },
       additionalFees: [
         { label: 'Annual Notice Packet', amount: 125, unit: 'per year', description: 'Includes GINA, CHIP, Medicare Creditable Coverage, HIPAA Special Enrollment, and Notice of Exchange.' },
@@ -210,7 +213,7 @@ ABYQuote.pricing = {
       },
       additionalFees: [
         { label: 'Standard file feed integration', amount: 0, description: 'Automated eligibility feed from a supported payroll or HRIS system, in ABY format.' },
-        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built feed for a provider not already integrated with ABY.' },
+        { label: 'Custom file feed integration', amount: 750, unit: 'annually', description: 'A custom-built feed for a provider not already integrated with ABY.' },
         { label: 'Direct deposits', amount: 0, description: 'Reimbursements paid to participants by ACH at no per-transaction charge.' },
         { label: 'Paper checks', amount: 5, unit: 'per check', description: 'Issued when a participant is paid by mailed check instead of direct deposit.' },
         { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' },
@@ -355,7 +358,7 @@ ABYQuote.pricing = {
         { label: 'Debit card order', amount: 5, unit: 'per order', description: 'Charged when new or replacement participant debit cards are ordered.' },
         { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' },
         { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
-        { label: 'Custom file feed integration', amount: 0, unit: 'fee depends on provider', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
+        { label: 'Custom file feed integration', amount: 750, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
         { label: 'Paper enrollment material', amount: 2, unit: 'per packet', description: '' }
       ],
       notes: ['Custodian: HSAToday. Participant-incurred ancillary fees (overdrafts, replacement cards, etc.) are billed directly to the account holder by the custodian.']
@@ -374,7 +377,7 @@ ABYQuote.pricing = {
         { label: 'Direct deposits', amount: 0, description: 'Participant reimbursements paid by ACH at no per-transaction charge.' },
         { label: 'Paper checks', amount: 5, unit: 'per check', description: 'Issued when a participant is paid by mailed check instead of direct deposit.' },
         { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' },
-        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' }
+        { label: 'Custom file feed integration', amount: 750, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' }
       ]
     },
 
@@ -384,9 +387,9 @@ ABYQuote.pricing = {
         fullAdmin: {
           setupFee: 100, renewalFee: 100,
           monthlyTiers: [
-            { maxCount: 17,   type: 'flat', amount: 80,   label: '<18 participants' },
-            { maxCount: 74,   type: 'pppm', amount: 4.25, minMonthly: 80, label: '18–74 participants' },
-            { maxCount: null, type: 'pppm', amount: 4.00, minMonthly: 80, label: '75+ participants' }
+            { maxCount: 19,   type: 'flat', amount: 80,   label: '<20 participants' },
+            { maxCount: 99,   type: 'pppm', amount: 4.25, minMonthly: 80, label: '20–99 participants' },
+            { maxCount: null, type: 'pppm', amount: 4.00, minMonthly: 80, label: '100+ participants' }
           ],
           description: 'Full administration including documents, SPD, and ongoing administration',
           requiresCount: true
@@ -395,7 +398,7 @@ ABYQuote.pricing = {
       },
       additionalFees: [
         { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
-        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
+        { label: 'Custom file feed integration', amount: 750, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
         { label: 'Direct deposits', amount: 0, description: 'Participant reimbursements paid by ACH at no per-transaction charge.' },
         { label: 'Paper checks', amount: 5, unit: 'per check', description: 'Issued when a participant is paid by mailed check instead of direct deposit.' },
         { label: 'Mobile app', amount: 0, description: 'Participant mobile app and online account access.' }
@@ -415,8 +418,9 @@ ABYQuote.pricing = {
         { label: 'Initial/general rights notices at setup or renewal (optional)', amount: 3, unit: 'per notice', description: 'If you would like ABY to mail the general rights notice to your entire covered population at setup or renewal, it is $3 per notice mailed.' },
         { label: 'COBRA participants', amount: 0, unit: 'per participant per month', description: 'There is no separate per-person charge for individuals actively enrolled in COBRA; their administration is covered by your monthly admin fee.' },
         { label: 'COBRA takeover', amount: 5, unit: 'per current participant (one-time)', description: 'A one-time fee to move existing COBRA participants from a prior administrator onto ABY\'s system, including their records, payment history, and remaining coverage timeline.' },
+        { label: 'Retro notices', amount: 5, unit: 'per notice', description: 'A notice sent when COBRA coverage is applied or corrected retroactively.' },
         { label: 'Standard file feed integration', amount: 0, description: 'An automated eligibility feed from a supported payroll or HRIS system so enrollment changes flow to ABY automatically.' },
-        { label: 'Custom file feed integration', amount: 500, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
+        { label: 'Custom file feed integration', amount: 750, unit: 'annually', description: 'A custom-built eligibility feed for a payroll or HRIS provider not already integrated with ABY, using our SFTPs.' },
         { label: 'Open enrollment: generic renewal notice', amount: 0, description: 'A general open-enrollment notice to participants about renewal and any plan changes. Included.' },
         { label: 'Open enrollment: full COBRA renewal packet mailed', amount: 15, unit: 'per packet', description: 'A complete printed renewal packet (new rates, plan summaries, and election materials) mailed to each COBRA participant at open enrollment.' }
       ],
@@ -437,6 +441,7 @@ ABYQuote.pricing = {
         { label: 'Initial Rights notices during plan year', amount: 0, unit: 'per notice', description: '' },
         { label: 'Initial Rights notices at setup or renewal', amount: 1.50, unit: 'per notice', description: '' },
         { label: 'Takeover participants', amount: 5, unit: 'per participant (one-time)', description: '' },
+        { label: 'Retro notices', amount: 5, unit: 'per notice', description: 'A notice sent when continuation coverage is applied or corrected retroactively.' },
         { label: 'Continuation participants', amount: 0, unit: 'per month', description: '' },
         { label: 'Open enrollment: generic renewal notice', amount: 0, description: 'A general open-enrollment notice to participants about renewal and any plan changes. Included.' },
         { label: 'Open enrollment: full continuation packet mailed', amount: 15, unit: 'per packet', description: 'A complete printed renewal packet mailed to each continuation participant at open enrollment.' }
@@ -446,11 +451,12 @@ ABYQuote.pricing = {
     erisa: {
       type: 'package',
       packages: {
-        basic:      { setupFee: 375,  renewalFee: 275, description: 'Electronic Wrap "Legal Text" only' },
-        buyUp:      { setupFee: 475,  renewalFee: 375, description: 'Electronic Wrap + Section 125 POP (no NDT testing)' },
-        enhanced:   { setupFee: 575,  renewalFee: 475, description: 'Electronic Wrap + Section 125 POP w/Testing for POP & HSA' },
-        fullPlan:   { setupFee: 900,  renewalFee: 600, description: 'Full SPD + Section 125 POP w/Testing + Compliance Binder' },
-        whiteGlove: { setupFee: 1025, renewalFee: 700, description: 'Full SPD + Section 125 POP w/Testing + 5500 Filing + Compliance Binder' }
+        basic:          { annualFee: 400,  description: 'Electronic wrap "legal text" only' },
+        buyUp:          { annualFee: 500,  description: 'Electronic wrap "legal text" and Section 125 plan without testing' },
+        enhanced:       { annualFee: 675,  description: 'Electronic wrap "legal text" and Section 125 plan with POP/HSA testing' },
+        fullSpd:        { annualFee: 675,  description: 'Full SPD and Section 125 plan without testing' },
+        fullSpdTesting: { annualFee: 825,  description: 'Full SPD and Section 125 plan with POP/HSA testing' },
+        whiteGlove:     { annualFee: 1050, description: 'Full SPD, Section 125 plan with POP/HSA testing, and Form 5500 filing' }
       },
       additionalFees: [
         { label: 'Annual Notice Packet', amount: 125, unit: 'per year', description: 'Includes GINA, CHIP, Medicare Creditable Coverage, HIPAA Special Enrollment, and Notice of Exchange.' },
@@ -476,7 +482,7 @@ ABYQuote.pricing = {
   }
 };
 
-// ── Multi-state wrap ────────────────────────────────────────────────────────
+// ── Multi-state wrap ────────────────────────────────────────────
 // The rate set above is Texas pricing. We nest it under a state key so the
 // engine can read pricing[state]. TX is the only state in this public file;
 // other states are ABY-only and are supplied to the /aby view separately, so
