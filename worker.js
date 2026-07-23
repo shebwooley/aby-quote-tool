@@ -14,6 +14,11 @@
 
 const COOKIE_NAME = 'aby_admin';
 
+// TEMPORARY SITE LOCK. While true, the whole public tool (and its assets) requires
+// the same aby_admin login as /admin. The standalone /july-2026 page stays open so
+// it can be shared with brokers. Flip to false (and redeploy) to reopen the tool.
+const SITE_LOCKED = true;
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -144,6 +149,18 @@ export default {
         return jsonResp({ status: res.status, ok: res.ok, response: body });
       } catch (err) {
         return jsonResp({ error: err.message });
+      }
+    }
+
+    // ── Temporary site lock ─────────────────────────────────────────────────────
+    // Everything that reaches here (the tool at '/', its JS/CSS/images) is gated
+    // behind the admin login while SITE_LOCKED is true, except the open pages below.
+    if (SITE_LOCKED && !isOpenPath(path)) {
+      if (!(await isAuthed(request, env))) {
+        return new Response(loginHTML(), {
+          status: 401,
+          headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+        });
       }
     }
 
@@ -527,6 +544,11 @@ async function isAuthed(request, env) {
   const cookies = parseCookies(request.headers.get('Cookie') || '');
   const token = cookies[COOKIE_NAME];
   return !!(token && await verifyToken(token, env.ADMIN_PASSWORD));
+}
+
+// Paths that stay public even while SITE_LOCKED is true. Add more here as needed.
+function isOpenPath(path) {
+  return path === '/july-2026' || path === '/july-2026/' || path === '/july-2026.html';
 }
 
 // Serve the same front end as the public tool, plus the internal overlay script.
