@@ -98,59 +98,22 @@ export default {
     }
 
     // ── Diagnostics ─────────────────────────────────────────────────────────────
-    if (path === '/api/debug') {
-      // Test DB connectivity and schema
-      let dbStatus = 'not bound';
-      let quoteCount = null;
-      let hasStatusCol = null;
-      if (env.DB) {
-        try {
-          const r = await env.DB.prepare('SELECT COUNT(*) AS n FROM quotes').first();
-          quoteCount = r ? r.n : 0;
-          dbStatus = 'connected';
-        } catch (e) {
-          dbStatus = 'error: ' + String(e);
-        }
-        try {
-          // PRAGMA table_info returns one row per column
-          const cols = await env.DB.prepare("PRAGMA table_info('quotes')").all();
-          hasStatusCol = (cols.results || []).some(c => c.name === 'status');
-        } catch (e) {
-          hasStatusCol = 'error: ' + String(e);
-        }
-      }
-      return jsonResp({
-        hasResendKey:     !!env.RESEND_API_KEY,
-        resendKeyPrefix:  env.RESEND_API_KEY ? env.RESEND_API_KEY.slice(0, 6) : 'MISSING',
-        hasAdminPassword: !!env.ADMIN_PASSWORD,
-        hasFromEmail:     !!env.FROM_EMAIL,
-        fromEmail:        env.FROM_EMAIL || 'MISSING',
-        dbStatus,
-        quoteCount,
-        hasStatusCol,
-      });
-    }
-    if (path === '/api/test-email') {
-      try {
-        const res = await fetch('https://api.resend.com/emails', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${env.RESEND_API_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            from: `ABY Quote Tool <${env.FROM_EMAIL || 'onboarding@resend.dev'}>`,
-            to: ['eric@comedyce.com'],
-            subject: 'ABY Quote Tool — test email',
-            html: '<p>This is a test. If you got this, email notifications are working.</p>',
-          }),
-        });
-        const body = await res.text();
-        return jsonResp({ status: res.status, ok: res.ok, response: body });
-      } catch (err) {
-        return jsonResp({ error: err.message });
-      }
-    }
+    // REMOVED 2026-08-04, on Eric's decision of 2026-07-23: `/api/debug` and
+    // `/api/test-email` were both PUBLIC, with no auth in front of either.
+    //
+    // `/api/debug` returned the first 6 characters of the Resend API key, the
+    // from-address, whether an admin password was set, the D1 connection state and
+    // a live quote count — reconnaissance, served to anyone who knew the path.
+    // `/api/test-email` sent a real message through Resend on every GET. Its `to:`
+    // was hardcoded, so it could not be used to spam third parties, but it burned
+    // Resend quota and filled one inbox on demand.
+    //
+    // Neither was reachable from the UI; both were development conveniences that
+    // outlived their purpose and stayed public for a year of commits.
+    //
+    // If diagnostics are ever wanted again, wrap them in `withAuth` the way
+    // `/api/quotes-ping` and `/api/migrate` already are (a few lines above) —
+    // do not reintroduce an unauthenticated variant.
 
     // ── Temporary site lock ─────────────────────────────────────────────────────
     // Everything that reaches here (the tool at '/', its JS/CSS/images) is gated
