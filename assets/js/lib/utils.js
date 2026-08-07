@@ -52,7 +52,25 @@ ABYQuote.utils = (function () {
   // To deploy for another state, change QUOTE_STATE_PREFIX.
   // -------------------------------------------------------------
 
+  // The DEFAULT state prefix. Still 'TX', still the answer for every public quote.
   var QUOTE_STATE_PREFIX = 'TX';
+
+  /**
+   * The prefix a quote number should actually carry.
+   *
+   * The comment above says "to deploy for another state, change QUOTE_STATE_PREFIX", which was
+   * written for a ONE-STATE-PER-DEPLOYMENT model. The ABY-only overlay has since outgrown it: it
+   * switches state at RUNTIME via `window.ABY_STATE` and routes it into the engine, so the RATES
+   * follow the state while the NUMBER did not -- a California quote came out `TX260806-...` while
+   * its rates, its saved `state` column and its admin row all said CA. F-344.
+   *
+   * Falls back to the default unless the overlay has set a plausible two-letter code, so the public
+   * tool -- which never sets `ABY_STATE` -- is byte-identical to before.
+   */
+  function quoteStatePrefix() {
+    var s = (typeof window !== 'undefined' && window.ABY_STATE) ? String(window.ABY_STATE).toUpperCase() : '';
+    return /^[A-Z]{2}$/.test(s) ? s : QUOTE_STATE_PREFIX;
+  }
 
   function todayShort() {
     var d = new Date();
@@ -66,7 +84,7 @@ ABYQuote.utils = (function () {
     // First param kept for backward compatibility with app.js; ignored.
     var random = String(Math.floor(1000 + Math.random() * 9000));
     var suffix = commissioned ? 'C' : 'NC';
-    return QUOTE_STATE_PREFIX + todayShort() + '-' + random + '-' + suffix;
+    return quoteStatePrefix() + todayShort() + '-' + random + '-' + suffix;
   }
 
   // -------------------------------------------------------------

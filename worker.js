@@ -144,6 +144,7 @@ async function handleSaveQuote(request, env, ctx) {
 
   const {
     quoteNumber        = 'UNKNOWN',
+    clientId           = '',
     clientName         = '',
     effectiveDate      = '',
     brokerName         = '',
@@ -169,35 +170,116 @@ async function handleSaveQuote(request, env, ctx) {
   const adjustmentJson = (ranBy === 'ABY' && adjustment) ? JSON.stringify(adjustment) : null;
   const adjustmentNoteVal = (ranBy === 'ABY') ? String(adjustmentNote || '') : '';
 
+  const productsJson = JSON.stringify(products);
+
+  // ── Save: insert, revise, or do nothing (F-339) ──────────────────────────────────────
+  //
+  // This used to be a bare INSERT, so re-opening a saved quote added a ROW and re-sent the
+  // notification email. Eric's decision, 2026-08-06, is three cases and they are handled here:
+  //   re-opened, nothing changed  -> same number, NO new record, no email
+  //   something changed           -> same number, revision + 1, notify
+  //   a deliberately new quote    -> a new number arrives, so this is an INSERT
+  //
+  // ⚠️ WRITTEN AS SELECT-THEN-BRANCH, NOT `ON CONFLICT ... DO UPDATE ... RETURNING`, ON PURPOSE.
+  // The elegant upsert needs two D1 behaviours (ON CONFLICT and RETURNING) that CANNOT be
+  // exercised without deploying, and the failure mode if either is unsupported is the worst one
+  // available here: `save-hook.js` swallows errors by design, so every save would fail SILENTLY
+  // and brokers would go on quoting into nothing. Plain SELECT / UPDATE / INSERT are already used
+  // elsewhere in this file, so they are known to work. Predictability beats elegance in code that
+  // ships untested.
+  let existing = null;
   try {
-    await env.DB.prepare(`
-      INSERT INTO quotes
-        (id, quote_number, created_at, client_name, effective_date,
-         broker_name, broker_agency, broker_phone, broker_email,
-         rep_name, rep_phone, rep_email, commission_included, products,
-         ran_by, state, adjustment, adjustment_note)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).bind(
-      id, quoteNumber, now, clientName, effectiveDate,
-      brokerName, brokerAgency, brokerPhone, brokerEmail,
-      repName, repPhone, repEmail,
-      commissionIncluded ? 1 : 0,
-      JSON.stringify(products),
-      ranBy, stateCode, adjustmentJson, adjustmentNoteVal
-    ).run();
+    existing = await env.DB.prepare(
+      'SELECT id, revision, client_name, effective_date, commission_included, products, state, adjustment FROM quotes WHERE quote_number = ?'
+    ).bind(quoteNumber).first();
   } catch (err) {
-    console.error('DB insert failed:', err);
-    return jsonResp({ error: 'Failed to save quote' }, 500);
+    // A pre-migration database has no `revision` column. Treat that as "not found" rather than
+    // failing the save: an unsaved quote is worse than an un-revised one.
+    console.error('DB lookup failed (continuing as insert):', err);
   }
 
-  const origin = new URL(request.url).origin;
-  try {
-    await sendEmail(env, { id, quoteNumber, clientName, effectiveDate, brokerName, brokerAgency, repName, repEmail, commissionIncluded, products, origin });
-  } catch (err) {
-    console.error('Email send failed:', err.message);
+  let rowId = id;
+  let isNew = true;
+  let unchanged = false;
+
+  if (existing) {
+    rowId = existing.id;
+    isNew = false;
+    // Did anything a reader would care about actually move? If not this is a re-open, and a
+    // re-open must leave no trace at all -- that is the whole point of the fix.
+    unchanged =
+      String(existing.client_name || '') === String(clientName || '') &&
+      String(existing.effective_date || '') === String(effectiveDate || '') &&
+      Number(existing.commission_included) === (commissionIncluded ? 1 : 0) &&
+      String(existing.products || '') === productsJson &&
+      String(existing.state || 'TX') === stateCode &&
+      String(existing.adjustment || '') === String(adjustmentJson || '');
   }
 
-  return jsonResp({ id, quoteNumber });
+  if (!existing) {
+    try {
+      await env.DB.prepare(`
+        INSERT INTO quotes
+          (id, quote_number, created_at, client_name, effective_date,
+           broker_name, broker_agency, broker_phone, broker_email,
+           rep_name, rep_phone, rep_email, commission_included, products,
+           ran_by, state, adjustment, adjustment_note, client_id, revision)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+      `).bind(
+        id, quoteNumber, now, clientName, effectiveDate,
+        brokerName, brokerAgency, brokerPhone, brokerEmail,
+        repName, repPhone, repEmail,
+        commissionIncluded ? 1 : 0,
+        productsJson,
+        ranBy, stateCode, adjustmentJson, adjustmentNoteVal,
+        String(clientId || '')
+      ).run();
+    } catch (err) {
+      console.error('DB insert failed:', err);
+      return jsonResp({ error: 'Failed to save quote' }, 500);
+    }
+  } else if (!unchanged) {
+    try {
+      // `id`, `quote_number` and `created_at` are deliberately NOT updated. The number keeps its
+      // ORIGINAL creation date because that date is embedded in it -- a moving date is a moving
+      // number, which is the bug (Eric raised this himself).
+      await env.DB.prepare(`
+        UPDATE quotes SET
+          client_name = ?, effective_date = ?,
+          broker_name = ?, broker_agency = ?, broker_phone = ?, broker_email = ?,
+          rep_name = ?, rep_phone = ?, rep_email = ?, commission_included = ?, products = ?,
+          ran_by = ?, state = ?, adjustment = ?, adjustment_note = ?,
+          client_id = CASE WHEN ? <> '' THEN ? ELSE client_id END,
+          revision = COALESCE(revision, 1) + 1
+        WHERE quote_number = ?
+      `).bind(
+        clientName, effectiveDate,
+        brokerName, brokerAgency, brokerPhone, brokerEmail,
+        repName, repPhone, repEmail,
+        commissionIncluded ? 1 : 0,
+        productsJson,
+        ranBy, stateCode, adjustmentJson, adjustmentNoteVal,
+        String(clientId || ''), String(clientId || ''),
+        quoteNumber
+      ).run();
+    } catch (err) {
+      console.error('DB update failed:', err);
+      return jsonResp({ error: 'Failed to save quote' }, 500);
+    }
+  }
+
+  // Notify on a NEW quote or a real revision -- never on a re-open, which is the duplicate
+  // notification this fix removes.
+  if (isNew || !unchanged) {
+    const origin = new URL(request.url).origin;
+    try {
+      await sendEmail(env, { id: rowId, quoteNumber, clientName, effectiveDate, brokerName, brokerAgency, repName, repEmail, commissionIncluded, products, origin });
+    } catch (err) {
+      console.error('Email send failed:', err.message);
+    }
+  }
+
+  return jsonResp({ id: rowId, quoteNumber, revision: existing ? (Number(existing.revision || 1) + (unchanged ? 0 : 1)) : 1, unchanged });
 }
 
 // ─── Quote: list (admin) ───────────────────────────────────────────────────────
@@ -210,7 +292,7 @@ async function handleListQuotes(request, env) {
 
   const ranByFilter = (url.searchParams.get('ran_by') || '').trim();   // '', 'ABY', or 'broker'
   const stateFilter  = (url.searchParams.get('state')  || '').trim().toUpperCase();
-  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, COALESCE(state, 'TX') AS state, adjustment, adjustment_note";
+  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, COALESCE(state, 'TX') AS state, adjustment, adjustment_note, client_id";
 
   try {
     const where = [];
@@ -359,6 +441,13 @@ async function handleSaveCommitment(request, env) {
 
   const {
     quoteNumber    = 'UNKNOWN',
+    // Added 2026-08-06 (F-345). `commitments` stored NO broker at all -- its only link to one
+    // was `quote_number`, which is not unique until the F-339 migration lands. So "who is the
+    // broker on this signed authorization?" could only be answered through a key that could
+    // collide, and the admin list simply did not show it. These arrive as hidden fields on
+    // the authorization form the employer signs.
+    clientId       = '',
+    brokerEmail    = '',
     employerName   = '',
     address        = '',
     cityStateZip   = '',
@@ -382,14 +471,16 @@ async function handleSaveCommitment(request, env) {
         (id, quote_number, submitted_at, employer_name, address, city_state_zip,
          auth_signer, auth_title, auth_email, auth_phone,
          hr_contact, hr_title, hr_email, hr_phone,
-         start_date, accepted_print, accepted_sign, products)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         start_date, accepted_print, accepted_sign, products,
+         client_id, broker_email)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).bind(
       id, quoteNumber, now, employerName, address, cityStateZip,
       authSigner, authTitle, authEmail, authPhone,
       hrContact, hrTitle, hrEmail, hrPhone,
       startDate, acceptedPrint, acceptedSign,
-      JSON.stringify(products)
+      JSON.stringify(products),
+      String(clientId || ''), String(brokerEmail || '')
     ).run();
   } catch (err) {
     console.error('Commitment insert failed:', err);
@@ -400,13 +491,41 @@ async function handleSaveCommitment(request, env) {
 }
 
 async function handleListCommitments(request, env) {
+  // ⭐ The broker comes from the commitment's OWN columns first, and only falls back to the
+  // quote it came from. Eric, 2026-08-06: "we don't know who the broker is without opening
+  // the quote up." That was true, and the cause was not a missing COLUMN in the table -- it
+  // was a missing column in the DATA: `commitments` recorded no broker at all.
+  //
+  // ⚠️ THE FALLBACK JOIN IS FOR HISTORY ONLY. Rows signed before the migration have no
+  // `broker_email`, so their broker can only be recovered through `quote_number` -- the
+  // non-unique key F-339 fixes. New rows carry their own answer and do not depend on it.
+  // 🔴 LEFT JOIN, never an inner one: a commitment whose quote was deleted must still appear.
+  // Losing the broker's name is a gap; losing an employer's signed authorization is a defect.
+  const withJoin =
+    'SELECT c.*, ' +
+    "       COALESCE(NULLIF(c.broker_email,''), q.broker_email) AS broker_email_resolved, " +
+    '       q.broker_name  AS quote_broker_name, ' +
+    '       q.broker_agency AS quote_broker_agency ' +
+    '  FROM commitments c ' +
+    '  LEFT JOIN quotes q ON q.quote_number = c.quote_number ' +
+    ' ORDER BY c.submitted_at DESC LIMIT 200';
+
   try {
-    const result = await env.DB.prepare(
-      'SELECT * FROM commitments ORDER BY submitted_at DESC LIMIT 200'
-    ).all();
+    const result = await env.DB.prepare(withJoin).all();
     return jsonResp({ commitments: result.results || [] });
   } catch (err) {
-    return jsonResp({ error: String(err) }, 500);
+    // A pre-migration database has no `commitments.client_id` / `broker_email`, so the query
+    // above throws. Fall back to the plain list rather than failing the screen: an admin who
+    // cannot see their commitments is worse off than one who cannot see the broker column.
+    console.error('Commitment list with broker join failed (falling back):', err);
+    try {
+      const plain = await env.DB.prepare(
+        'SELECT * FROM commitments ORDER BY submitted_at DESC LIMIT 200'
+      ).all();
+      return jsonResp({ commitments: plain.results || [] });
+    } catch (err2) {
+      return jsonResp({ error: String(err2) }, 500);
+    }
   }
 }
 
@@ -510,7 +629,26 @@ async function isAuthed(request, env) {
 }
 
 // Paths that stay public even while SITE_LOCKED is true. Add more here as needed.
+//
+// 🔴 `/assets/images/` ADDED 2026-08-06, AND IT FIXES A DEFECT THAT IS LIVE RIGHT NOW.
+// `downloadQuoteAsHtml` rewrites ABY's own logo to an ABSOLUTE url so the saved file still
+// renders it after the employer opens it from their inbox. But the lock gated that path, so
+// MEASURED: both `abyquotes.com/assets/images/aby-logo.png` and the workers.dev equivalent
+// returned **401 with a 2,032-byte login page** — an HTML document where an <img> expects a
+// PNG. So every quote downloaded while the lock has been on carries a BROKEN ABY LOGO.
+//
+// ⭐⭐ AND THE FAILURE MODE IS THE WORST AVAILABLE: it works for the person who MADE the file
+// and breaks for the person who RECEIVES it. ABY staff carry the admin cookie, so the logo
+// loads on their screen; the employer has no cookie and gets a broken image on the document
+// they are being asked to sign. Invisible to the sender by construction.
+//
+// ⭐ IMAGES ONLY, deliberately — not `/assets/`. The JS and CSS stay behind the lock, so this
+// does not quietly reopen the tool; it exempts the one thing a THIRD PARTY has to be able to
+// fetch. It is F-343's narrow option applied to a single directory rather than the whole site.
+// ⚠️ Anything put in this directory is therefore PUBLIC even while the site is locked. It is a
+// logo directory; keep it that way.
 function isOpenPath(path) {
+  if (path.startsWith('/assets/images/')) return true;
   return path === '/july-2026' || path === '/july-2026/' || path === '/july-2026.html';
 }
 
@@ -536,6 +674,24 @@ async function handleMigrate(env) {
     "ALTER TABLE quotes ADD COLUMN state TEXT",
     "ALTER TABLE quotes ADD COLUMN adjustment TEXT",
     "ALTER TABLE quotes ADD COLUMN adjustment_note TEXT",
+    // Added 2026-08-06. `client_id` is the BenefitLab client this quote is for, so a quote
+    // no longer has to be matched to an employer by a TYPED company name (F-268).
+    "ALTER TABLE quotes ADD COLUMN client_id TEXT",
+    // `revision` implements Eric's decision: re-running a saved quote keeps its number and
+    // becomes revision 2, rather than minting a new number (F-339).
+    "ALTER TABLE quotes ADD COLUMN revision INTEGER DEFAULT 1",
+    // The quote number is the only human-readable identity the tool has, and `commitments`
+    // join employers' signed authorisations to it -- so it must not be issuable twice.
+    // SAFE TO ADD: measured in D1 on 2026-08-06, 45 quotes / 45 distinct numbers.
+    "CREATE UNIQUE INDEX IF NOT EXISTS quotes_quote_number_unique ON quotes (quote_number)",
+    // Added 2026-08-06 (F-345). The employer's signed authorization had no broker on it at
+    // all; `broker_email` is stored on the row so the answer survives even if the quote it
+    // came from is ever renumbered, and `client_id` is the BenefitLab employer.
+    // ⭐ Denormalised ON PURPOSE rather than joined: a commitment is a RECORD OF SOMETHING
+    // SOMEBODY SIGNED, and it should not be able to change its meaning because a row it
+    // points at changed later.
+    "ALTER TABLE commitments ADD COLUMN client_id TEXT",
+    "ALTER TABLE commitments ADD COLUMN broker_email TEXT",
   ];
   const applied = [];
   for (const sql of stmts) {
@@ -675,7 +831,9 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
   <select id="ranByFilter" style="margin-left:auto;padding:.4rem .5rem;border:1px solid #ddd;border-radius:6px;font-size:.85rem">
     <option value="">All sources</option>
     <option value="ABY">ABY-run</option>
-    <option value="broker">Broker-run</option>
+    <option value="dashboard">Broker - dashboard</option>
+    <option value="direct">Broker - direct link</option>
+    <option value="broker">Broker (either)</option>
   </select>
 </div>
 <div class="tabs">
@@ -713,6 +871,7 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
         <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0;white-space:nowrap">Submitted</th>
         <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Quote #</th>
         <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Employer</th>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Broker</th>
         <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Auth Signer</th>
         <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Email / Phone</th>
         <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Start Date</th>
@@ -720,7 +879,7 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
         <th style="padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0"></th>
       </tr>
     </thead>
-    <tbody id="ctbody"><tr><td colspan="8" style="padding:20px;color:#888;text-align:center">Loading…</td></tr></tbody>
+    <tbody id="ctbody"><tr><td colspan="9" style="padding:20px;color:#888;text-align:center">Loading…</td></tr></tbody>
   </table>
 </div>
 </main>
@@ -771,11 +930,40 @@ async function load(q) {
   render();
 }
 
+// ── Where a quote came from: TWO AXES, deliberately not collapsed into one field ─────────
+//
+// Eric, 2026-08-06: "We will also have some quotes that ABY runs. So when we're keeping
+// track, we need to account for that."
+//
+//   ran_by    -- WHO SAT AT THE KEYBOARD. Decided server-side from the admin cookie, never
+//                from the form, so it cannot be spoofed.
+//   client_id -- WHERE IT CAME FROM. Present only when the BenefitLab dashboard handed the
+//                client over (Change E).
+//
+// ⭐ They are ORTHOGONAL, and that is not a technicality: Eric works at ABY and owns
+// BenefitLab, so an ABY session opening a quote from the dashboard is a real combination.
+// Merging them into a single "source" column would have to pick one, and would be wrong for
+// him specifically. Same shape as the disposition decision -- two questions, two fields,
+// labelled distinctly rather than reconciled.
+function originOf(q) {
+  if ((q.ran_by || 'broker') === 'ABY') return 'ABY';
+  return (q.client_id && String(q.client_id).trim()) ? 'dashboard' : 'direct';
+}
+// 'broker' is kept as a filter value so links and habits from the old two-way control still
+// work -- it now means "either broker origin".
+function originMatches(q, want) {
+  var o = originOf(q);
+  if (want === 'broker') return o !== 'ABY';
+  return o === want;
+}
+const ORIGIN_LABEL = { ABY: 'ABY', dashboard: 'Dashboard', direct: 'Direct link' };
+const ORIGIN_COLOR = { ABY: '#205aa6', dashboard: '#1a5c3a', direct: '#777' };
+
 function render() {
   const tbody = document.getElementById('tbody');
   const filtered = quotes.filter(function(q){
     if ((q.status || 'P') !== activeTab) return false;
-    if (ranByFilter && (q.ran_by || 'broker') !== ranByFilter) return false;
+    if (ranByFilter && !originMatches(q, ranByFilter)) return false;
     return true;
   });
 
@@ -787,8 +975,21 @@ function render() {
     btn.innerHTML = label + (n ? ' <span class="tab-count">' + n + '</span>' : '');
   });
 
+  // "When we're keeping track, we need to account for that" -- so the count is a BREAKDOWN,
+  // not a total. A single number cannot answer "are brokers actually using the dashboard?",
+  // which is the question the generic link exists to create.
+  // ⚠️ Counted over the CURRENT TAB's filtered set, and it says which set, because a
+  // breakdown whose scope is ambiguous is how two screens come to disagree.
+  var byOrigin = { ABY: 0, dashboard: 0, direct: 0 };
+  filtered.forEach(function (q) { byOrigin[originOf(q)]++; });
+  var parts = ['ABY', 'dashboard', 'direct']
+    .filter(function (k) { return byOrigin[k]; })
+    .map(function (k) { return ORIGIN_LABEL[k] + ' ' + byOrigin[k]; });
   document.getElementById('count').textContent =
-    filtered.length ? (filtered.length + ' quote' + (filtered.length !== 1 ? 's' : '')) : '';
+    filtered.length
+      ? (filtered.length + ' quote' + (filtered.length !== 1 ? 's' : '') +
+         (parts.length > 1 ? '  (' + parts.join(' · ') + ')' : ''))
+      : '';
   if (!filtered.length) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No quotes found.</td></tr>';
     return;
@@ -821,7 +1022,12 @@ function render() {
       '<td><div style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">' + chipHtml + '</div></td>' +
       '<td><span class="badge ' + (isC ? 'badge-c' : 'badge-nc') + '">' + (isC ? 'C' : 'NC') + '</span></td>' +
       '<td>' +
-        '<span class="badge" style="background:' + ((q.ran_by||"broker")==="ABY" ? "#205aa6" : "#777") + ';color:#fff">' + ((q.ran_by||"broker")==="ABY" ? "ABY" : "Broker") + '</span> ' +
+        // Three-way origin in the column that already existed, rather than a new column --
+        // a new one would need every colspan widened, which is the defect H nearly shipped.
+        '<span class="badge" style="background:' + ORIGIN_COLOR[originOf(q)] + ';color:#fff" title="' +
+          (originOf(q) === 'dashboard' ? 'Handed over from the BenefitLab dashboard (carries a client id)'
+           : originOf(q) === 'direct' ? 'Run on the shared link - broker typed their own details'
+           : 'Run by ABY from the admin') + '">' + ORIGIN_LABEL[originOf(q)] + '</span> ' +
         '<span style="font-size:.78rem;color:#888">' + esc(q.state || "TX") + '</span>' +
         (q.adjustment ? '<br><span style="font-size:.72rem;color:#b8860b" title="' + esc(q.adjustment_note || "") + '">rate override</span>' : '') +
       '</td>';
@@ -845,6 +1051,10 @@ function toggleDetail(id) {
 
 function detailHTML(q, products) {
   const rerunState = JSON.stringify({
+    // The ORIGINAL quote number, so re-opening a saved quote keeps its identity instead
+    // of minting a new one. Eric, 2026-08-06: "if I just want to look at it again, the
+    // number should not change." app.js honours it unless the commission basis changed.
+    quoteNumber: q.quote_number || '',
     clientName: q.client_name || '',
     effectiveDate: q.effective_date || '',
     brokerName: q.broker_name || '',
@@ -1019,11 +1229,11 @@ async function loadCommitments() {
   const ctbody = document.getElementById('ctbody');
   try {
     const res = await fetch('/api/commitments');
-    if (!res.ok) { ctbody.innerHTML = '<tr><td colspan="8" style="padding:16px;color:#c00;text-align:center">Error loading commitments.</td></tr>'; return; }
+    if (!res.ok) { ctbody.innerHTML = '<tr><td colspan="9" style="padding:16px;color:#c00;text-align:center">Error loading commitments.</td></tr>'; return; }
     const data = await res.json();
     const rows = data.commitments || [];
     document.getElementById('count').textContent = rows.length + ' commitment' + (rows.length !== 1 ? 's' : '');
-    if (!rows.length) { ctbody.innerHTML = '<tr><td colspan="8" style="padding:20px;color:#888;text-align:center">No commitments yet.</td></tr>'; return; }
+    if (!rows.length) { ctbody.innerHTML = '<tr><td colspan="9" style="padding:20px;color:#888;text-align:center">No commitments yet.</td></tr>'; return; }
     ctbody.innerHTML = rows.map(function(c) {
       var dt = new Date(c.submitted_at);
       var dateStr = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -1031,11 +1241,30 @@ async function loadCommitments() {
       try { products = JSON.parse(c.products || '[]'); } catch(e) {}
       commitmentData[c.id] = { c: c, products: products };
       var td = function(v, extra) { return '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top' + (extra || '') + '">' + (v || '<span style="color:#bbb">—</span>') + '</td>'; };
+      // Prefer what the commitment itself recorded; fall back to the quote it references.
+      // The agency line comes only from the quote (the signed form carries an email, not an
+      // agency name), so it is shown muted -- it is a lookup, not part of what was signed.
+      var brokerCellFor = function(row) {
+        var email  = row.broker_email || row.broker_email_resolved || '';
+        var name   = row.quote_broker_name || '';
+        var agency = row.quote_broker_agency || '';
+        var top    = name || email;
+        if (!top) return '';
+        var out = (name && email)
+          ? '<a href="mailto:' + email + '">' + name + '</a>'
+          : (email ? '<a href="mailto:' + email + '">' + email + '</a>' : name);
+        if (agency) out += '<br><span style="color:#777;font-size:12px">' + agency + '</span>';
+        return out;
+      };
       var productNames = products.map(function(p){ return p.name || String(p); }).join('<br>');
       return '<tr class="c-row">' +
         td(dateStr, ';white-space:nowrap') +
         td('<strong>' + (c.quote_number || '') + '</strong>') +
         td((c.employer_name || '') + (c.address ? '<br><span style="color:#777;font-size:12px">' + c.address + (c.city_state_zip ? ', ' + c.city_state_zip : '') + '</span>' : '')) +
+        // Broker. Named on the row itself for anything signed after the migration; recovered
+        // through the quote only for older rows, which is why the agency line is muted and
+        // why an unknown broker prints an em dash rather than being left blank.
+        td(brokerCellFor(c)) +
         td((c.auth_signer || '') + (c.auth_title ? '<br><span style="color:#777;font-size:12px">' + c.auth_title + '</span>' : '')) +
         td((c.auth_email ? '<a href="mailto:' + c.auth_email + '">'  + c.auth_email + '</a>' : '') + (c.auth_phone ? '<br>' + c.auth_phone : '')) +
         td(c.start_date || '') +
@@ -1054,7 +1283,7 @@ async function loadCommitments() {
       if (delBtn) deleteCommitment(delBtn.dataset.cid);
     }, { once: true });
   } catch(err) {
-    ctbody.innerHTML = '<tr><td colspan="8" style="padding:16px;color:#c00;text-align:center">Network error.</td></tr>';
+    ctbody.innerHTML = '<tr><td colspan="9" style="padding:16px;color:#c00;text-align:center">Network error.</td></tr>';
   }
 }
 

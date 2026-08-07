@@ -67,8 +67,21 @@ CREATE TABLE IF NOT EXISTS commitments (
   start_date          TEXT    NOT NULL DEFAULT '',
   accepted_print      TEXT    NOT NULL DEFAULT '',
   accepted_sign       TEXT    NOT NULL DEFAULT '',
-  products            TEXT    NOT NULL DEFAULT '[]'  -- JSON array of product names
+  products            TEXT    NOT NULL DEFAULT '[]', -- JSON array of product names
+  -- Added 2026-08-06 (F-345). Before these, a signed authorization recorded NO BROKER AT
+  -- ALL -- its only link to one was `quote_number`, which is not unique until the F-339
+  -- migration lands. So "who sold this?" could only be answered through a key that could
+  -- collide, and the admin list simply did not show it.
+  -- ⭐ Denormalised ON PURPOSE rather than always joined: a commitment is a record of
+  -- something somebody SIGNED, and must not change meaning because a row it points at
+  -- changed later.
+  -- ⚠️ On an existing database these arrive via /api/migrate as ALTER TABLE, so they are
+  -- nullable with no default; rows signed before that carry NULL and the admin list falls
+  -- back to the quote join for them.
+  client_id           TEXT,                          -- the BenefitLab employer this is for
+  broker_email        TEXT                           -- who sold it
 );
 
 CREATE INDEX IF NOT EXISTS commitments_submitted_at   ON commitments (submitted_at DESC);
 CREATE INDEX IF NOT EXISTS commitments_quote_number   ON commitments (quote_number);
+CREATE INDEX IF NOT EXISTS commitments_client_id      ON commitments (client_id);

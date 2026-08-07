@@ -13,6 +13,33 @@
   // Quote numbers look like: TX260508-1234-C  or  TX260508-1234-NC
   const QUOTE_NUM_RE = /\b([A-Z]{2}\d{6}-\d{4}-N?C)\b/;
 
+  /**
+   * Which quote number are we saving?
+   *
+   * 🔴 THE DOM IS A RENDERING TARGET, NOT A DATA SOURCE. This used to read the number by
+   * regexing the rendered page, which worked -- and meant a change to the renderer's markup
+   * could stop EVERY quote from saving, with no error anywhere, because this file swallows
+   * failures by design so the broker's workflow is never interrupted. It would have been
+   * invisible until the day somebody asked where a week of quotes went. The renderer is also
+   * exactly the file Change B rewrites.
+   *
+   * app.js now publishes the number it minted on `window.__abyQuoteNumber` before it writes
+   * the output, so the code that MINTS the number hands it to the code that SAVES it.
+   *
+   * ⭐ THE SCRAPE IS KEPT AS A FALLBACK ON PURPOSE, and it is not belt-and-braces for its own
+   * sake: these two files ship together but a saved/older page, or any render path that does
+   * not go through app.js, would otherwise stop saving entirely. A fallback that is WORSE but
+   * WORKING beats a hard dependency between two files deployed by hand.
+   * ⚠️ The published value is validated against the same shape, so a stale or malformed
+   * global cannot poison the record -- it just falls through to the scrape.
+   */
+  function resolveQuoteNumber(renderedText) {
+    const published = window.__abyQuoteNumber;
+    if (typeof published === 'string' && QUOTE_NUM_RE.test(published)) return published;
+    const match = (renderedText || '').match(QUOTE_NUM_RE);
+    return match ? match[1] : null;
+  }
+
   function getFormValues() {
     const form = document.getElementById('quoteForm');
     if (!form) return {};
@@ -101,6 +128,11 @@
     const payload = {
       ...getFormValues(),
       quoteNumber,
+      // The BenefitLab client id, set by app.js when the tool was opened from the broker
+      // dashboard. Sent from day one so quotes start carrying it; the worker ignores an
+      // unknown field until the `client_id` column and the INSERT are in place, so this is
+      // harmless on its own (handleSaveQuote destructures known keys only).
+      clientId: window.__abyClientId || '',
       products: collectProducts(),
     };
 
@@ -126,10 +158,12 @@
       const text = output.textContent || '';
       if (!text.trim()) return;
 
-      const match = text.match(QUOTE_NUM_RE);
-      if (!match) return;
+      // The observer still TRIGGERS on the render -- that part the DOM is the right source
+      // for, because "a quote just appeared" is genuinely a fact about the page. Only the
+      // NUMBER now comes from the code that minted it.
+      const qNum = resolveQuoteNumber(text);
+      if (!qNum) return;
 
-      const qNum = match[1];
       if (qNum === lastSavedNum) return;   // don't double-save the same quote
       lastSavedNum = qNum;
 

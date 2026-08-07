@@ -6,6 +6,73 @@
   var productListEl, formEl, outputEl, repSelectorEl, dateSelectEl;
 
   // -------------------------------------------------------------
+  // Quote number continuity (Eric, 2026-08-06)
+  //
+  // Re-opening a saved quote must NOT change its number. It used to, for two
+  // INDEPENDENT reasons, so fixing either alone did nothing: the admin's Re-run link
+  // never carried the number, and generateQuoteNumber() ignores its arguments and
+  // always mints a fresh one from TODAY's date plus a random suffix.
+  //
+  // `carriedQuoteNumber` is set only by prePopulateFromRerun(), off the admin link.
+  // A quote typed from scratch has none and gets a new number exactly as before.
+  // -------------------------------------------------------------
+
+  var carriedQuoteNumber = null;
+
+  // The BenefitLab client id, when the tool was opened from the broker dashboard
+  // (F-268/F-341). ABY has never had a client identifier -- quotes are matched back to an
+  // employer by the TYPED company name, so a typo silently attaches a quote to the wrong
+  // one, or to none. Carrying the id makes that join exact.
+  //
+  // ⚠️ Published on `window` because save-hook.js is a separate script with no access to
+  // this closure. It follows the channel `window.__abyReadOnly` already uses.
+  var carriedClientId = null;
+  var carriedBrokerLogoUrl = null;
+
+  /**
+   * Is this a broker logo URL we are willing to put in the quote's <img src>?
+   *
+   * 🔴 THIS IS NOT PARANOIA, IT IS THE THREAT MODEL: the value arrives in `?rerun=`, which is
+   * a URL anyone can construct and send to anyone. Without a check, a crafted link would make
+   * an ABY-branded quote display an arbitrary image from an arbitrary domain -- on a document
+   * that carries ABY's fee schedule and an authorization page an employer signs. It would also
+   * let a third party log every open (an <img> is a tracking pixel with extra steps).
+   *
+   * ⭐ SO IT IS AN ALLOWLIST, NOT A SANITISER. `https:` alone is not enough -- the point is not
+   * that the URL is well-formed, it is that BenefitLab vouches for what is behind it.
+   * ⚠️ Adding a host here is a deliberate act. It is a one-line data change; keep it that way.
+   */
+  var BROKER_LOGO_HOSTS = ['app.benefitlab.ai'];
+  function isAllowedLogoUrl(value) {
+    if (typeof value !== 'string' || !value) return false;
+    var u;
+    try { u = new URL(value); } catch (e) { return false; }
+    if (u.protocol !== 'https:') return false;          // no data:, no javascript:, no http:
+    return BROKER_LOGO_HOSTS.indexOf(u.hostname) !== -1;
+  }
+
+  // TX260806-1234-C / -NC. The suffix records whether commission is included, so it
+  // is part of the quote's identity rather than decoration.
+  var QUOTE_NUM_SHAPE = /^([A-Z]{2})(\d{6})-(\d{4})-(NC|C)$/;
+
+  /**
+   * Decide which number a render should carry.
+   *
+   * Keeping the carried number is the point, with ONE exception: if the broker flipped
+   * the commission checkbox, the carried suffix now describes the wrong rate book. That
+   * is a different quote at a different price, not a revision of the same one, so it
+   * earns a new number.
+   *
+   * Pure, and kept as a named function so the rule can be tested without a browser.
+   */
+  function resolveQuoteNumber(carried, commissioned, mint) {
+    var m = carried ? QUOTE_NUM_SHAPE.exec(carried) : null;
+    if (!m) return mint();                                  // none carried, or unrecognisable
+    if ((m[4] === 'C') !== !!commissioned) return mint();    // commission basis changed
+    return carried;
+  }
+
+  // -------------------------------------------------------------
   // Build the product checkbox list from ABYQuote.products
   // -------------------------------------------------------------
 
@@ -246,7 +313,7 @@
   // YEAR-END NOTE: update MAX_EFFECTIVE_DATE once a year.
   // -------------------------------------------------------------
 
-  var MAX_EFFECTIVE_DATE = '2026-12-01';
+  var MAX_EFFECTIVE_DATE = '2027-01-01';
 
   function buildEffectiveDateOptions() {
     if (!dateSelectEl) return;
@@ -389,6 +456,10 @@
       };
       reader.readAsDataURL(brokerLogoFile);
     } else {
+      // ⭐ AN UPLOADED FILE WINS OVER THE CARRIED URL, and that order is deliberate: the broker
+      // is standing at the form. If they took the trouble to attach a logo on this quote, that
+      // is a more recent statement of intent than whatever their agency profile holds.
+      if (carriedBrokerLogoUrl) form.brokerLogoUrl = carriedBrokerLogoUrl;
       renderQuote(form);
     }
   }
@@ -401,8 +472,21 @@
     }
 
     var results = ABYQuote.engine.calculateAll(expanded, form.commissioned);
-    var quoteNumber = ABYQuote.utils.generateQuoteNumber(form.effectiveDate, form.commissioned);
-    var html = ABYQuote.renderer.render(form, results, quoteNumber, { includeAuthorization: true, includeWarnings: true });
+    var quoteNumber = resolveQuoteNumber(carriedQuoteNumber, form.commissioned, function () {
+      return ABYQuote.utils.generateQuoteNumber(form.effectiveDate, form.commissioned);
+    });
+    // Hand the number to save-hook.js instead of making it scrape the rendered page for it.
+    // save-hook.js used to recover the number by regexing #quoteOutput.textContent, so a
+    // change to the renderer's markup could have stopped EVERY quote saving -- silently,
+    // because that file swallows failures by design. Published BEFORE the innerHTML write,
+    // so it is already set when the MutationObserver fires. Same channel as
+    // `window.__abyClientId` / `window.__abyReadOnly`.
+    window.__abyQuoteNumber = quoteNumber;
+
+    var html = ABYQuote.renderer.renderInternal(form, results, quoteNumber, {
+      includeAuthorization: true,
+      clientId: window.__abyClientId || '',
+    });
 
     outputEl.innerHTML =
       '<div class="output-toolbar no-print">' +
@@ -438,6 +522,12 @@
     var liveQuote = outputEl.querySelector('.quote');
     if (!liveQuote) return;
 
+    // The PDF is a client artifact too. It strips `.no-print` (which is how the internal
+    // notes box stays out of it), so the same disclosure gap applies -- tell the broker.
+    noticeIfClientFileCarriesWarnings(
+      ABYQuote.engine.calculateAll(expandSelections(form.selections), form.commissioned)
+    );
+
     var element = liveQuote.cloneNode(true);
 
     var hiddenEls = element.querySelectorAll('.no-print');
@@ -470,12 +560,54 @@
   // Download HTML (self-contained, offline-ready)
   // -------------------------------------------------------------
 
+  // ── Tell the broker when the file they just produced rests on a fallback price ──────────
+  //
+  // F-337: the engine falls back to the COMMISSIONED table when a no-commission rate is
+  // missing and raises a warning. That warning renders only in the internal box, which the
+  // client file correctly omits -- so the rep saw it and the employer got the price, and
+  // nobody was told the two disagreed. This puts the fact where the broker is actually
+  // looking at the moment they create the artifact, WITHOUT putting internal notes into the
+  // client's document.
+  //
+  // ⛔ Deliberately does NOT block the download. Refusing to produce a file mid-quote is a
+  // product decision on a live commercial tool and it is Eric's, not mine. This makes the
+  // condition impossible to miss; it does not decide what to do about it.
+  function noticeIfClientFileCarriesWarnings(results) {
+    var warnings = ABYQuote.renderer.collectWarnings(results);
+    var host = document.querySelector('.output-toolbar');
+    var existing = document.getElementById('clientFileWarning');
+    if (existing) existing.parentNode.removeChild(existing);
+    if (warnings.length === 0 || !host) return;
+
+    var el = document.createElement('div');
+    el.id = 'clientFileWarning';
+    el.className = 'no-print';
+    el.setAttribute('role', 'status');
+    el.style.cssText = 'margin-top:10px;padding:10px 12px;border:1px solid #d9a300;' +
+      'background:#fff8e1;color:#5c4600;border-radius:6px;font-size:13px;line-height:1.45;';
+    var lines = warnings.map(function (w) { return ABYQuote.utils.escapeHtml(w.message); });
+    el.innerHTML = '<strong>Check this before sending:</strong> the file you just downloaded ' +
+      'does not show these internal notes, but the prices in it depend on them.<ul style="margin:6px 0 0 18px;padding:0;">' +
+      lines.map(function (m) { return '<li>' + m + '</li>'; }).join('') + '</ul>';
+    host.parentNode.insertBefore(el, host.nextSibling);
+  }
+
   function downloadQuoteAsHtml(form, quoteNumber) {
     var expanded = expandSelections(form.selections);
     var results = ABYQuote.engine.calculateAll(expanded, form.commissioned);
-    var body = ABYQuote.renderer.render(form, results, quoteNumber, { includeAuthorization: true });
+    noticeIfClientFileCarriesWarnings(results);
+    var body = ABYQuote.renderer.renderForClient(form, results, quoteNumber, {
+      includeAuthorization: true,
+      clientId: window.__abyClientId || '',
+    });
     // Make the ABY logo load from the deployed worker when the client opens the saved file.
-    body = body.replace('assets/images/aby-logo.png', 'https://aby-quote-tool.eric-185.workers.dev/assets/images/aby-logo.png');
+    // ⭐ POINTS AT THE BRANDED DOMAIN, NOT `*.workers.dev`. This url is embedded in a document
+    // an employer opens and signs, so it is read by a customer: a `workers.dev` hostname reads
+    // as scaffolding, and it is a name ABY does not control long-term. Same origin, same file.
+    // 🔴 It only resolves for the RECIPIENT because `/assets/images/` is now exempt from
+    // SITE_LOCKED — before that, both hostnames returned a 401 login page and every downloaded
+    // quote carried a broken ABY logo. The two changes ship together or neither works.
+    body = body.replace('assets/images/aby-logo.png', 'https://abyquotes.com/assets/images/aby-logo.png');
     var title = ABYQuote.utils.escapeHtml((form.clientName || 'ABY Quote') + ' ' + quoteNumber);
     var safeName = (form.clientName ? form.clientName.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') : 'ABY-Quote');
 
@@ -543,11 +675,46 @@
     var state;
     try { state = JSON.parse(decodeURIComponent(rerunParam)); } catch (e) { return; }
 
+    // Carry the ORIGINAL quote number so re-opening a saved quote keeps its identity.
+    // ⚠️ It keeps its original creation DATE too, deliberately: the date is embedded in
+    // the number, so re-dating it would change the number, which is the bug being fixed.
+    // The revision date belongs on the document, not in the number (Eric, 2026-08-06).
+    // Older links, generated before the admin started sending it, simply have none.
+    if (state.quoteNumber) carriedQuoteNumber = String(state.quoteNumber);
+
+    // Carried through to the saved row so the quote can be matched to a BenefitLab client
+    // exactly rather than by company name. Absent for a quote started here, as before.
+    if (state.clientId) {
+      carriedClientId = String(state.clientId);
+      window.__abyClientId = carriedClientId;
+    }
+
+    // The broker's logo, so the quote is CO-BRANDED without them uploading it every time
+    // (Eric, 2026-08-06: ABY's mark and the broker's; colors explicitly out). F-342.
+    // ⭐ THIS IS NOT A NEW FEATURE -- the form has always had a `brokerLogo` file input and the
+    // stylesheet has always had `.broker-logo` rules. What was missing is that a broker had to
+    // find and upload the same image on every single quote. Same defect as retyping their own
+    // name, which this file already fixes one field above.
+    // ⛔ A rejected URL is simply ignored: no console noise, no fallback, no placeholder. An
+    // unknown host is not an error to report to a broker, it is a logo we decline to show.
+    if (isAllowedLogoUrl(state.brokerLogoUrl)) {
+      carriedBrokerLogoUrl = String(state.brokerLogoUrl);
+    }
+
     // Basic text fields
     ['clientName', 'effectiveDate', 'brokerName', 'brokerAgency', 'brokerPhone', 'brokerEmail'].forEach(function (key) {
       if (!state[key]) return;
       var el = document.getElementById(key) || formEl.querySelector('[name="' + key + '"]');
-      if (el) el.value = state[key];
+      if (!el) return;
+      // ⚠️ effectiveDate is a <select>. Assigning a value that is not one of its options sets the
+      // control to BLANK and reports nothing -- so a date carried in from the dashboard could
+      // silently fail to apply and the broker would believe it had. Only apply a value the list
+      // actually offers; otherwise leave the placeholder, which visibly asks to be answered.
+      if (el.tagName === 'SELECT') {
+        var offered = Array.prototype.some.call(el.options, function (o) { return o.value === state[key]; });
+        if (!offered) return;
+      }
+      el.value = state[key];
     });
 
     // Commission checkbox
@@ -606,6 +773,44 @@
     history.replaceState({}, '', window.location.pathname);
   }
 
+  // ── Broker email is required on the PUBLIC path (Eric, 2026-08-06) ─────────────────────
+  //
+  // 🔴 THE HOLE WAS NEVER THE FORMAT. `index.html` already declares type="email", so the
+  // browser format-checks it. It is that NONE of the four broker fields is `required` --
+  // only the effective date is -- so a quote from the shared "generic link" could reach ABY
+  // carrying NO BROKER IDENTITY AT ALL: a saved row, a notification email, and no way to
+  // tell who ran it. For a dashboard broker these fields arrive prefilled, so this closes a
+  // hole that exists only for the audience the generic link is for.
+  //
+  // ⛔ NO SPELLING CHECK, ON ERIC'S INSTRUCTION: "I'm not worried about misspelled emails.
+  // If that happens, we'll figure it out." He is right -- laura@vigilagecy.com passes every
+  // check that exists, so a second validator would re-implement the browser's job and still
+  // miss the only case that matters. Do not re-propose it.
+  //
+  // ⭐ SET HERE RATHER THAN IN index.html for two reasons: it keeps the deploy surface to the
+  // files already in this batch, and it leaves the ABY-only overlay able to relax it --
+  // ABY runs quotes too, and a required field must never stop them.
+  function requireBrokerEmail() {
+    if (window.ABY_INTERNAL) return;          // an ABY session: the overlay decides
+    var el = formEl && formEl.querySelector('[name="brokerEmail"]');
+    if (!el) return;
+    el.required = true;
+    // The label has to say so, or the browser's "please fill in this field" is the first the
+    // broker hears of it -- and an unexplained required field on a live tool reads as broken.
+    var label = el.closest('label') || (el.previousElementSibling && el.previousElementSibling.tagName === 'LABEL'
+      ? el.previousElementSibling : null);
+    var host = label || el.parentElement;
+    if (host && !host.querySelector('.req-mark')) {
+      var mark = document.createElement('span');
+      mark.className = 'req-mark';
+      mark.setAttribute('aria-hidden', 'true');
+      mark.style.cssText = 'color:#c0392b;margin-left:3px;';
+      mark.textContent = '*';
+      var lbl = host.querySelector('label') || host;
+      (lbl.firstElementChild === el ? host : lbl).appendChild(mark);
+    }
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
     productListEl = document.getElementById('productList');
     formEl = document.getElementById('quoteForm');
@@ -617,6 +822,7 @@
     buildRepSelector();
     buildEffectiveDateOptions();
     attachPhoneFormatters();
+    requireBrokerEmail();
 
     // Capture readonly flag BEFORE prePopulateFromRerun() strips URL params via history.replaceState.
     var isReadOnly = new URLSearchParams(window.location.search).get('readonly') === '1';

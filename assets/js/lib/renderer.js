@@ -50,8 +50,18 @@ ABYQuote.renderer = (function () {
 
   function renderTopbar(form) {
     // ABY logo left; broker logo + broker contact right. Client is in the hero.
-    var brokerLogo = form.brokerLogoDataUrl
-      ? '<img class="broker-logo" src="' + esc(form.brokerLogoDataUrl) + '" alt="Broker logo">'
+    // TWO SOURCES, ONE SLOT (F-342):
+    //   brokerLogoDataUrl - the file the broker attached to THIS quote (pre-existing).
+    //   brokerLogoUrl     - their agency logo, handed over by the BenefitLab dashboard, so it
+    //                       does not have to be uploaded again on every quote.
+    // ⭐ The uploaded file wins; app.js only sets the URL when no file was attached. Both end
+    // up in the same <img>, and the stylesheet already sizes it (max 58px tall, 185px wide).
+    // ⚠️ The URL is validated against an allowlist in app.js BEFORE it reaches here -- this
+    // value arrives from `?rerun=`, which anybody can craft. Do not accept one from elsewhere
+    // without the same check.
+    var brokerLogoSrc = form.brokerLogoDataUrl || form.brokerLogoUrl;
+    var brokerLogo = brokerLogoSrc
+      ? '<img class="broker-logo" src="' + esc(brokerLogoSrc) + '" alt="Broker logo">'
       : '';
     var parts = [];
     if (form.brokerName || form.brokerAgency) parts.push('<div class="broker-name">' + esc([form.brokerName, form.brokerAgency].filter(Boolean).join(', ')) + '</div>');
@@ -171,9 +181,19 @@ ABYQuote.renderer = (function () {
 
   function renderPricingCards(result, meta) {
     var cards = [];
-    if (result.setupFee) cards.push({ label: result.setupFee.label || 'Setup fee', price: u.money(result.setupFee.amount), note: 'One-time setup.' });
+    // Fixed fees. When setup and annual renewal are the same recurring amount,
+    // show them as ONE "Annual Fee (setup / renewal)" line. Products where setup
+    // is genuinely one-time (renewal is $0, e.g. HSA) keep a separate one-time
+    // Setup line and no $0 renewal line.
+    var setupAmt = result.setupFee ? result.setupFee.amount : null;
+    var renewAmt = (result.renewalFee != null) ? result.renewalFee.amount : null;
+    if (setupAmt != null && renewAmt != null && renewAmt > 0 && setupAmt === renewAmt) {
+      cards.push({ label: 'Annual Fee (setup / renewal)', price: u.money(renewAmt), note: 'Same amount each year: covers plan setup and every annual renewal.' });
+    } else {
+      if (setupAmt != null && setupAmt > 0) cards.push({ label: result.setupFee.label || 'Setup fee', price: u.money(setupAmt), note: 'One-time setup.' });
+      if (renewAmt != null && renewAmt > 0) cards.push({ label: result.renewalFee.label || 'Annual renewal', price: u.money(renewAmt), note: 'Per year.' });
+    }
     if (result.docsFee) cards.push({ label: result.docsFee.label || 'Documents', price: u.money(result.docsFee.amount), note: 'One-time.' });
-    if (result.renewalFee != null) cards.push({ label: result.renewalFee.label || 'Annual renewal', price: u.money(result.renewalFee.amount), note: 'Per year.' });
     if (result.annualFee != null) {
       var aNote = (result.annualFee.count != null && meta.countLabel) ? 'Estimated for ' + result.annualFee.count + ' ' + meta.countLabel + '.' : 'Per year.';
       if (result.formulaBreakdown) aNote = result.formulaBreakdown;
@@ -383,11 +403,20 @@ ABYQuote.renderer = (function () {
     ].join('\n');
   }
 
-  function renderWarnings(results) {
+  // Exported so a CALLER can find out whether this quote carries engine warnings without
+  // having to render anything and grep the markup. The download path uses it to tell the
+  // broker, on screen, that the client file they just produced rests on a fallback price
+  // (F-337) -- previously that note existed only in a box the download omitted.
+  function collectWarnings(results) {
     var warnings = [];
-    results.forEach(function (r) {
+    (results || []).forEach(function (r) {
       (r.warnings || []).forEach(function (w) { warnings.push({ productId: r.productId, message: w }); });
     });
+    return warnings;
+  }
+
+  function renderWarnings(results) {
+    var warnings = collectWarnings(results);
     if (warnings.length === 0) return '';
     var items = warnings.map(function (w) {
       var meta = findProduct(w.productId);
@@ -396,7 +425,8 @@ ABYQuote.renderer = (function () {
     return '<aside class="quote-warnings no-print"><h4>Internal notes (hidden in print / client file)</h4><ul>' + items + '</ul></aside>';
   }
 
-  function renderAuthorizationPage(form, groups, quoteNumber) {
+  function renderAuthorizationPage(form, groups, quoteNumber, opts) {
+    opts = opts || {};
     function feeSummary(r) {
       var parts = [];
       if (r.setupFee) parts.push('Setup ' + u.money(r.setupFee.amount));
@@ -450,6 +480,13 @@ ABYQuote.renderer = (function () {
       '    </div>',
       '    <form id="commitForm" onsubmit="submitCommitment(event)">',
       '      <input type="hidden" name="quoteNumber" value="' + esc(quoteNumber) + '">',
+      // The authorization form posts every FormData field, so these two travel with the
+      // employer's signed commitment automatically. WHY THEY ARE HERE: `commitments` stored
+      // NO broker at all -- its only link to one was `quote_number`, the non-unique string
+      // F-339 exists to fix. So "who is the broker on this commitment?" could only be
+      // answered by a join through a key that could collide. F-345.
+      '      <input type="hidden" name="clientId" value="' + esc(opts.clientId || '') + '">',
+      '      <input type="hidden" name="brokerEmail" value="' + esc(form.brokerEmail || '') + '">',
       '      <input type="hidden" name="products" id="productsField" value="">',
       '      <div class="ack-group"><div class="ack-group-label">Employer Information</div><div class="ack-field-grid">',
       field('Employer Name', 'employerName', form.clientName || '', true),
@@ -485,6 +522,100 @@ ABYQuote.renderer = (function () {
     ].filter(Boolean).join('\n');
   }
 
+  // -------------------------------------------------------------
+  // Estimated Annual Total
+  // Recurring = annual/renewal fees + 12 months of admin.
+  // One-time  = setup that is NOT already the recurring annual fee (e.g. HSA).
+  // -------------------------------------------------------------
+
+  function productAnnual(r) {
+    var total = 0;
+    if (r.annualFee != null) total += r.annualFee.amount;
+    if (r.renewalFee != null) total += r.renewalFee.amount;       // 0 for HSA
+    if (r.monthlyFee && !r.monthlyFee.tierExceeded) total += r.monthlyFee.amount * 12;
+    return total;
+  }
+  function productOneTime(r) {
+    var total = 0;
+    if (r.docsFee) total += r.docsFee.amount;
+    // Setup counts as one-time only when it is not already the recurring annual fee
+    // (i.e. renewal is $0 or absent — the HSA case).
+    if (r.setupFee && (r.renewalFee == null || r.renewalFee.amount === 0)) total += r.setupFee.amount;
+    return total;
+  }
+
+  function computeTotals(groups) {
+    var t = { recurring: 0, oneTime: 0, hasMonthly: false, monthlyIncomplete: false, anyMultiOption: false, rows: [] };
+    groups.forEach(function (g) {
+      var meta = findProduct(g.productId);
+      var name = meta ? (meta.shortName || meta.name) : g.productId;
+      var r;
+      if (g.results.length > 1) {
+        t.anyMultiOption = true;
+        // No single option chosen yet → use the lowest-cost option for the estimate.
+        r = g.results.reduce(function (a, b) { return productAnnual(b) < productAnnual(a) ? b : a; });
+        name += ' (lowest option)';
+      } else {
+        r = g.results[0];
+      }
+      var ann = productAnnual(r), one = productOneTime(r);
+      t.recurring += ann;
+      t.oneTime += one;
+      if (r.monthlyFee) { t.hasMonthly = true; if (r.monthlyFee.countMissing) t.monthlyIncomplete = true; }
+      t.rows.push({ name: name, annual: ann, oneTime: one });
+    });
+    return t;
+  }
+
+  function renderTotalsSummary(groups) {
+    if (!groups || !groups.length) return '';
+    var t = computeTotals(groups);
+    if (t.recurring <= 0 && t.oneTime <= 0) return '';
+
+    var notes = [];
+    if (t.hasMonthly) notes.push('Includes 12 months of administration.');
+    if (t.oneTime > 0) notes.push('A one-time setup of ' + u.money(t.oneTime) + ' applies in the first year (shown separately below).');
+    if (t.monthlyIncomplete) notes.push('Some monthly fees use a starting-tier estimate until participant counts are confirmed.');
+    if (t.anyMultiOption) notes.push('Where several options are offered, the lowest-cost option is used for this estimate.');
+
+    var big =
+      '<div class="price-box featured">' +
+        '<div class="price-label">Estimated Annual Total</div>' +
+        '<div class="price">' + u.money(Math.round(t.recurring)) + ' <small>per year</small></div>' +
+        (t.oneTime > 0 ? '<p class="muted">plus ' + u.money(t.oneTime) + ' one-time setup (year one only)</p>' : '') +
+      '</div>';
+
+    var rows = t.rows.map(function (row) {
+      return '<tr><td>' + esc(row.name) + '</td>' +
+        '<td style="text-align:right;">' + u.money(Math.round(row.annual)) + '</td>' +
+        '<td style="text-align:right;">' + (row.oneTime > 0 ? u.money(row.oneTime) : '—') + '</td></tr>';
+    }).join('\n');
+    var tfootOne = t.oneTime > 0
+      ? '<tr><td><strong>One-time setup (year one)</strong></td><td></td><td style="text-align:right;"><strong>' + u.money(t.oneTime) + '</strong></td></tr>'
+      : '';
+    var table =
+      '<table class="options-table" style="margin-top:16px;">' +
+      '<thead><tr><th>Service</th><th style="text-align:right;">Est. annual</th><th style="text-align:right;">One-time</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+      '<tfoot><tr><td><strong>Estimated annual total</strong></td>' +
+      '<td style="text-align:right;"><strong>' + u.money(Math.round(t.recurring)) + '</strong></td>' +
+      '<td style="text-align:right;">' + (t.oneTime > 0 ? '' : '—') + '</td></tr>' + tfootOne + '</tfoot>' +
+      '</table>';
+
+    return [
+      '<section>',
+      '  <div class="section-card">',
+      '    <div class="section-head hero-head"><h2>Estimated Annual Cost</h2><p>A summary estimate based on the services and counts entered. Final cost may vary with actual enrollment and elections.</p></div>',
+      '    <div class="section-body">',
+      '      <div class="pricing-grid cols-1">' + big + '</div>',
+      (notes.length ? '      <p class="muted" style="margin-top:10px;">' + esc(notes.join(' ')) + '</p>' : ''),
+      table,
+      '    </div>',
+      '  </div>',
+      '</section>'
+    ].filter(Boolean).join('\n');
+  }
+
   function render(form, results, quoteNumber, opts) {
     opts = opts || {};
     init();
@@ -501,11 +632,12 @@ ABYQuote.renderer = (function () {
     body.push(renderAboutABY());
     body.push(renderStandardServices());
     groups.forEach(function (g) { body.push(renderProductSection(g, form)); });
+    body.push(renderTotalsSummary(groups));
     body.push(renderDisclosures());
     body.push(renderFileFeed());
     body.push(renderCrossSell(results.map(function (r) { return r.productId; })));
     body.push(renderNextSteps(form));
-    if (opts.includeAuthorization) body.push(renderAuthorizationPage(form, groups, quoteNumber));
+    if (opts.includeAuthorization) body.push(renderAuthorizationPage(form, groups, quoteNumber, opts));
     var warnings = opts.includeWarnings ? renderWarnings(results) : '';
     return warnings +
       '<div class="aby-proposal">\n<div class="proposal-card">\n' +
@@ -513,5 +645,42 @@ ABYQuote.renderer = (function () {
       '\n</div>\n</div>';
   }
 
-  return { render: render };
+  // ── TWO AUDIENCES, TWO FUNCTIONS ───────────────────────────────────────────────────────
+  //
+  // 🔴 WHY THIS EXISTS (F-337). One `render()` served both the internal preview and the
+  // client's document, distinguished by an OPTION. The preview passed `includeWarnings:
+  // true`; the download simply did not pass it at all -- so when the engine fell back to
+  // COMMISSIONED prices for a no-commission quote, the rep saw the note and the employer
+  // received the wrong price with nothing saying so. Nobody wrote a bug; somebody forgot a
+  // flag, and forgetting a flag is silent.
+  //
+  // ⭐ THE RULE: "does the client see this?" must be answered by WHICH FUNCTION YOU CALLED,
+  // not by an options bag. A boolean that decides whether a warning reaches a customer is
+  // too important to have a default.
+  //
+  // `render()` is kept and unchanged so any existing caller behaves exactly as before.
+  function renderInternal(form, results, quoteNumber, opts) {
+    var o = {};
+    for (var k in (opts || {})) o[k] = opts[k];
+    o.includeWarnings = true;
+    return render(form, results, quoteNumber, o);
+  }
+
+  function renderForClient(form, results, quoteNumber, opts) {
+    var o = {};
+    for (var k in (opts || {})) o[k] = opts[k];
+    // Explicit, not merely absent: the internal notes box is headed "hidden in print /
+    // client file", so its CONTENT is wrong for this audience even though the FACT it
+    // carries matters. The fact is surfaced to the broker on screen instead -- see
+    // `collectWarnings` and app.js's download handlers.
+    o.includeWarnings = false;
+    return render(form, results, quoteNumber, o);
+  }
+
+  return {
+    render: render,
+    renderInternal: renderInternal,
+    renderForClient: renderForClient,
+    collectWarnings: collectWarnings,
+  };
 })();
