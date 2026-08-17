@@ -309,11 +309,34 @@
   }
 
   // -------------------------------------------------------------
-  // Effective date dropdown
-  // YEAR-END NOTE: update MAX_EFFECTIVE_DATE once a year.
+  // Effective date dropdown -- a ROLLING horizon, so it can never run out.
+  //
+  // ERIC, 2026-08-17: "let's go always 6 months out until I change that. So you can show through
+  // February right now. At the beginning of September you can add March. I don't want to go beyond
+  // that right now in case we change the pricing."
+  //
+  // THE NUMBER IS COMMERCIAL, NOT TECHNICAL -- it is how far ahead ABY will quote against today's
+  // pricing. That is why it stays one named constant: changing how far ahead the tool quotes has to
+  // be a one-line decision Eric can ask for.
+  //
+  // WHAT THIS REPLACES, AND IT MATTERS MORE THAN THE ASK: a hardcoded MAX_EFFECTIVE_DATE with a
+  // "YEAR-END NOTE: update once a year" comment above it. The loop starts at the current month and
+  // drops a month once past its 16th, so the list DOES NOT GET SHORT, IT GOES EMPTY -- and the field
+  // is `required`, so from 16 January 2027 the tool could not have produced a quote at all. A note
+  // asking a human to remember something once a year is not a mechanism. This removes the cliff
+  // rather than moving it again.
   // -------------------------------------------------------------
 
-  var MAX_EFFECTIVE_DATE = '2027-01-01';
+  var EFFECTIVE_DATE_MONTHS_AHEAD = 6;
+
+  // First of the month, EFFECTIVE_DATE_MONTHS_AHEAD months from the current one. Computed per call
+  // rather than once at load, so a tab left open across a month boundary cannot go stale.
+  // Day 1 also avoids the month-end rollover trap: new Date(2026, 7, 31) plus six months lands in
+  // March, because 31 February does not exist and JS silently overflows it.
+  function maxEffectiveDate() {
+    var t = new Date();
+    return new Date(t.getFullYear(), t.getMonth() + EFFECTIVE_DATE_MONTHS_AHEAD, 1);
+  }
 
   function buildEffectiveDateOptions() {
     if (!dateSelectEl) return;
@@ -331,8 +354,7 @@
     var now = new Date();
     var todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-    var endParts = MAX_EFFECTIVE_DATE.split('-');
-    var endDate = new Date(Number(endParts[0]), Number(endParts[1]) - 1, Number(endParts[2]));
+    var endDate = maxEffectiveDate();
 
     var iter = new Date(now.getFullYear(), now.getMonth(), 1);
 
