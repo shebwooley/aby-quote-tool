@@ -50,6 +50,9 @@ export default {
     if (path === '/api/admin/brokers' && method === 'GET')  return withAuth(request, env, () => handleAdminBrokers(request, env));
     if (path === '/api/admin/assign'  && method === 'POST') return withAuth(request, env, () => handleAdminAssign(request, env));
     if (path === '/api/admin/stats'   && method === 'GET')  return withAuth(request, env, () => handleAdminStats(request, env));
+    if (path === '/api/admin/pipeline' && method === 'GET')  return withAuth(request, env, () => handleAdminPipeline(request, env));
+    if (path === '/api/admin/prospects' && method === 'POST') return withAuth(request, env, () => handleAdminAddProspects(request, env));
+    if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
     // The broker's own page. Public by design -- it IS the sign-in screen; everything behind it
     // is gated per request by the `aby_broker` cookie, not by hiding this route.
     if (path === '/broker/set-password') {
@@ -101,6 +104,10 @@ export default {
     }
 
     // ── Admin page ──────────────────────────────────────────────────────────────
+    if (path === '/admin/pipeline') {
+      return withAuth(request, env, () => new Response(adminPipelineHTML(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
+    }
     if (path === '/admin/brokers') {
       return withAuth(request, env, () => new Response(adminBrokersHTML(), {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
@@ -747,6 +754,256 @@ async function verifyToken(token, password) {
   catch { return false; }
 }
 
+// ─── The sales pipeline (Eric, 2026-08-18) ─────────────────────────────────────
+
+/**
+ * The four statuses, as SQL over the quote history.
+ *
+ * ⭐⭐ ERIC SET THE LINE AT A YEAR, and his reasoning is worth keeping because it is what makes a
+ * long window correct: "since we'll reach out more to the quoting or producing ones, if they truly
+ * go a year without quoting anything, they likely are really dormant."
+ *
+ * ⚠️ `Producing` is keyed on a SOLD quote, not on quoting volume. Somebody can quote constantly and
+ * place nothing; that is a different conversation from somebody writing business, and collapsing
+ * them would hide exactly the account worth a phone call.
+ */
+const PIPELINE_WINDOW_DAYS = 365;
+
+function pipelineStatusSql(emailExpr) {
+  const recent = `datetime('now','-${PIPELINE_WINDOW_DAYS} days')`;
+  return (
+    "CASE " +
+    `WHEN EXISTS (SELECT 1 FROM quotes q WHERE lower(trim(q.broker_email)) = ${emailExpr} AND q.status = 'S' AND q.created_at >= ${recent}) THEN 'producing' ` +
+    `WHEN EXISTS (SELECT 1 FROM quotes q WHERE lower(trim(q.broker_email)) = ${emailExpr} AND q.created_at >= ${recent}) THEN 'quoting' ` +
+    `WHEN EXISTS (SELECT 1 FROM quotes q WHERE lower(trim(q.broker_email)) = ${emailExpr}) THEN 'dormant' ` +
+    "ELSE 'prospect' END"
+  );
+}
+
+/** Everyone ABY tracks: accounts and prospects alike, with status derived and priority as stored. */
+async function handleAdminPipeline(request, env) {
+  const u = new URL(request.url).searchParams;
+  const rep = (u.get('rep') || '').trim().toLowerCase();
+  const status = (u.get('status') || '').trim().toLowerCase();
+  const priority = (u.get('priority') || '').trim().toUpperCase();
+
+  const st = pipelineStatusSql("lower(trim(b.email))");
+  const where = [], args = [];
+  if (rep) { where.push("lower(COALESCE(b.assigned_rep, a.assigned_rep, '')) = ?"); args.push(rep); }
+  if (priority) { where.push("COALESCE(b.priority, a.priority, '') = ?"); args.push(priority); }
+
+  const sql =
+    "SELECT b.id, b.email, b.name, b.phone, b.priority, b.notes, b.assigned_rep, " +
+    "       CASE WHEN b.password_hash = '' THEN 0 ELSE 1 END AS has_account, " +
+    "       a.id AS agency_id, COALESCE(a.name, b.agency) AS agency_name, " +
+    "       a.priority AS agency_priority, a.assigned_rep AS agency_rep, " +
+    `       ${st} AS status, ` +
+    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email))) AS quote_count, " +
+    "       (SELECT MAX(q.created_at) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email))) AS last_quote " +
+    "FROM brokers b LEFT JOIN agencies a ON a.id = b.agency_id " +
+    (where.length ? ('WHERE ' + where.join(' AND ') + ' ') : '') +
+    "ORDER BY b.name LIMIT 1000";
+  try {
+    const r = await env.DB.prepare(sql).bind(...args).all();
+    let rows = r.results || [];
+    // ⚠️ Filtered in JS, not SQL, because `status` is a derived alias and SQLite will not let a
+    // WHERE clause reference it. Filtering on the whole expression again would mean writing it
+    // twice, and two copies of a rule is how they stop agreeing.
+    if (status) rows = rows.filter((x) => x.status === status);
+    return jsonResp({ people: rows, windowDays: PIPELINE_WINDOW_DAYS });
+  } catch (err) {
+    return jsonResp({ people: [], error: String(err && err.message || err) });
+  }
+}
+
+/** Add prospects: agency name, agent name, email. Pasted or typed, same shape as an invite list. */
+async function handleAdminAddProspects(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const rows = Array.isArray(body.people) ? body.people.slice(0, 500) : [];
+  if (!rows.length) return jsonResp({ error: 'Nothing to add.' }, 400);
+  const rep = String(body.rep || '').trim().toLowerCase();
+  const priority = String(body.priority || '').trim().toUpperCase();
+  const added = [], skipped = [], failed = [];
+
+  for (const person of rows) {
+    const email = String(person.email || '').trim().toLowerCase();
+    const name = String(person.name || '').trim().slice(0, 120);
+    const agencyName = String(person.agency || '').trim().slice(0, 120);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { failed.push({ email: email || '(blank)', why: 'not a valid email' }); continue; }
+
+    const existing = await env.DB.prepare('SELECT id FROM brokers WHERE lower(trim(email)) = ?').bind(email).first();
+    // ⛔ NEVER TOUCH AN EXISTING ROW. They may already have an account, quotes, and a rating; a
+    // re-pasted list must not quietly rewrite any of it.
+    if (existing) { skipped.push({ email, why: 'already on the list' }); continue; }
+
+    // Reuse an agency of the same name if there is one, so pasting ten agents from one agency does
+    // not create ten agencies. Matched case-insensitively on the typed name, which is all there is.
+    let agencyId = null;
+    if (agencyName) {
+      const a = await env.DB.prepare('SELECT id FROM agencies WHERE lower(trim(name)) = ?').bind(agencyName.toLowerCase()).first();
+      if (a) agencyId = a.id;
+      else {
+        agencyId = crypto.randomUUID();
+        await env.DB.prepare('INSERT INTO agencies (id, name, share_quotes, created_at, assigned_rep, priority) VALUES (?,?,?,?,?,?)')
+          .bind(agencyId, agencyName, 0, new Date().toISOString(), rep || null, priority || null).run();
+      }
+    }
+    // password_hash '' == no account. This person is on ABY's list, not in the tool.
+    await env.DB.prepare(
+      'INSERT INTO brokers (id, email, password_hash, name, agency, phone, agency_id, role, created_at, assigned_rep, priority) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
+    ).bind(crypto.randomUUID(), email, '', name, agencyName, String(person.phone || '').slice(0, 40),
+           agencyId, 'member', new Date().toISOString(), rep || null, priority || null).run();
+    added.push({ email });
+  }
+  return jsonResp({ ok: true, added, skipped, failed });
+}
+
+/** Set a priority or a note on one person or agency. */
+async function handleAdminRate(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const table = body.kind === 'agency' ? 'agencies' : 'brokers';
+  const id = String(body.id || '');
+  if (!id) return jsonResp({ error: 'Which one?' }, 400);
+  const priority = String(body.priority == null ? '' : body.priority).trim().toUpperCase();
+  if (priority && !['A', 'B', 'C'].includes(priority)) return jsonResp({ error: 'Priority is A, B or C.' }, 400);
+  if (body.priority != null) {
+    await env.DB.prepare(`UPDATE ${table} SET priority = ? WHERE id = ?`).bind(priority || null, id).run();
+  }
+  if (body.notes != null) {
+    await env.DB.prepare(`UPDATE ${table} SET notes = ? WHERE id = ?`).bind(String(body.notes).slice(0, 4000), id).run();
+  }
+  return jsonResp({ ok: true });
+}
+
+// The sales pipeline screen (Eric, 2026-08-18). Brokers and agencies ABY sells TO -- not
+// employers, and deliberately sales-only: no service history, or it becomes a second place where
+// client information lives.
+function adminPipelineHTML() {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Pipeline — ABY admin</title>
+<style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
+ header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
+ header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85} header a:hover{opacity:1}
+ main{max-width:1240px;margin:22px auto;padding:0 18px}
+ .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
+ h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
+ table{width:100%;border-collapse:collapse;font-size:14px}
+ th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
+ td{padding:7px 6px;border-bottom:1px solid #eef2f6} .muted{color:#8a97a8}
+ .n{text-align:right;font-variant-numeric:tabular-nums}
+ .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
+ .filters button{border:1px solid #c8d2de;border-radius:6px;padding:7px 13px;cursor:pointer;font-size:14px}
+ select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
+
+ .pill{display:inline-block;padding:2px 9px;border-radius:11px;font-size:12px;font-weight:600}
+ .producing{background:#e8f4ec;color:#1a5c3a} .quoting{background:#e6eefb;color:#1c4587}
+ .dormant{background:#fdf1e0;color:#8a5a12} .prospect{background:#eef1f5;color:#5b6b7f}
+ textarea{width:100%;padding:9px 11px;border:1px solid #c8d2de;border-radius:6px;font:14px monospace}
+ .note{width:100%;border:1px solid transparent;background:transparent;border-radius:5px;padding:4px 6px;font-size:13px}
+ .note:focus{border-color:#c8d2de;background:#fff;outline:none}
+</style></head><body>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a></header>
+<main>
+  <div class="card">
+    <h2>Add prospects</h2>
+    <p class="sub">One per line, as <strong>agency, name, email</strong>. Nobody is emailed and no account is created &mdash; this is your list, not an invitation.</p>
+    <textarea id="box" rows="4" placeholder="Acme Benefits, Jane Smith, jane@acme.com&#10;Boyd &amp; Co, Tanya Boyd, tanya@boyd.com"></textarea>
+    <div class="filters" style="margin-top:10px">
+      <span class="muted" style="font-size:13px">Owner:</span>
+      <select id="newRep"><option value="">—</option><option value="eric">Eric</option><option value="niels">Niels</option></select>
+      <span class="muted" style="font-size:13px">Priority:</span>
+      <select id="newPri"><option value="">—</option><option>A</option><option>B</option><option>C</option></select>
+      <button id="add" style="background:#143c73;color:#fff;border:0;font-weight:600">Add to the list</button>
+    </div>
+    <div class="msg" id="addMsg" style="display:none;margin-top:10px;padding:10px 12px;border-radius:6px;font-size:13px"></div>
+  </div>
+
+  <div class="filters">
+    <span class="muted" style="font-size:13px">Owner:</span>
+    <select id="fRep"><option value="">Everyone</option><option value="eric">Eric</option><option value="niels">Niels</option></select>
+    <span class="muted" style="font-size:13px">Status:</span>
+    <select id="fStatus"><option value="">All</option><option value="producing">Producing</option><option value="quoting">Quoting</option><option value="dormant">Dormant</option><option value="prospect">Prospect</option></select>
+    <span class="muted" style="font-size:13px">Priority:</span>
+    <select id="fPri"><option value="">All</option><option>A</option><option>B</option><option>C</option></select>
+    <span class="muted" id="counts" style="margin-left:auto;font-size:13px"></span>
+  </div>
+
+  <div class="card">
+    <h2>Everyone we track</h2>
+    <p class="sub" id="explain"></p>
+    <div id="list"><p class="muted">Loading...</p></div>
+  </div>
+</main>
+<script>
+ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+ function day(s){return s?String(s).slice(0,10):'\u2014'}
+ var LBL={producing:'Producing',quoting:'Quoting',dormant:'Dormant',prospect:'Prospect'};
+ function msg(el,t,good){el.textContent=t;el.style.display='block';el.style.background=good?'#e8f4ec':'#fdecec';el.style.color=good?'#1a5c3a':'#a12622'}
+ function priSelect(kind,id,cur){
+   return '<select data-k="'+kind+'" data-id="'+esc(id)+'" class="pri">'
+     +['','A','B','C'].map(function(v){return '<option value="'+v+'"'+((cur||'')===v?' selected':'')+'>'+(v||'\u2014')+'</option>'}).join('')+'</select>';
+ }
+ document.getElementById('add').onclick=async function(){
+   var people=document.getElementById('box').value.split(/\\r?\\n/).map(function(l){
+     var pcs=l.split(','); if(pcs.length<2) return null;
+     return {agency:(pcs[0]||'').trim(), name:(pcs.length>2?pcs[1]:'').trim(), email:pcs[pcs.length-1].trim()};
+   }).filter(function(x){return x&&x.email});
+   if(!people.length){msg(document.getElementById('addMsg'),'Add at least one line as: agency, name, email',false);return}
+   var r=await fetch('/api/admin/prospects',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({people:people,rep:document.getElementById('newRep').value,priority:document.getElementById('newPri').value})});
+   var d=await r.json().catch(function(){return{}});
+   if(!r.ok){msg(document.getElementById('addMsg'),d.error||'Could not add.',false);return}
+   var bits=[];
+   if(d.added.length) bits.push(d.added.length+' added');
+   if(d.skipped.length) bits.push(d.skipped.length+' already on the list');
+   if(d.failed.length) bits.push(d.failed.length+' rejected ('+d.failed.map(function(x){return x.email}).join(', ')+')');
+   msg(document.getElementById('addMsg'),bits.join('. '),!d.failed.length);
+   document.getElementById('box').value=''; load();
+ };
+ ['fRep','fStatus','fPri'].forEach(function(id){document.getElementById(id).onchange=load});
+ async function load(){
+   var q=[];
+   if(document.getElementById('fRep').value) q.push('rep='+document.getElementById('fRep').value);
+   if(document.getElementById('fStatus').value) q.push('status='+document.getElementById('fStatus').value);
+   if(document.getElementById('fPri').value) q.push('priority='+document.getElementById('fPri').value);
+   var d=await (await fetch('/api/admin/pipeline'+(q.length?('?'+q.join('&')):''))).json().catch(function(){return{}});
+   var rows=d.people||[];
+   document.getElementById('explain').textContent=
+     'Status is worked out from the quote history and cannot be edited: Producing means a sold quote in the last '
+     +(d.windowDays||365)+' days, Quoting means a quote in that window, Dormant means quoted before but not since, Prospect means never quoted.';
+   var c={producing:0,quoting:0,dormant:0,prospect:0};
+   rows.forEach(function(x){c[x.status]=(c[x.status]||0)+1});
+   document.getElementById('counts').textContent=
+     c.producing+' producing \u00b7 '+c.quoting+' quoting \u00b7 '+c.dormant+' dormant \u00b7 '+c.prospect+' prospect';
+   document.getElementById('list').innerHTML = rows.length
+     ? '<table><thead><tr><th>Agency</th><th>Agent</th><th>Email</th><th>Status</th><th class="n">Quotes</th><th>Last quote</th><th>Account</th><th>Priority</th><th>Note</th></tr></thead><tbody>'
+       + rows.map(function(x){
+           return '<tr><td>'+esc(x.agency_name||'\u2014')+'</td><td>'+esc(x.name||'\u2014')+'</td><td>'+esc(x.email)+'</td>'
+             +'<td><span class="pill '+x.status+'">'+LBL[x.status]+'</span></td>'
+             +'<td class="n">'+x.quote_count+'</td><td>'+day(x.last_quote)+'</td>'
+             +'<td>'+(x.has_account?'yes':'<span class="muted">no</span>')+'</td>'
+             +'<td>'+priSelect('broker',x.id,x.priority)+'</td>'
+             +'<td><input class="note" data-id="'+esc(x.id)+'" value="'+esc(x.notes||'')+'" placeholder="\u2026"></td></tr>';
+         }).join('')+'</tbody></table>'
+     : '<p class="muted">Nobody on the list yet. Paste some above.</p>';
+   Array.prototype.forEach.call(document.querySelectorAll('select.pri'),function(sel){
+     sel.onchange=async function(){
+       await fetch('/api/admin/rate',{method:'POST',headers:{'Content-Type':'application/json'},
+         body:JSON.stringify({kind:sel.getAttribute('data-k'),id:sel.getAttribute('data-id'),priority:sel.value})});
+       load();
+     };
+   });
+   Array.prototype.forEach.call(document.querySelectorAll('input.note'),function(inp){
+     inp.onchange=async function(){
+       await fetch('/api/admin/rate',{method:'POST',headers:{'Content-Type':'application/json'},
+         body:JSON.stringify({kind:'broker',id:inp.getAttribute('data-id'),notes:inp.value})});
+     };
+   });
+ }
+ load();
+</script></body></html>`;
+}
+
 // ─── ABY admin sub-pages (Eric, 2026-08-18) ────────────────────────────────────
 //
 // ⭐ SEPARATE PAGES RATHER THAN MORE TABS ON `adminHTML()`. That function is the quote log, it
@@ -770,7 +1027,7 @@ function adminBrokersHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/rates">Rates</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a></header>
 <main>
   <div class="filters">
     <span class="muted" style="font-size:13px">Show:</span>
@@ -872,7 +1129,7 @@ function adminRatesHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/rates">Rates</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a></header>
 <main>
   <div class="filters">
     <span class="muted" style="font-size:13px">State:</span>
@@ -1861,6 +2118,29 @@ const MIGRATIONS = [
   // rep on a quote and the owner of a broker are the same vocabulary.
   { sql: "ALTER TABLE brokers  ADD COLUMN assigned_rep TEXT", table: "brokers",  column: "assigned_rep" },
   { sql: "ALTER TABLE agencies ADD COLUMN assigned_rep TEXT", table: "agencies", column: "assigned_rep" },
+
+  // ── The sales pipeline (Eric, 2026-08-18) ───────────────────────────────────────────────────
+  //
+  // "I want currently selling, currently quoting, sold or quoted in past, and prospects... Then,
+  // for the agencies and agents, I'd like some sort of priority level - how much would we like to
+  // have them working with us."
+  //
+  // 🔴🔴 THOSE ARE TWO DIFFERENT KINDS OF THING AND ONLY ONE IS STORED.
+  //   STATUS is a FACT and is DERIVED, never typed -- see `pipelineStatusSql()`. A hand-maintained
+  //   status is wrong within a fortnight: an agency quotes on Tuesday and their row still says
+  //   prospect. ⛔ There is deliberately NO status column.
+  //   PRIORITY is a JUDGMENT and can only come from a person. A large agency that has never quoted
+  //   is a prospect by the data and an A by intent, and no query will ever work that out.
+  //
+  // ⭐ A PROSPECT IS JUST A ROW WITH NO ACCOUNT. Brokers and agencies already exist without one --
+  // that is what an invited-but-not-yet-registered person is -- so a prospect needs no new table.
+  // ⛔ A SEPARATE `prospects` TABLE WAS REJECTED: the merge would land exactly when a prospect
+  // signs up, i.e. at the best moment, forcing somebody to reconcile sales notes against a new
+  // account by hand. Same reasoning that keeps agencies one table.
+  { sql: "ALTER TABLE brokers  ADD COLUMN priority TEXT", table: "brokers",  column: "priority" },
+  { sql: "ALTER TABLE agencies ADD COLUMN priority TEXT", table: "agencies", column: "priority" },
+  { sql: "ALTER TABLE brokers  ADD COLUMN notes TEXT",    table: "brokers",  column: "notes" },
+  { sql: "ALTER TABLE agencies ADD COLUMN notes TEXT",    table: "agencies", column: "notes" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column
