@@ -28,6 +28,9 @@ export default {
     // ── API routes ──────────────────────────────────────────────────────────────
     if (path === '/api/quotes' && method === 'POST')  return handleSaveQuote(request, env, ctx);
     if (path === '/api/quotes' && method === 'GET')   return withAuth(request, env, () => handleListQuotes(request, env));
+    // The BenefitLab dashboard's read endpoint (F-268). NOT cookie-authed -- it is a
+    // server-to-server call carrying a bearer token, so it gets its own gate.
+    if (path === '/api/broker-quotes' && method === 'GET') return handleBrokerQuotes(request, env);
     if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'GET') {
       return withAuth(request, env, () => handleGetQuote(path.split('/').pop(), env));
     }
@@ -319,6 +322,79 @@ async function handleListQuotes(request, env) {
     console.error('handleListQuotes failed:', err);
     return jsonResp({ error: String(err) }, 500);
   }
+}
+
+// ─── Broker-scoped read: the BenefitLab dashboard's endpoint (F-268) ───────────
+//
+// GET /api/broker-quotes?email=<broker email>
+//   Authorization: Bearer <INTEGRATION_TOKEN>
+//   -> { quotes: [ ... ] }
+//
+// ⭐⭐ THE WHOLE OF F-268 WAS THIS ONE FUNCTION, and the row said otherwise for weeks. It was
+// filed as "ABY should send the client id", owned by "Eric / ABY", as though it needed a
+// conversation with ABY. Measured 2026-08-18: `client_id` is ALREADY stored on `quotes` and
+// already returned to the admin, and the dashboard side is ENTIRELY built -- a panel, its own
+// server route holding the token, the matcher, and the renewal-source wiring. All of it was
+// calling this path, which did not exist. **The dashboard has been fetching a 404.**
+//
+// 🔴🔴 IT DOES NOT REUSE `handleListQuotes`'s COLUMN LIST, AND THAT IS THE POINT OF THIS
+// FUNCTION EXISTING SEPARATELY. That list includes `adjustment` and `adjustment_note` -- ABY's
+// INTERNAL PRICING OVERRIDE. Handing those to a broker would disclose what ABY discounted and by
+// how much, on the one surface a broker reads directly. ⛔ Never widen this to `SELECT *`, and
+// never "simplify" it by sharing the admin's `cols`.
+// ⭐ The fields sent are exactly the ones `AbyQuote` in `benefitlab-dashboard/src/lib/aby-quotes.ts`
+// DECLARES. Anything extra would be silently dropped by the consumer while still being disclosed
+// over the wire, which is the worst of both.
+//
+// 🔴 IT FAILS CLOSED. No `INTEGRATION_TOKEN` configured means 503, never "allow" -- an unset
+// secret must not become an open endpoint. (Gates fail closed; UIs fail open.)
+async function handleBrokerQuotes(request, env) {
+  const expected = env.INTEGRATION_TOKEN;
+  if (!expected) {
+    return jsonResp({ error: 'This endpoint is not configured.' }, 503);
+  }
+  const auth = request.headers.get('Authorization') || '';
+  const m = /^Bearer\s+(.+)$/i.exec(auth.trim());
+  if (!m || !safeEqual(m[1], expected)) {
+    return jsonResp({ error: 'Unauthorized' }, 401);
+  }
+
+  const url = new URL(request.url);
+  const email = (url.searchParams.get('email') || '').trim().toLowerCase();
+  // ⛔ NO EMAIL MEANS NO ANSWER, not "every quote". A blank parameter must never widen the scope:
+  // matching on '' would return exactly the rows that belong to NOBODY, which still carry employer
+  // names. The caller always sends an address; a missing one is a bug worth surfacing.
+  if (!email) {
+    return jsonResp({ error: 'An email parameter is required.' }, 400);
+  }
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '300', 10) || 300, 500);
+
+  // ⚠️ `lower(trim(...))` on the COLUMN, not just the parameter. The address is broker-typed free
+  // text, so a stored "Jane@Brokerage.com " and a requested "jane@brokerage.com" are the same
+  // broker and an exact match would silently return nothing.
+  const cols = "id, quote_number, created_at, client_name, client_id, effective_date, " +
+               "broker_name, broker_agency, broker_email, rep_name, products, " +
+               "COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, " +
+               "COALESCE(state, 'TX') AS state";
+  try {
+    const result = await env.DB.prepare(
+      `SELECT ${cols} FROM quotes WHERE lower(trim(broker_email)) = ? ORDER BY created_at DESC LIMIT ?`
+    ).bind(email, limit).all();
+    return jsonResp({ quotes: result.results || [] });
+  } catch (err) {
+    console.error('handleBrokerQuotes failed:', err);
+    return jsonResp({ error: String(err) }, 500);
+  }
+}
+
+// Length-independent compare, so a wrong token cannot be narrowed down by timing. Not the most
+// important control here (the token is a long random secret), but it costs three lines.
+function safeEqual(a, b) {
+  const x = String(a), y = String(b);
+  if (x.length !== y.length) return false;
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x.charCodeAt(i) ^ y.charCodeAt(i);
+  return diff === 0;
 }
 
 // ─── Quote: get single (admin) ─────────────────────────────────────────────────
