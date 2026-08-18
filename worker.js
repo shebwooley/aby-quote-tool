@@ -52,6 +52,56 @@ export default {
     if (path === '/api/admin/login'  && method === 'POST') return handleLogin(request, env);
     if (path === '/api/admin/logout')                      return handleLogout();
 
+    // ── Per-broker identity and the broker dashboard (F-6) ─────────────────────
+    // ⚠️ SERVER-TO-SERVER, NOT A BROWSER ROUTE. The BenefitLab dashboard calls this with a
+    // bearer token and an email it has already verified through Supabase, so no ABY account
+    // is needed for that path at all -- a broker signs into BenefitLab and their ABY quotes
+    // are simply there. The client half has existed in `benefitlab-dashboard` since 08-06;
+    // THIS END WAS NEVER BUILT, which is why the connector has been dormant.
+    if (path === '/api/broker-quotes' && method === 'GET') return handleBrokerQuotesIntegration(request, env);
+    // The broker's own signed-in view of the same data.
+    if (path === '/api/my/quotes' && method === 'GET') {
+      return withBroker(request, env, (s) => handleMyQuotes(env, s));
+    }
+    if (path === '/api/my/whoami' && method === 'GET') {
+      return withBroker(request, env, (s) => jsonResp({ email: s.email, role: s.role }));
+    }
+    if (path === '/api/my/password' && method === 'POST') return handleSetPassword(request, env);
+    // ABY-only broker administration.
+    if (path === '/api/brokers' && method === 'GET')  return withAuth(request, env, () => handleListBrokers(env));
+    if (path === '/api/brokers' && method === 'POST') return withAuth(request, env, () => handleUpsertBroker(request, env));
+
+    // ── Broker-facing pages ────────────────────────────────────────────────────
+    // ⚠️ The dashboard is served THROUGH `withBroker`, so an unauthenticated visitor gets the
+    // sign-in page from the same URL rather than a redirect somewhere else. One address to
+    // give a broker, whether or not they happen to be signed in when they open it.
+    if (path === '/dashboard' || path === '/dashboard/') {
+      return withBroker(request, env, () => new Response(brokerDashboardHTML(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+      }));
+    }
+    // ⛔ DELIBERATELY UNGATED, and it has to be: this is where somebody who has no password
+    // yet goes to make one. The SIGNED TOKEN IN THE URL is the authorisation.
+    if (path === '/set-password') {
+      const em = normEmail(url.searchParams.get('email'));
+      const t  = url.searchParams.get('t') || '';
+      // ⚠️ VERIFIED BEFORE THE PAGE RENDERS, so a bad link says so plainly rather than showing
+      // a form that can only fail after somebody has chosen a password and typed it twice.
+      if (!em || !t || !(await verifySetupToken(env, em, t))) {
+        return new Response(
+          '<!DOCTYPE html><meta charset="utf-8"><title>Link expired</title>' +
+          '<body style="font-family:system-ui;max-width:34rem;margin:4rem auto;padding:0 1rem">' +
+          '<h1 style="font-size:1.2rem">That setup link is not valid</h1>' +
+          '<p>Setup links expire after ' + SETUP_HOURS + ' hours, and stop working once a password ' +
+          'has been set. Ask ABY for a new one.</p></body>',
+          { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } },
+        );
+      }
+      return new Response(setPasswordHTML(em, t), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+      });
+    }
+
     // ── Diagnostic: minimal auth-gated D1 query ────────────────────────────────
     if (path === '/api/quotes-ping') {
       return withAuth(request, env, async () => {
@@ -539,44 +589,97 @@ async function handleDeleteCommitment(id, env) {
   }
 }
 
+/**
+ * Sign in. TWO doors, and both had to stay open (F-6).
+ *
+ * ① ADMIN_PASSWORD with no email -- ABY's existing staff door. Unchanged for Eric, who signs
+ *    in this way today; it now additionally issues a SESSION saying role=aby.
+ * ② email + password -- a broker with their own account.
+ *
+ * ⚠️ THE ERROR MESSAGE IS DELIBERATELY THE SAME FOR "no such broker", "wrong password" and
+ * "disabled". Distinguishing them tells anybody who asks which email addresses have accounts
+ * here, which is a list of ABY's brokers.
+ * ⚠️ AND A DISABLED BROKER IS REFUSED BEFORE THE PASSWORD IS EVEN CHECKED -- revoking access
+ * is the point of this table, and a revoked person must not be able to learn that their
+ * password was still right.
+ */
 async function handleLogin(request, env) {
-  let pw;
+  let pw, email;
   const ct = request.headers.get('content-type') || '';
   if (ct.includes('application/json')) {
     const b = await request.json().catch(() => ({}));
-    pw = b.password;
+    pw = b.password; email = b.email;
   } else {
     const fd = await request.formData().catch(() => null);
-    pw = fd?.get('password');
+    pw = fd?.get('password'); email = fd?.get('email');
   }
 
-  if (!pw || pw !== env.ADMIN_PASSWORD) {
-    return jsonResp({ error: 'Unauthorized' }, 401);
+  const who = normEmail(email);
+
+  // ① The ABY staff door.
+  if (!who) {
+    if (!pw || pw !== env.ADMIN_PASSWORD) return jsonResp({ error: 'Unauthorized' }, 401);
+    const legacy = await makeToken(env.ADMIN_PASSWORD);
+    const session = await makeSession(env, { email: 'aby@abybenefits.com', role: 'aby' });
+    // ⚠️ BOTH COOKIES. The legacy one keeps every existing `withAuth` route and the internal
+    // overlay working exactly as before; the session is what carries identity from here on.
+    // Removing the legacy cookie in the same change would have made one deploy responsible for
+    // both a new auth model AND every screen that reads the old one.
+    const h = new Headers({ 'Content-Type': 'application/json' });
+    h.append('Set-Cookie', `${COOKIE_NAME}=${legacy}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400`);
+    h.append('Set-Cookie', sessionCookie(session));
+    return new Response(JSON.stringify({ ok: true, role: 'aby' }), { headers: h });
   }
 
-  const token = await makeToken(env.ADMIN_PASSWORD);
-  return new Response(JSON.stringify({ ok: true }), {
-    headers: {
-      'Content-Type': 'application/json',
-      'Set-Cookie': `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400`,
-    },
-  });
+  // ② A broker signing in with their own account.
+  const row = await getBroker(env, who);
+  const bad = () => jsonResp({ error: 'That email and password do not match an account.' }, 401);
+  if (!row || row.status !== 'active') return bad();
+  if (!pw || !(await verifyPassword(pw, row))) return bad();
+
+  // Raise an old row to the current cost, now that the plaintext is in hand and correct.
+  if (row.pw_iter !== PBKDF2_ITER) {
+    const fresh = await hashPassword(pw);
+    await env.DB.prepare('UPDATE brokers SET pw_hash=?, pw_salt=?, pw_iter=? WHERE email=?')
+      .bind(fresh.hash, fresh.salt, fresh.iter, who).run().catch(() => {});
+  }
+  await env.DB.prepare('UPDATE brokers SET last_seen_at=? WHERE email=?')
+    .bind(new Date().toISOString(), who).run().catch(() => {});
+
+  const session = await makeSession(env, { email: who, role: row.role === 'aby' ? 'aby' : 'broker' });
+  const h = new Headers({ 'Content-Type': 'application/json' });
+  h.append('Set-Cookie', sessionCookie(session));
+  // ⛔ AN ABY-ROLE BROKER DOES NOT GET THE LEGACY COOKIE. That cookie is password-equivalent
+  // and is not theirs to hold; staff powers for them come from the session's role instead.
+  return new Response(JSON.stringify({ ok: true, role: row.role === 'aby' ? 'aby' : 'broker' }), { headers: h });
 }
 
 function handleLogout() {
-  return new Response(JSON.stringify({ ok: true }), {
-    headers: {
-      'Content-Type': 'application/json',
-      'Set-Cookie': `${COOKIE_NAME}=deleted; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`,
-    },
-  });
+  // ⚠️ BOTH COOKIES, ALWAYS. Clearing only one leaves a signed-out person still holding a
+  // working credential, which is the worst possible outcome of a "Sign out" button.
+  const h = new Headers({ 'Content-Type': 'application/json' });
+  h.append('Set-Cookie', `${COOKIE_NAME}=deleted; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`);
+  h.append('Set-Cookie', clearedSessionCookie());
+  return new Response(JSON.stringify({ ok: true }), { headers: h });
 }
 
+/**
+ * The ABY-STAFF gate. Everything behind it sees every broker's data, so it must admit only
+ * ABY.
+ *
+ * ⭐ TWO WAYS IN, AND THE SECOND IS THE NEW ONE: the legacy shared-password cookie, or a
+ * SESSION whose role is 'aby'. A broker session reaches neither -- `readSession` returns
+ * role 'broker' and the test below is an explicit === 'aby', not a truthiness check.
+ */
 async function withAuth(request, env, handler) {
   const cookies = parseCookies(request.headers.get('Cookie') || '');
   const token   = cookies[COOKIE_NAME];
 
   if (token && await verifyToken(token, env.ADMIN_PASSWORD)) {
+    return handler();
+  }
+  const session = await readSession(request, env);
+  if (session && session.role === 'aby') {
     return handler();
   }
 
@@ -619,13 +722,234 @@ function parseCookies(header) {
   return out;
 }
 
+// ═══ PER-BROKER IDENTITY (F-6) ═════════════════════════════════════════════════
+//
+// WHAT WAS HERE BEFORE, AND WHY IT HAD TO CHANGE. `makeToken()` above is an HMAC of the
+// CONSTANT string 'aby-admin-v1' keyed by ADMIN_PASSWORD. Three consequences, none of them
+// obvious from reading it:
+//   ① The token is the SAME VALUE for everybody. It identifies nobody.
+//   ② It NEVER EXPIRES. `Max-Age=86400` is a request to the browser, not a server rule --
+//      a copied cookie works forever, until the password itself is changed.
+//   ③ It is password-EQUIVALENT: anyone holding it has what the password grants.
+// ⛔ Nothing below deletes that door. Eric signs in with ADMIN_PASSWORD today and must keep
+// being able to; `handleLogin` still accepts it and now issues a SESSION that says role=aby.
+//
+// ⭐ A SESSION IS `payload.signature`, signed with HMAC-SHA256 and carrying identity and an
+// EXPIRY IN THE SIGNED PART -- so expiry is enforced by the server, which is the whole
+// difference from the cookie's Max-Age.
+//
+// 🔴 THE SIGNING KEY. `SESSION_SECRET` if set, otherwise ADMIN_PASSWORD. The fallback exists
+// so this works the moment it deploys, with no new secret to set first -- but it has a real
+// cost worth stating: while the fallback is in use, CHANGING ADMIN_PASSWORD SIGNS EVERYONE
+// OUT, brokers included. Setting SESSION_SECRET separates the two.
+const SESSION_COOKIE = 'aby_session';
+const SESSION_HOURS  = 12;
+
+function b64urlEncode(bytes) {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDecode(str) {
+  const pad = str.replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(pad + '='.repeat((4 - (pad.length % 4)) % 4));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
+function sessionKeyMaterial(env) {
+  return env.SESSION_SECRET || env.ADMIN_PASSWORD || '';
+}
+
+async function hmac(secret, message) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(message)));
+}
+
+/**
+ * ⚠️ CONSTANT-TIME COMPARISON. `a === b` on a signature leaks, through timing, how many
+ * leading bytes were right -- which is enough to forge one byte at a time. The cost of doing
+ * it properly here is a loop.
+ */
+function timingSafeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function makeSession(env, { email, role }) {
+  const payload = b64urlEncode(new TextEncoder().encode(JSON.stringify({
+    e: String(email || '').toLowerCase(),
+    r: role === 'aby' ? 'aby' : 'broker',
+    x: Date.now() + SESSION_HOURS * 3600 * 1000,
+  })));
+  const sig = b64urlEncode(await hmac(sessionKeyMaterial(env), payload));
+  return `${payload}.${sig}`;
+}
+
+/** The signed-in person, or null. Never throws -- a malformed cookie is simply not a session. */
+async function readSession(request, env) {
+  const secret = sessionKeyMaterial(env);
+  if (!secret) return null;
+  const raw = parseCookies(request.headers.get('Cookie') || '')[SESSION_COOKIE];
+  if (!raw || raw.indexOf('.') < 0) return null;
+  const [payload, sig] = raw.split('.');
+  try {
+    const expected = b64urlEncode(await hmac(secret, payload));
+    if (!timingSafeEqual(sig, expected)) return null;
+    const body = JSON.parse(new TextDecoder().decode(b64urlDecode(payload)));
+    // ⚠️ THE EXPIRY IS CHECKED HERE, on the server, from the SIGNED payload. This is the line
+    // that makes a copied cookie stop working.
+    if (!body || typeof body.x !== 'number' || Date.now() > body.x) return null;
+    return { email: String(body.e || '').toLowerCase(), role: body.r === 'aby' ? 'aby' : 'broker' };
+  } catch {
+    return null;
+  }
+}
+
+function sessionCookie(token) {
+  return `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_HOURS * 3600}`;
+}
+function clearedSessionCookie() {
+  return `${SESSION_COOKIE}=deleted; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
+}
+
+// ─── Broker records ────────────────────────────────────────────────────────────
+
+/**
+ * 🔴 THE ONE NORMALISATION EVERYTHING DEPENDS ON. Broker email is typed by hand into the
+ * quote form, so one person is "Jane@Agency.com" on one quote and "jane@agency.com " on the
+ * next. Every write, every lookup and every scoping filter goes through this -- an exact
+ * match anywhere else silently splits one broker's quotes into two people, and the symptom
+ * is a broker who says "some of my quotes are missing" with nothing in any log.
+ */
+function normEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+/**
+ * PBKDF2-SHA256. Web Crypto, so no dependency in a Worker.
+ *
+ * ⚠️ THE ITERATION COUNT IS STORED PER ROW rather than fixed in code, so it can be raised
+ * later without locking anybody out: an old row verifies at its own count and is re-hashed
+ * at the current one on the next successful sign-in.
+ */
+const PBKDF2_ITER = 210000;
+
+async function derivePassword(password, saltBytes, iterations) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: saltBytes, iterations, hash: 'SHA-256' }, key, 256,
+  );
+  return b64urlEncode(new Uint8Array(bits));
+}
+
+async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  return {
+    hash: await derivePassword(password, salt, PBKDF2_ITER),
+    salt: b64urlEncode(salt),
+    iter: PBKDF2_ITER,
+  };
+}
+
+async function verifyPassword(password, row) {
+  if (!row || !row.pw_hash || !row.pw_salt || !row.pw_iter) return false;
+  const got = await derivePassword(password, b64urlDecode(row.pw_salt), row.pw_iter);
+  return timingSafeEqual(got, row.pw_hash);
+}
+
+/**
+ * The columns a BROKER may see. Deliberately narrower than the admin list.
+ *
+ * ⛔ `adjustment` AND `adjustment_note` ARE OMITTED, and that is the reason this is a separate
+ * constant rather than a reuse of the admin one. They record ABY's internal rate override and
+ * the reason for it -- ABY's own margin thinking. `adjustment_note` is even labelled
+ * "(internal)" in the schema. A broker seeing their own quote must not see them, and the way
+ * to guarantee that is to never select them, rather than to strip them afterwards.
+ * ⚠️ It matches the 13 fields `benefitlab-dashboard/src/lib/aby-quotes.ts` declares, plus the
+ * two it will want next. Adding a column here publishes it to the Broker Dashboard too.
+ */
+const BROKER_QUOTE_COLS =
+  "id, quote_number, created_at, client_name, client_id, effective_date, broker_name, broker_agency, " +
+  "broker_email, rep_name, products, COALESCE(status,'P') AS status, COALESCE(ran_by,'broker') AS ran_by, " +
+  "COALESCE(state,'TX') AS state, commission_included";
+
+/**
+ * Every quote belonging to one broker, newest first.
+ *
+ * 🔴 THE JOIN IS ON A NORMALISED EMAIL AT BOTH ENDS. `quotes.broker_email` was typed by hand
+ * on every row ever saved, so it carries mixed case and stray spaces; comparing it raw would
+ * hide a broker's own quotes from them with no error anywhere.
+ */
+async function quotesForBroker(env, email, limit = 300) {
+  const e = normEmail(email);
+  if (!e) return [];
+  const r = await env.DB.prepare(
+    `SELECT ${BROKER_QUOTE_COLS} FROM quotes
+      WHERE lower(trim(broker_email)) = ?
+      ORDER BY created_at DESC LIMIT ?`,
+  ).bind(e, limit).all();
+  return r.results || [];
+}
+
+async function getBroker(env, email) {
+  const e = normEmail(email);
+  if (!e) return null;
+  try {
+    return await env.DB.prepare('SELECT * FROM brokers WHERE email = ?').bind(e).first();
+  } catch {
+    // The table may not exist yet on a database that has not been migrated. A missing table
+    // must read as "no such broker", never as an error that takes the whole tool down.
+    return null;
+  }
+}
+
 // ─── ABY internal door ─────────────────────────────────────────────────────────
 
 // Boolean session check (does NOT block). Used to stamp ran_by on saves.
 async function isAuthed(request, env) {
   const cookies = parseCookies(request.headers.get('Cookie') || '');
   const token = cookies[COOKIE_NAME];
-  return !!(token && await verifyToken(token, env.ADMIN_PASSWORD));
+  if (token && await verifyToken(token, env.ADMIN_PASSWORD)) return true;
+  // ⚠️ `ran_by` MUST STAY 'ABY' ONLY FOR ABY. This function stamps who sat at the keyboard,
+  // and a broker with their own login is still a broker -- so only the aby role counts here.
+  // Treating any session as authed would relabel every broker's quote as ABY-run, silently,
+  // and the column exists precisely to tell those apart.
+  const session = await readSession(request, env);
+  return !!(session && session.role === 'aby');
+}
+
+/**
+ * The BROKER gate. Admits any active signed-in person and hands the handler their identity,
+ * so the handler cannot forget to scope: there is no way to call it without an email in hand.
+ *
+ * 🔴 THE SCOPE COMES FROM THE SESSION, NEVER FROM THE REQUEST. A broker who edits
+ * `?email=` in the address bar changes nothing -- the value is not read.
+ */
+async function withBroker(request, env, handler) {
+  const session = await readSession(request, env);
+  if (!session) {
+    return new URL(request.url).pathname.startsWith('/api/')
+      ? jsonResp({ error: 'Please sign in.' }, 401)
+      : new Response(loginHTML(), { status: 401, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
+  }
+  // ⚠️ RE-READ ON EVERY REQUEST rather than trusted from the signed cookie. Disabling a broker
+  // has to take effect NOW, not when their 12-hour session happens to lapse -- otherwise
+  // "revoke" means "revoke, eventually", which is not what anybody means by it.
+  // ⭐ The ABY staff door has no `brokers` row at all, so it is exempt by identity, not by a
+  // missing check.
+  if (session.email !== 'aby@abybenefits.com') {
+    const row = await getBroker(env, session.email);
+    if (!row || row.status !== 'active') {
+      const h = new Headers({ 'Content-Type': 'application/json' });
+      h.append('Set-Cookie', clearedSessionCookie());
+      return new Response(JSON.stringify({ error: 'Please sign in.' }), { status: 401, headers: h });
+    }
+  }
+  return handler(session);
 }
 
 // Paths that stay public even while SITE_LOCKED is true. Add more here as needed.
@@ -649,6 +973,12 @@ async function isAuthed(request, env) {
 // logo directory; keep it that way.
 function isOpenPath(path) {
   if (path.startsWith('/assets/images/')) return true;
+  // ⭐ F-6: the broker doors stay reachable while the tool itself is locked, and that is the
+  // whole point of the lock now. `SITE_LOCKED` exists to keep the QUOTING TOOL closed while
+  // pricing is settled; a broker signing in to READ THEIR OWN QUOTES is a different act.
+  // ⚠️ Both are still gated -- `/dashboard` by `withBroker`, `/set-password` by a signed token.
+  // "Open" here means "the site lock does not also apply", never "no authentication".
+  if (path === '/dashboard' || path === '/dashboard/' || path === '/set-password') return true;
   return path === '/july-2026' || path === '/july-2026/' || path === '/july-2026.html';
 }
 
@@ -670,6 +1000,14 @@ async function serveAbyTool(request, env) {
 // Idempotent migration: add attribution columns if they do not exist yet.
 async function handleMigrate(env) {
   const stmts = [
+    // 🔴 `status` WAS MISSING FROM THIS LIST UNTIL 2026-08-17, and it is not a cosmetic gap.
+    // Production has the column because it was added BY HAND through the Cloudflare console,
+    // so nothing ever noticed -- but every list query selects `COALESCE(status,'P')`, which
+    // means a FRESH database could not serve a single quote list, admin or broker. Found by
+    // standing a local D1 up from schema.sql and running the real endpoints against it.
+    // ⚠️ Adding it here is safe on an existing database: a duplicate column throws and the
+    // loop below swallows it, which is the same contract every other line here relies on.
+    "ALTER TABLE quotes ADD COLUMN status TEXT DEFAULT 'P'",
     "ALTER TABLE quotes ADD COLUMN ran_by TEXT",
     "ALTER TABLE quotes ADD COLUMN state TEXT",
     "ALTER TABLE quotes ADD COLUMN adjustment TEXT",
@@ -692,6 +1030,21 @@ async function handleMigrate(env) {
     // points at changed later.
     "ALTER TABLE commitments ADD COLUMN client_id TEXT",
     "ALTER TABLE commitments ADD COLUMN broker_email TEXT",
+    // ── Per-broker identity (F-6, 2026-08-17) ────────────────────────────────
+    // ⚠️ CREATE TABLE IF NOT EXISTS, so it is idempotent on its own terms. The loop below
+    // swallows errors to make re-running safe, which means a statement that only worked once
+    // would be indistinguishable from one that never worked at all.
+    "CREATE TABLE IF NOT EXISTS brokers (" +
+      "email TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', agency TEXT NOT NULL DEFAULT ''," +
+      " phone TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT 'broker'," +
+      " status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, last_seen_at TEXT," +
+      " pw_hash TEXT, pw_salt TEXT, pw_iter INTEGER)",
+    "CREATE INDEX IF NOT EXISTS brokers_status ON brokers (status)",
+    // 🔴 THE JOIN THE WHOLE FEATURE RESTS ON IS `lower(trim(broker_email))`, and a plain column
+    // index cannot serve it. Without this expression index every broker dashboard load scans
+    // the entire quotes table -- fine at 45 rows, not fine later, and the day it stops being
+    // fine nobody will connect it to this change.
+    "CREATE INDEX IF NOT EXISTS quotes_broker_email_norm ON quotes (lower(trim(broker_email)))",
   ];
   const applied = [];
   for (const sql of stmts) {
@@ -841,6 +1194,7 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
   <button class="tab" data-status="S">Sold</button>
   <button class="tab" data-status="D">Dead</button>
   <button class="tab" data-view="commitments" id="commitmentsTab" style="margin-left:auto">Commitments</button>
+  <button class="tab" data-view="brokers" id="brokersTab">Brokers</button>
 </div>
 <main>
   <div class="table-wrap">
@@ -864,6 +1218,35 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
       </tbody>
     </table>
   </div>
+<div id="brokers-wrap" style="display:none">
+  <div style="background:#fff;border-radius:8px;padding:1rem 1.15rem;margin-bottom:1rem;
+              box-shadow:0 1px 3px rgba(0,0,0,.08)">
+    <h3 style="margin:0 0 .2rem;font-size:.95rem;color:#1a5c3a">Give a broker access to their own quotes</h3>
+    <!-- ⭐ Eric, 2026-08-17: "let's not email the broker who hasn't asked for anything. ABY might
+         suggest that they create an account." So this HANDS BACK A LINK rather than sending one. -->
+    <p style="margin:.15rem 0 .8rem;color:#666;font-size:.85rem">
+      Use the email address that is on their quotes. You will get a setup link to pass on however you
+      like &ndash; nothing is emailed automatically, and they choose their own password.
+    </p>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end">
+      <input id="bk-email" type="email" placeholder="Email on their quotes" style="flex:2 1 220px;padding:.5rem .65rem;border:1px solid #ddd;border-radius:6px;font:inherit">
+      <input id="bk-name" placeholder="Name (optional)" style="flex:1 1 150px;padding:.5rem .65rem;border:1px solid #ddd;border-radius:6px;font:inherit">
+      <input id="bk-agency" placeholder="Agency (optional)" style="flex:1 1 150px;padding:.5rem .65rem;border:1px solid #ddd;border-radius:6px;font:inherit">
+      <button onclick="saveBroker()" style="padding:.55rem 1rem;background:#1a5c3a;color:#fff;border:0;border-radius:6px;font:inherit;cursor:pointer;font-weight:600">Create</button>
+    </div>
+    <div id="bk-msg" style="margin-top:.7rem;font-size:.87rem"></div>
+  </div>
+  <div style="overflow-x:auto">
+    <table>
+      <thead><tr>
+        <th>Email</th><th>Name</th><th>Agency</th><th>Quotes</th>
+        <th>Password</th><th>Status</th><th>Last seen</th><th></th>
+      </tr></thead>
+      <tbody id="bk-rows"></tbody>
+    </table>
+  </div>
+</div>
+
 <div id="commitments-wrap" style="display:none;overflow-x:auto">
   <table id="ctable" style="width:100%;border-collapse:collapse;font-size:13px">
     <thead>
@@ -1205,15 +1588,25 @@ document.querySelectorAll('.tab').forEach(function(btn) {
     document.querySelectorAll('.tab').forEach(function(b){ b.classList.remove('active'); });
     this.classList.add('active');
 
+    var brokersWrap = document.getElementById('brokers-wrap');
     if (this.dataset.view === 'commitments') {
       document.querySelector('.table-wrap').style.display = 'none';
       document.getElementById('commitments-wrap').style.display = 'block';
+      if (brokersWrap) brokersWrap.style.display = 'none';
       document.getElementById('search').style.display = 'none';
       document.getElementById('count').textContent = '';
       loadCommitments();
+    } else if (this.dataset.view === 'brokers') {
+      document.querySelector('.table-wrap').style.display = 'none';
+      document.getElementById('commitments-wrap').style.display = 'none';
+      if (brokersWrap) brokersWrap.style.display = 'block';
+      document.getElementById('search').style.display = 'none';
+      document.getElementById('count').textContent = '';
+      loadBrokers();
     } else {
       document.querySelector('.table-wrap').style.display = 'block';
       document.getElementById('commitments-wrap').style.display = 'none';
+      if (brokersWrap) brokersWrap.style.display = 'none';
       document.getElementById('search').style.display = '';
       activeTab = this.dataset.status;
       expandedId = null;
@@ -1221,6 +1614,104 @@ document.querySelectorAll('.tab').forEach(function(btn) {
     }
   });
 });
+
+
+// ── Brokers (F-6) ────────────────────────────────────────────────────────────
+// ⛔ NOTHING HERE SETS OR SHOWS A PASSWORD. ABY creates the row and hands over a setup link;
+// the broker chooses their own. That is the only arrangement in which "we do not have your
+// password" is a true sentence, and it is why there is no reset-to-a-value control anywhere.
+var brokerRows = [];
+
+async function loadBrokers() {
+  var res = await fetch('/api/brokers');
+  var j = await res.json().catch(function () { return {}; });
+  brokerRows = (j && j.brokers) || [];
+  renderBrokers();
+}
+
+function renderBrokers() {
+  var tb = document.getElementById('bk-rows');
+  if (!tb) return;
+  if (!brokerRows.length) {
+    tb.innerHTML = '<tr><td colspan="8" style="padding:1.4rem;color:#777">' +
+      'No brokers yet. Add one above to let them see their own quotes.</td></tr>';
+    return;
+  }
+  tb.innerHTML = brokerRows.map(function (b) {
+    var disabled = b.status === 'disabled';
+    // ⚠️ "No password yet" is a normal, expected state -- it means the setup link has not been
+    // used. It is shown plainly rather than as a warning, because chasing it is Eric's call.
+    var pw = Number(b.has_password)
+      ? '<span style="color:#1a6640">Set</span>'
+      : '<span style="color:#8a6100">Not yet</span>';
+    var st = disabled
+      ? '<span style="color:#c0392b">Disabled</span>'
+      : '<span style="color:#1a6640">Active</span>';
+    return '<tr' + (disabled ? ' style="opacity:.6"' : '') + '>' +
+      '<td>' + escAdmin(b.email) + '</td>' +
+      '<td>' + escAdmin(b.name || '') + '</td>' +
+      '<td>' + escAdmin(b.agency || '') + '</td>' +
+      '<td style="text-align:right">' + (b.quote_count || 0) + '</td>' +
+      '<td>' + pw + '</td>' +
+      '<td>' + st + '</td>' +
+      '<td>' + escAdmin((b.last_seen_at || '').slice(0, 10) || '—') + '</td>' +
+      '<td><button onclick="toggleBroker(\'' + escAdmin(b.email) + '\',' + (disabled ? 'false' : 'true') + ')" ' +
+        'style="padding:.3rem .7rem;border:1px solid #ddd;background:#fff;border-radius:5px;cursor:pointer;font:inherit;font-size:.8rem">' +
+        (disabled ? 'Re-enable' : 'Disable') + '</button></td>' +
+    '</tr>';
+  }).join('');
+}
+
+function escAdmin(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+async function saveBroker() {
+  var email = (document.getElementById('bk-email').value || '').trim();
+  var msg = document.getElementById('bk-msg');
+  if (!email) { msg.innerHTML = '<span style="color:#c0392b">Enter the email address on their quotes.</span>'; return; }
+  msg.textContent = 'Saving…';
+  var res = await fetch('/api/brokers', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: email,
+      name: document.getElementById('bk-name').value,
+      agency: document.getElementById('bk-agency').value,
+    }),
+  });
+  var j = await res.json().catch(function () { return {}; });
+  if (!res.ok) { msg.innerHTML = '<span style="color:#c0392b">' + escAdmin(j.error || 'That did not work.') + '</span>'; return; }
+
+  if (j.setupUrl) {
+    msg.innerHTML = '<div style="background:#f4f9f6;border:1px solid #cfe6da;border-radius:6px;padding:.7rem .85rem">' +
+      '<div style="font-weight:600;color:#1a5c3a;margin-bottom:.3rem">Setup link for ' + escAdmin(j.email) + '</div>' +
+      '<div style="font-size:.8rem;color:#666;margin-bottom:.45rem">Send this to them however you like. ' +
+      'It expires in ' + (j.setupHours || 72) + ' hours and stops working once they have set a password.</div>' +
+      '<input readonly value="' + escAdmin(j.setupUrl) + '" onfocus="this.select()" ' +
+      'style="width:100%;padding:.45rem .6rem;border:1px solid #ddd;border-radius:5px;font:inherit;font-size:.82rem">' +
+      '</div>';
+  } else {
+    msg.innerHTML = '<span style="color:#1a6640">Saved. They already have a password, so no setup link is needed.</span>';
+  }
+  document.getElementById('bk-email').value = '';
+  document.getElementById('bk-name').value = '';
+  document.getElementById('bk-agency').value = '';
+  loadBrokers();
+}
+
+async function toggleBroker(email, disable) {
+  var row = brokerRows.filter(function (b) { return b.email === email; })[0] || {};
+  await fetch('/api/brokers', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: email, name: row.name || '', agency: row.agency || '',
+      role: row.role || 'broker', status: disable ? 'disabled' : 'active',
+    }),
+  });
+  loadBrokers();
+}
 
 var commitmentData = {};
 let commitmentsLoaded = false;
@@ -1431,7 +1922,7 @@ function loginHTML() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ABY Admin — Login</title>
+<title>ABY Quotes — Sign in</title>
 <style>
 *{box-sizing:border-box}
 body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
@@ -1439,9 +1930,9 @@ body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-co
 .card{background:white;padding:2.5rem;border-radius:10px;box-shadow:0 4px 24px rgba(0,0,0,.12);width:340px}
 h1{margin:0 0 .25rem;font-size:1.25rem;color:#1a5c3a}
 .sub{color:#888;font-size:.875rem;margin:.25rem 0 1.5rem}
-input[type=password]{width:100%;padding:.625rem .75rem;border:1px solid #ddd;border-radius:6px;
+input[type=email],input[type=password]{width:100%;padding:.625rem .75rem;border:1px solid #ddd;border-radius:6px;
                       font-size:1rem;margin-bottom:.75rem;display:block}
-input[type=password]:focus{outline:none;border-color:#1a5c3a;box-shadow:0 0 0 3px rgba(26,92,58,.15)}
+input[type=email]:focus,input[type=password]:focus{outline:none;border-color:#1a5c3a;box-shadow:0 0 0 3px rgba(26,92,58,.15)}
 button{width:100%;padding:.65rem;background:#1a5c3a;color:white;border:none;border-radius:6px;
        font-size:1rem;cursor:pointer;font-weight:600}
 button:hover{background:#164d30}
@@ -1451,29 +1942,40 @@ button:disabled{opacity:.6;cursor:default}
 </head>
 <body>
 <div class="card">
-  <h1>ABY Quote Admin</h1>
-  <p class="sub">Internal access only</p>
-  <p class="err" id="err">Incorrect password.</p>
-  <input type="password" id="pw" placeholder="Enter password" autofocus>
-  <button id="btn" onclick="login()">Log in</button>
+  <h1>ABY Quotes</h1>
+  <p class="sub">Sign in to see your quotes</p>
+  <p class="err" id="err">That email and password do not match an account.</p>
+  <input type="email" id="em" placeholder="Email address" autocomplete="username" autofocus>
+  <input type="password" id="pw" placeholder="Password" autocomplete="current-password">
+  <button id="btn" onclick="login()">Sign in</button>
 </div>
 <script>
+// ⚠️ THE EMAIL IS OPTIONAL ON PURPOSE. Leaving it blank and entering the shared
+// password is ABY's own staff door, which existed before per-broker logins and still works
+// exactly as it did -- the server decides which door was used, not this page.
 async function login(){
+  const em=document.getElementById('em').value.trim();
   const pw=document.getElementById('pw').value;
   const btn=document.getElementById('btn');
   btn.disabled=true; btn.textContent='Checking…';
   const res=await fetch('/api/admin/login',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({password:pw})
+    body:JSON.stringify({email:em,password:pw})
   });
-  if(res.ok){location.reload();}
+  if(res.ok){
+    var j=await res.json().catch(function(){return {};});
+    // A broker lands on their own dashboard; ABY reloads into whatever they asked for.
+    if(j.role==='broker'){location.href='/dashboard';} else {location.reload();}
+  }
   else{
     document.getElementById('err').style.display='block';
-    btn.disabled=false; btn.textContent='Log in';
+    btn.disabled=false; btn.textContent='Sign in';
   }
 }
-document.getElementById('pw').addEventListener('keydown',e=>{if(e.key==='Enter')login();});
+['em','pw'].forEach(function(id){
+  document.getElementById(id).addEventListener('keydown',function(e){if(e.key==='Enter')login();});
+});
 </script>
 </body>
 </html>`;
@@ -1582,3 +2084,365 @@ const ABY_INTERNAL_JS = `
   else build();
 })();
 `;
+
+// ═══ F-6 HANDLERS ══════════════════════════════════════════════════════════════
+
+/**
+ * The endpoint the BenefitLab Broker Dashboard has been waiting for.
+ *
+ * ⭐⭐ WHY THIS PATH NEEDS NO ABY ACCOUNT, and it is the strongest part of the design:
+ * BenefitLab has ALREADY verified the broker's email through Supabase. ABY does not have to
+ * re-verify a person it can trust its own sibling about -- it only has to trust the CALLER,
+ * which is what the bearer token does. So a broker who signs into BenefitLab finds their ABY
+ * quotes waiting with no second login, and Eric's market point still holds the other way: a
+ * broker who only knows ABY signs in at ABY instead.
+ *
+ * 🔴 THE TOKEN IS THE ENTIRE SECURITY OF THIS ROUTE, because the email is supplied by the
+ * caller. Anyone holding it can read any broker's quotes by asking. It is therefore a SERVER
+ * secret at both ends -- `aby-quotes.ts` imports `server-only` so it cannot reach a browser.
+ * ⛔ IF `INTEGRATION_TOKEN` IS UNSET THE ROUTE IS CLOSED, not open. An unset secret comparing
+ * equal to an absent header is the classic way this kind of check fails open.
+ */
+async function handleBrokerQuotesIntegration(request, env) {
+  const expected = env.INTEGRATION_TOKEN;
+  if (!expected) return jsonResp({ error: 'Integration not configured.' }, 503);
+
+  const auth = request.headers.get('Authorization') || '';
+  const got = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  if (!got || !timingSafeEqual(got, expected)) return jsonResp({ error: 'Unauthorized' }, 401);
+
+  const email = normEmail(new URL(request.url).searchParams.get('email'));
+  // ⚠️ An empty email returns an EMPTY LIST, never every quote. A caller that forgets the
+  // parameter must not be handed the whole book.
+  if (!email) return jsonResp({ quotes: [] });
+
+  try {
+    return jsonResp({ quotes: await quotesForBroker(env, email) });
+  } catch (err) {
+    return jsonResp({ error: String((err && err.message) || err) }, 500);
+  }
+}
+
+/** A signed-in broker's own quotes. ABY sees the whole book through /admin instead. */
+async function handleMyQuotes(env, session) {
+  try {
+    return jsonResp({ quotes: await quotesForBroker(env, session.email), email: session.email });
+  } catch (err) {
+    return jsonResp({ error: String((err && err.message) || err) }, 500);
+  }
+}
+
+const SETUP_HOURS = 72;
+
+async function makeSetupToken(env, email, expiresAt) {
+  const payload = b64urlEncode(new TextEncoder().encode(JSON.stringify({ e: normEmail(email), x: expiresAt })));
+  const sig = b64urlEncode(await hmac(sessionKeyMaterial(env), 'setup:' + payload));
+  return payload + '.' + sig;
+}
+
+async function verifySetupToken(env, email, token) {
+  const secret = sessionKeyMaterial(env);
+  if (!secret || token.indexOf('.') < 0) return false;
+  const [payload, sig] = token.split('.');
+  try {
+    const expected = b64urlEncode(await hmac(secret, 'setup:' + payload));
+    if (!timingSafeEqual(sig, expected)) return false;
+    const body = JSON.parse(new TextDecoder().decode(b64urlDecode(payload)));
+    return !!body && normEmail(body.e) === normEmail(email) && typeof body.x === 'number' && Date.now() <= body.x;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A broker setting their OWN password, using a one-time setup token issued by ABY.
+ *
+ * ⛔ THERE IS NO ROUTE ANYWHERE THAT SETS SOMEBODY ELSE'S PASSWORD, and there must not be.
+ * ABY creates the row and hands over a link; the broker chooses the password. Nobody at ABY
+ * ever sees it, which is the only arrangement under which "we do not have your password" is
+ * a true statement.
+ *
+ * ⚠️ THE TOKEN IS SIGNED AND EXPIRING RATHER THAN A DATABASE ROW: an HMAC over the email plus
+ * an expiry, so there is nothing to clean up and nothing to leak. It is single-use in the way
+ * that matters -- once a password exists, a setup token for that email stops working, so a
+ * link that leaks months later cannot be used to take an account over.
+ */
+async function handleSetPassword(request, env) {
+  const b = await request.json().catch(() => ({}));
+  const email = normEmail(b.email);
+  const token = String(b.token || '');
+  const pw = String(b.password || '');
+
+  // 12 characters, because this is the only credential in front of a broker's book of
+  // business and there is no second factor behind it.
+  if (pw.length < 12) return jsonResp({ error: 'Please choose a password of at least 12 characters.' }, 400);
+  if (!email || !token) return jsonResp({ error: 'That setup link is not valid.' }, 400);
+  if (!(await verifySetupToken(env, email, token))) {
+    return jsonResp({ error: 'That setup link has expired or is not valid. Ask ABY for a new one.' }, 400);
+  }
+
+  const row = await getBroker(env, email);
+  if (!row || row.status !== 'active') return jsonResp({ error: 'That setup link is not valid.' }, 400);
+  if (row.pw_hash) return jsonResp({ error: 'This account already has a password. Ask ABY to reset it.' }, 400);
+
+  const fresh = await hashPassword(pw);
+  await env.DB.prepare('UPDATE brokers SET pw_hash=?, pw_salt=?, pw_iter=? WHERE email=?')
+    .bind(fresh.hash, fresh.salt, fresh.iter, email).run();
+
+  const session = await makeSession(env, { email, role: row.role === 'aby' ? 'aby' : 'broker' });
+  const h = new Headers({ 'Content-Type': 'application/json' });
+  h.append('Set-Cookie', sessionCookie(session));
+  return new Response(JSON.stringify({ ok: true }), { headers: h });
+}
+
+/** Every broker, with a quote count, for ABY's own screen. */
+async function handleListBrokers(env) {
+  try {
+    const r = await env.DB.prepare(
+      'SELECT b.email, b.name, b.agency, b.role, b.status, b.created_at, b.last_seen_at,' +
+      ' (b.pw_hash IS NOT NULL) AS has_password,' +
+      ' (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = b.email) AS quote_count' +
+      ' FROM brokers b ORDER BY b.created_at DESC',
+    ).all();
+    return jsonResp({ brokers: r.results || [] });
+  } catch (err) {
+    return jsonResp({ error: String((err && err.message) || err), brokers: [] }, 500);
+  }
+}
+
+/**
+ * Create or update a broker. ABY-only.
+ *
+ * ⭐ IT RETURNS A SETUP LINK RATHER THAN SENDING ONE. ABY has an email sender (Resend), but a
+ * broker who has not asked for an account should not receive mail about one -- Eric,
+ * 2026-08-17: "let's not email the broker who hasn't asked for anything. ABY might suggest
+ * that they create an account." So the link is handed to whoever is at the screen, to pass on
+ * however they choose.
+ */
+async function handleUpsertBroker(request, env) {
+  const b = await request.json().catch(() => ({}));
+  const email = normEmail(b.email);
+  if (!email || email.indexOf('@') < 1) return jsonResp({ error: 'A valid email is required.' }, 400);
+
+  const role = b.role === 'aby' ? 'aby' : 'broker';
+  const status = b.status === 'disabled' ? 'disabled' : 'active';
+  const now = new Date().toISOString();
+
+  try {
+    // ⚠️ THE UPDATE DELIBERATELY DOES NOT TOUCH pw_hash / pw_salt / pw_iter. Editing somebody's
+    // name must never be able to clear their password, and an upsert that writes every column
+    // is exactly how that happens.
+    await env.DB.prepare(
+      'INSERT INTO brokers (email, name, agency, phone, role, status, created_at)' +
+      ' VALUES (?, ?, ?, ?, ?, ?, ?)' +
+      ' ON CONFLICT(email) DO UPDATE SET' +
+      '   name=excluded.name, agency=excluded.agency, phone=excluded.phone,' +
+      '   role=excluded.role, status=excluded.status',
+    ).bind(email, String(b.name || ''), String(b.agency || ''), String(b.phone || ''), role, status, now).run();
+
+    const row = await getBroker(env, email);
+    // A setup link only means anything for somebody who has no password yet.
+    const setupUrl = row && !row.pw_hash
+      ? new URL(request.url).origin + '/set-password?email=' + encodeURIComponent(email) +
+        '&t=' + (await makeSetupToken(env, email, Date.now() + SETUP_HOURS * 3600 * 1000))
+      : null;
+    return jsonResp({ ok: true, email, setupUrl, setupHours: SETUP_HOURS });
+  } catch (err) {
+    return jsonResp({ error: String((err && err.message) || err) }, 500);
+  }
+}
+
+/**
+ * ⚠️ Server-side escaping for values interpolated into these pages. Broker name and email are
+ * typed by a person, and both reach HTML here.
+ */
+function escapeHtml(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ═══ F-6 SCREENS ═══════════════════════════════════════════════════════════════
+
+/**
+ * THE QUOTE VIEW, AS A REUSABLE COMPONENT — Eric, 2026-07-23: "build the quote view as a
+ * reusable component that reskins for ABY vs BenefitLab."
+ *
+ * ⭐ WHY IT REPLACES A LOGIN RATHER THAN ADDING ONE. ABY is marketed nationally, so many agents
+ * will know ABY and not BenefitLab -- and some will only know ABY BECAUSE of BenefitLab. The
+ * same quotes therefore have to be reachable under both brands. What varies between them is
+ * a wordmark and two colours; what must not vary is the data, the scoping or the columns.
+ *
+ * ⛔ SO THE MARKUP AND THE SCOPING LIVE HERE, ONCE, and the brand is arguments. The BenefitLab
+ * surface renders its own React from `/api/broker-quotes`; this is the ABY-branded surface of
+ * the identical rows.
+ */
+function brokerDashboardHTML(brand) {
+  const b = brand || {};
+  const name = b.name || 'ABY Benefits';
+  const primary = b.primary || '#1a5c3a';
+  const accent = b.accent || '#2f9e73';
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(name)} — Your quotes</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#f5f7f6;color:#1a222c}
+header{background:${primary};color:#fff;padding:14px 22px;display:flex;align-items:center;
+       justify-content:space-between;gap:14px;flex-wrap:wrap}
+header h1{font-size:1.05rem;margin:0;font-weight:600}
+header .who{font-size:.85rem;opacity:.85}
+header button{background:${accent};color:#fff;border:0;border-radius:999px;padding:7px 14px;
+              font:inherit;cursor:pointer}
+main{max-width:1100px;margin:0 auto;padding:22px}
+.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.bar input{padding:.5rem .7rem;border:1px solid #d8e0da;border-radius:6px;font:inherit;min-width:240px}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;
+      box-shadow:0 1px 3px rgba(0,0,0,.08)}
+th{text-align:left;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:#5b6875;
+   padding:10px 12px;border-bottom:1px solid #e3e9e5;background:#fafbfa}
+td{padding:10px 12px;border-bottom:1px solid #f0f3f1;font-size:.93rem;vertical-align:top}
+tr:last-child td{border-bottom:0}
+.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:.75rem;font-weight:600}
+.p-P{background:#fff4d6;color:#8a6100}
+.p-S{background:#dff3e6;color:#1a5c3a}
+.p-D{background:#f1f3f4;color:#6b7280}
+.empty{background:#fff;border-radius:8px;padding:2.5rem;text-align:center;color:#5b6875}
+.wrap{overflow-x:auto}
+</style>
+</head>
+<body>
+<header>
+  <h1>${escapeHtml(name)} &middot; Your quotes</h1>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span class="who" id="who"></span>
+    <button onclick="signOut()">Sign out</button>
+  </div>
+</header>
+<main>
+  <div class="bar"><input id="q" placeholder="Filter by client or quote number" oninput="render()"></div>
+  <div id="out" class="empty">Loading your quotes…</div>
+</main>
+<script>
+var ALL=[];
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function money(n){return n==null?'':n;}
+function products(json){
+  try{var a=JSON.parse(json||'[]');return a.map(function(p){return p.name||p.id;}).filter(Boolean).join(', ');}
+  catch(e){return '';}
+}
+function render(){
+  var q=(document.getElementById('q').value||'').trim().toLowerCase();
+  var rows=ALL.filter(function(r){
+    if(!q)return true;
+    return (r.client_name||'').toLowerCase().indexOf(q)>=0 ||
+           (r.quote_number||'').toLowerCase().indexOf(q)>=0;
+  });
+  var out=document.getElementById('out');
+  if(!rows.length){
+    out.className='empty';
+    out.textContent = ALL.length ? 'No quotes match that filter.'
+      : 'No quotes yet. Quotes run for you will appear here.';
+    return;
+  }
+  out.className='wrap';
+  var html='<table><thead><tr><th>Quote</th><th>Client</th><th>Effective</th>'+
+           '<th>Products</th><th>Status</th><th>Run</th></tr></thead><tbody>';
+  rows.forEach(function(r){
+    var st=(r.status||'P');
+    var label={P:'Pending',S:'Sold',D:'Dead'}[st]||st;
+    html+='<tr>'+
+      '<td class="num">'+esc(r.quote_number)+'</td>'+
+      '<td>'+esc(r.client_name)+'</td>'+
+      '<td class="num">'+esc(r.effective_date)+'</td>'+
+      '<td>'+esc(products(r.products))+'</td>'+
+      '<td><span class="pill p-'+esc(st)+'">'+esc(label)+'</span></td>'+
+      '<td class="num">'+esc((r.created_at||'').slice(0,10))+'</td>'+
+    '</tr>';
+  });
+  out.innerHTML=html+'</tbody></table>';
+}
+async function load(){
+  var res=await fetch('/api/my/quotes');
+  if(res.status===401){location.href='/dashboard';return;}
+  var j=await res.json().catch(function(){return {};});
+  ALL=(j&&j.quotes)||[];
+  document.getElementById('who').textContent=j.email||'';
+  render();
+}
+async function signOut(){await fetch('/api/admin/logout');location.href='/dashboard';}
+load();
+</script>
+</body>
+</html>`;
+}
+
+/**
+ * Where a broker chooses their own password, from a link ABY gave them.
+ *
+ * ⚠️ THE EMAIL AND TOKEN COME FROM THE URL AND ARE NOT EDITABLE HERE. The token is signed
+ * against that exact email, so a typed-over address simply fails -- showing it as a field
+ * would invite somebody to try, and the failure would look like a broken link rather than a
+ * refusal.
+ */
+function setPasswordHTML(email, token) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ABY Quotes — Choose a password</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
+     min-height:100vh;margin:0;background:#f0f4f0}
+.card{background:#fff;padding:2.5rem;border-radius:10px;box-shadow:0 4px 24px rgba(0,0,0,.12);width:380px}
+h1{margin:0 0 .25rem;font-size:1.2rem;color:#1a5c3a}
+.sub{color:#666;font-size:.875rem;margin:.25rem 0 1.25rem}
+.who{font-weight:600}
+input{width:100%;padding:.625rem .75rem;border:1px solid #ddd;border-radius:6px;font-size:1rem;
+      margin-bottom:.75rem;display:block}
+input:focus{outline:none;border-color:#1a5c3a;box-shadow:0 0 0 3px rgba(26,92,58,.15)}
+button{width:100%;padding:.65rem;background:#1a5c3a;color:#fff;border:0;border-radius:6px;
+       font-size:1rem;cursor:pointer;font-weight:600}
+button:disabled{opacity:.6;cursor:default}
+.err{color:#c0392b;font-size:.85rem;margin-bottom:.5rem;display:none}
+.hint{color:#777;font-size:.8rem;margin:-.4rem 0 .9rem}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Choose a password</h1>
+  <p class="sub">for <span class="who">${escapeHtml(email)}</span></p>
+  <p class="err" id="err"></p>
+  <input type="password" id="p1" placeholder="New password" autocomplete="new-password" autofocus>
+  <p class="hint">At least 12 characters.</p>
+  <input type="password" id="p2" placeholder="Type it again" autocomplete="new-password">
+  <button id="btn" onclick="save()">Save and sign in</button>
+</div>
+<script>
+var EMAIL=${JSON.stringify(email)}, TOKEN=${JSON.stringify(token)};
+function fail(m){var e=document.getElementById('err');e.textContent=m;e.style.display='block';
+  var b=document.getElementById('btn');b.disabled=false;b.textContent='Save and sign in';}
+async function save(){
+  var a=document.getElementById('p1').value, b2=document.getElementById('p2').value;
+  var btn=document.getElementById('btn');
+  if(a!==b2){fail('Those two do not match.');return;}
+  if(a.length<12){fail('Please use at least 12 characters.');return;}
+  btn.disabled=true; btn.textContent='Saving…';
+  var res=await fetch('/api/my/password',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({email:EMAIL,token:TOKEN,password:a})});
+  if(res.ok){location.href='/dashboard';return;}
+  var j=await res.json().catch(function(){return {};});
+  fail(j.error||'That did not work.');
+}
+document.getElementById('p2').addEventListener('keydown',function(e){if(e.key==='Enter')save();});
+</script>
+</body>
+</html>`;
+}
