@@ -31,6 +31,21 @@ export default {
     // The BenefitLab dashboard's read endpoint (F-268). NOT cookie-authed -- it is a
     // server-to-server call carrying a bearer token, so it gets its own gate.
     if (path === '/api/broker-quotes' && method === 'GET') return handleBrokerQuotes(request, env);
+
+    // ── Broker accounts (F-6). Their own gate: a signed `aby_broker` cookie, NOT the admin one.
+    if (path === '/api/broker/signup'  && method === 'POST') return handleBrokerSignup(request, env);
+    if (path === '/api/broker/login'   && method === 'POST') return handleBrokerLogin(request, env);
+    if (path === '/api/broker/logout'  && method === 'POST') return handleBrokerLogout();
+    if (path === '/api/broker/me'      && method === 'GET')  return handleBrokerMe(request, env);
+    if (path === '/api/broker/profile' && method === 'POST') return handleBrokerProfile(request, env);
+    if (path === '/api/broker/quotes'  && method === 'GET')  return handleBrokerOwnQuotes(request, env);
+    // The broker's own page. Public by design -- it IS the sign-in screen; everything behind it
+    // is gated per request by the `aby_broker` cookie, not by hiding this route.
+    if (path === '/broker' || path === '/broker/') {
+      return new Response(brokerPageHTML(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+      });
+    }
     if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'GET') {
       return withAuth(request, env, () => handleGetQuote(path.split('/').pop(), env));
     }
@@ -708,6 +723,284 @@ async function verifyToken(token, password) {
   catch { return false; }
 }
 
+// ─── The broker dashboard page (F-6) ───────────────────────────────────────────
+//
+// ⭐ ABY-BRANDED AND STANDALONE, WHICH IS THE POINT. Eric, 2026-07-23: ABY is marketed nationally,
+// so many agents will know ABY and not BenefitLab. This page must make sense to someone who has
+// never heard of BenefitLab, and it does not mention it.
+function brokerPageHTML() {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>My ABY Account</title>
+<style>
+ *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
+ header{background:#143c73;color:#fff;padding:14px 22px;display:flex;align-items:center;gap:14px}
+ header h1{font-size:17px;margin:0;font-weight:600} header .sp{flex:1}
+ header a,header button{color:#fff;background:transparent;border:1px solid rgba(255,255,255,.45);border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer;text-decoration:none}
+ main{max-width:940px;margin:26px auto;padding:0 18px}
+ .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:22px;margin-bottom:20px}
+ h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 16px}
+ label{display:block;font-size:13px;font-weight:600;margin:12px 0 4px}
+ input[type=text],input[type=email],input[type=password],input[type=tel]{width:100%;padding:9px 11px;border:1px solid #c8d2de;border-radius:6px;font-size:14px}
+ button.primary{background:#143c73;color:#fff;border:0;border-radius:6px;padding:10px 18px;font-size:14px;font-weight:600;cursor:pointer;margin-top:16px}
+ .msg{margin-top:12px;padding:10px 12px;border-radius:6px;font-size:13px;display:none}
+ .err{background:#fdecec;color:#a12622;border:1px solid #f3c2c2} .ok{background:#e8f4ec;color:#1a5c3a;border:1px solid #b8d9c4}
+ table{width:100%;border-collapse:collapse;font-size:14px} th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
+ td{padding:9px 6px;border-bottom:1px solid #eef2f6} .muted{color:#8a97a8}
+ .tabs{display:flex;gap:8px;margin-bottom:16px} .tabs button{background:#fff;border:1px solid #c8d2de;border-radius:6px;padding:8px 14px;cursor:pointer;font-size:14px}
+ .tabs button.on{background:#143c73;color:#fff;border-color:#143c73}
+ .logo-prev{max-height:60px;max-width:220px;margin-top:10px;display:none;border:1px solid #dfe5ec;border-radius:6px;padding:6px;background:#fff}
+</style></head><body>
+<header><h1>ABY Quote Tool</h1><span class="sp"></span>
+  <a href="/">New quote</a><button id="out" style="display:none">Sign out</button></header>
+<main>
+  <div id="authCard" class="card">
+    <div class="tabs"><button id="tabIn" class="on">Sign in</button><button id="tabUp">Create an account</button></div>
+    <h2 id="authTitle">Sign in</h2>
+    <p class="sub" id="authSub">Your details fill in automatically on every quote you run.</p>
+    <div id="upOnly" style="display:none">
+      <label>Your name</label><input type="text" id="sName" autocomplete="name">
+      <label>Agency</label><input type="text" id="sAgency" autocomplete="organization">
+      <label>Phone</label><input type="tel" id="sPhone" autocomplete="tel">
+    </div>
+    <label>Email</label><input type="email" id="sEmail" autocomplete="email">
+    <label>Password</label><input type="password" id="sPass" autocomplete="current-password">
+    <button class="primary" id="go">Sign in</button>
+    <div class="msg err" id="authMsg"></div>
+  </div>
+
+  <div id="appArea" style="display:none">
+    <div class="card">
+      <h2>Your details</h2>
+      <p class="sub">Entered once. These fill in automatically every time you run a quote, and your logo appears on the proposal beside ABY's.</p>
+      <label>Your name</label><input type="text" id="pName">
+      <label>Agency</label><input type="text" id="pAgency">
+      <label>Phone</label><input type="tel" id="pPhone">
+      <label>Logo <span class="muted" style="font-weight:400">(PNG or JPG, under 300KB)</span></label>
+      <input type="file" id="pLogo" accept="image/*">
+      <img id="logoPrev" class="logo-prev" alt="Your logo">
+      <button class="primary" id="save">Save details</button>
+      <div class="msg" id="saveMsg"></div>
+    </div>
+    <div class="card">
+      <h2>Your quotes</h2>
+      <p class="sub">Every quote run under your email address.</p>
+      <div id="quotes"><p class="muted">Loading…</p></div>
+    </div>
+  </div>
+</main>
+<script>
+ var $=function(id){return document.getElementById(id)}, mode='in', logoData='';
+ function show(el,text,cls){el.textContent=text;el.className='msg '+cls;el.style.display='block'}
+ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+ $('tabIn').onclick=function(){mode='in';$('tabIn').className='on';$('tabUp').className='';$('upOnly').style.display='none';$('authTitle').textContent='Sign in';$('go').textContent='Sign in';$('sPass').autocomplete='current-password';$('authMsg').style.display='none'};
+ $('tabUp').onclick=function(){mode='up';$('tabUp').className='on';$('tabIn').className='';$('upOnly').style.display='block';$('authTitle').textContent='Create an account';$('go').textContent='Create account';$('sPass').autocomplete='new-password';$('authMsg').style.display='none'};
+ $('go').onclick=async function(){
+   var body={email:$('sEmail').value,password:$('sPass').value};
+   if(mode==='up'){body.name=$('sName').value;body.agency=$('sAgency').value;body.phone=$('sPhone').value}
+   var r=await fetch('/api/broker/'+(mode==='up'?'signup':'login'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+   var d=await r.json().catch(function(){return{}});
+   if(!r.ok){show($('authMsg'),d.error||'Something went wrong.','err');return}
+   enter(d.broker);
+ };
+ $('out').onclick=async function(){await fetch('/api/broker/logout',{method:'POST'});location.reload()};
+ $('pLogo').onchange=function(){
+   var f=this.files[0]; if(!f) return;
+   var rd=new FileReader(); rd.onload=function(){logoData=rd.result;$('logoPrev').src=logoData;$('logoPrev').style.display='block'};
+   rd.readAsDataURL(f);
+ };
+ $('save').onclick=async function(){
+   var r=await fetch('/api/broker/profile',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({name:$('pName').value,agency:$('pAgency').value,phone:$('pPhone').value,logoDataUrl:logoData})});
+   var d=await r.json().catch(function(){return{}});
+   if(!r.ok){show($('saveMsg'),d.error||'Could not save.','err');return}
+   show($('saveMsg'),'Saved. These will fill in on your next quote.','ok');
+ };
+ function enter(b){
+   $('authCard').style.display='none';$('appArea').style.display='block';$('out').style.display='inline-block';
+   $('pName').value=b.name||'';$('pAgency').value=b.agency||'';$('pPhone').value=b.phone||'';
+   if(b.logoDataUrl){logoData=b.logoDataUrl;$('logoPrev').src=logoData;$('logoPrev').style.display='block'}
+   loadQuotes();
+ }
+ async function loadQuotes(){
+   var r=await fetch('/api/broker/quotes'); var d=await r.json().catch(function(){return{}});
+   var q=(d.quotes)||[];
+   if(!q.length){$('quotes').innerHTML='<p class="muted">No quotes yet. Ones you run while signed in will appear here.</p>';return}
+   var rows=q.map(function(x){
+     return '<tr><td>'+esc((x.created_at||'').slice(0,10))+'</td><td>'+esc(x.client_name||'—')+'</td><td>'+esc(x.quote_number||'')+'</td><td>'+esc(x.state||'')+'</td></tr>';
+   }).join('');
+   $('quotes').innerHTML='<table><thead><tr><th>Date</th><th>Client</th><th>Quote number</th><th>State</th></tr></thead><tbody>'+rows+'</tbody></table>';
+ }
+ (async function(){
+   var r=await fetch('/api/broker/me'); var d=await r.json().catch(function(){return{}});
+   if(d && d.broker) enter(d.broker);
+ })();
+</script></body></html>`;
+}
+
+// ─── Broker account API (F-6) ──────────────────────────────────────────────────
+
+const MAX_LOGO_CHARS = 400000;   // ~300KB of image, generous for a logo and small enough for a row
+
+function brokerPublic(b) {
+  return b ? { email: b.email, name: b.name || '', agency: b.agency || '', phone: b.phone || '',
+               logoDataUrl: b.logo_data_url || '' } : null;
+}
+
+function sessionCookie(value, maxAgeSeconds) {
+  return `${BROKER_COOKIE}=${value}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}`;
+}
+
+async function handleBrokerSignup(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const email = String(body.email || '').trim().toLowerCase();
+  const password = String(body.password || '');
+  // ⛔ Deliberately mild: a length floor and a shape check, not a character-class policy. Composition
+  // rules push people towards `Password1!` and this is a quoting tool, not a bank.
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return jsonResp({ error: 'Enter a valid email address.' }, 400);
+  if (password.length < 10) return jsonResp({ error: 'Use at least 10 characters.' }, 400);
+
+  const existing = await env.DB.prepare('SELECT id FROM brokers WHERE lower(trim(email)) = ?').bind(email).first();
+  if (existing) return jsonResp({ error: 'An account already exists for that email. Try signing in.' }, 409);
+
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    'INSERT INTO brokers (id, email, password_hash, name, agency, phone, created_at, last_login_at) VALUES (?,?,?,?,?,?,?,?)'
+  ).bind(id, email, await hashPassword(password),
+    String(body.name || '').slice(0, 120), String(body.agency || '').slice(0, 120),
+    String(body.phone || '').slice(0, 40), new Date().toISOString(), new Date().toISOString()).run();
+
+  return new Response(JSON.stringify({ ok: true, broker: brokerPublic({ id, email, name: body.name, agency: body.agency, phone: body.phone }) }),
+    { status: 200, headers: { 'Content-Type': 'application/json',
+      'Set-Cookie': sessionCookie(await makeBrokerToken(id, env), 60 * 60 * 24 * 30) } });
+}
+
+async function handleBrokerLogin(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const email = String(body.email || '').trim().toLowerCase();
+  const row = await env.DB.prepare(
+    'SELECT id, email, password_hash, name, agency, phone, logo_data_url FROM brokers WHERE lower(trim(email)) = ?'
+  ).bind(email).first();
+
+  // ⚠️ ONE MESSAGE FOR BOTH FAILURES, ON PURPOSE. "No such account" tells a stranger which of ABY's
+  // brokers exist, which is a customer list.
+  if (!row || !await verifyPassword(String(body.password || ''), row.password_hash)) {
+    return jsonResp({ error: 'That email and password do not match.' }, 401);
+  }
+  await env.DB.prepare('UPDATE brokers SET last_login_at = ? WHERE id = ?').bind(new Date().toISOString(), row.id).run();
+  return new Response(JSON.stringify({ ok: true, broker: brokerPublic(row) }),
+    { status: 200, headers: { 'Content-Type': 'application/json',
+      'Set-Cookie': sessionCookie(await makeBrokerToken(row.id, env), 60 * 60 * 24 * 30) } });
+}
+
+function handleBrokerLogout() {
+  return new Response(JSON.stringify({ ok: true }), { status: 200,
+    headers: { 'Content-Type': 'application/json', 'Set-Cookie': sessionCookie('', 0) } });
+}
+
+async function handleBrokerMe(request, env) {
+  const b = await currentBroker(request, env);
+  return jsonResp({ broker: brokerPublic(b) });
+}
+
+/** Save the details that then carry into every quote. This IS the feature Eric asked for. */
+async function handleBrokerProfile(request, env) {
+  const b = await currentBroker(request, env);
+  if (!b) return jsonResp({ error: 'Please sign in.' }, 401);
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+
+  const logo = String(body.logoDataUrl || '');
+  // ⛔ A data URL, an image, and bounded. An arbitrary string here reaches an <img src> on a
+  // document an employer signs.
+  if (logo && !/^data:image\/(png|jpeg|jpg|gif|webp|svg\+xml);base64,/.test(logo)) {
+    return jsonResp({ error: 'That does not look like an image file.' }, 400);
+  }
+  if (logo.length > MAX_LOGO_CHARS) return jsonResp({ error: 'That image is too large — please use one under 300KB.' }, 400);
+
+  await env.DB.prepare('UPDATE brokers SET name = ?, agency = ?, phone = ?, logo_data_url = ? WHERE id = ?')
+    .bind(String(body.name || '').slice(0, 120), String(body.agency || '').slice(0, 120),
+          String(body.phone || '').slice(0, 40), logo, b.id).run();
+
+  const fresh = await env.DB.prepare(
+    'SELECT id, email, name, agency, phone, logo_data_url FROM brokers WHERE id = ?').bind(b.id).first();
+  return jsonResp({ ok: true, broker: brokerPublic(fresh) });
+}
+
+/** The signed-in broker's OWN quotes. Same restricted columns as the dashboard endpoint. */
+async function handleBrokerOwnQuotes(request, env) {
+  const b = await currentBroker(request, env);
+  if (!b) return jsonResp({ error: 'Please sign in.' }, 401);
+  // 🔴 SCOPED TO THEIR OWN EMAIL, SERVER-SIDE, FROM THE SIGNED COOKIE -- never from a parameter.
+  // ⛔ And the same column list as /api/broker-quotes: no `adjustment`, no `adjustment_note`.
+  const cols = "id, quote_number, created_at, client_name, client_id, effective_date, " +
+               "broker_name, broker_agency, broker_email, rep_name, products, " +
+               "COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, " +
+               "COALESCE(state, 'TX') AS state";
+  const r = await env.DB.prepare(
+    `SELECT ${cols} FROM quotes WHERE lower(trim(broker_email)) = ? ORDER BY created_at DESC LIMIT 300`
+  ).bind(String(b.email).trim().toLowerCase()).all();
+  return jsonResp({ quotes: r.results || [] });
+}
+
+// ─── Broker accounts: passwords and sessions (F-6) ─────────────────────────────
+//
+// 🔴 A BROKER PASSWORD IS NOT THE ADMIN PASSWORD AND MUST NOT BORROW ITS SCHEME. `makeToken`
+// above signs a FIXED string with one shared secret -- fine for "is this the one admin", useless
+// for "which of many brokers is this", because every holder would produce the same token.
+//
+// PBKDF2-SHA256, 100k iterations, a fresh 16-byte salt per account. Stored as `pbkdf2$<iter>$<salt>$<hash>`
+// so the parameters travel WITH the hash and can be raised later without invalidating existing
+// accounts -- a bare hash with the cost baked into the code is how a password store gets stuck.
+const PBKDF2_ITERATIONS = 100000;
+
+function b64(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes))); }
+function unb64(s) { return Uint8Array.from(atob(s), (c) => c.charCodeAt(0)); }
+
+async function hashPassword(password, saltBytes) {
+  const salt = saltBytes || crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' }, key, 256);
+  return `pbkdf2$${PBKDF2_ITERATIONS}$${b64(salt)}$${b64(bits)}`;
+}
+
+async function verifyPassword(password, stored) {
+  try {
+    const [scheme, iter, salt, hash] = String(stored || '').split('$');
+    if (scheme !== 'pbkdf2' || !salt || !hash) return false;
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: unb64(salt), iterations: Number(iter) || PBKDF2_ITERATIONS, hash: 'SHA-256' }, key, 256);
+    return safeEqual(b64(bits), hash);
+  } catch { return false; }
+}
+
+// A session is `<brokerId>.<hmac>`, signed with the admin password as the server secret.
+// ⚠️ THE ID IS SIGNED, NOT ENCRYPTED. It is not a secret -- the point is that a broker cannot
+// EDIT it to become another broker, which is what an unsigned cookie would allow.
+const BROKER_COOKIE = 'aby_broker';
+
+async function makeBrokerToken(brokerId, env) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(String(env.ADMIN_PASSWORD || '')),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode('aby-broker-v1:' + brokerId));
+  return brokerId + '.' + b64(sig);
+}
+
+/** The signed-in broker's row, or null. Never trusts the id in the cookie without the signature. */
+async function currentBroker(request, env) {
+  const raw = parseCookies(request.headers.get('Cookie') || '')[BROKER_COOKIE];
+  if (!raw) return null;
+  const dot = raw.lastIndexOf('.');
+  if (dot < 1) return null;
+  const id = raw.slice(0, dot);
+  if (!safeEqual(raw, await makeBrokerToken(id, env))) return null;
+  try {
+    return await env.DB.prepare(
+      'SELECT id, email, name, agency, phone, logo_data_url FROM brokers WHERE id = ?').bind(id).first();
+  } catch { return null; }   // table not migrated yet
+}
+
 function parseCookies(header) {
   const out = {};
   for (const part of header.split(';')) {
@@ -805,6 +1098,40 @@ const MIGRATIONS = [
   // points at changed later.
   { sql: "ALTER TABLE commitments ADD COLUMN client_id TEXT",    table: "commitments", column: "client_id" },
   { sql: "ALTER TABLE commitments ADD COLUMN broker_email TEXT", table: "commitments", column: "broker_email" },
+
+  // ── Broker accounts (F-6 / F-53) ────────────────────────────────────────────────────────────
+  //
+  // ⭐⭐ ERIC CHOSE OPTION (a), 2026-08-18: a SEPARATE ABY login, joined to BenefitLab BY EMAIL.
+  // "We can go with a. Yes, we would need brokers who are using the ABY dashboard instead of
+  // BenefitLab to upload their logo and input their contact info there once and have it carry to
+  // the quote."
+  //
+  // 🔴 WHO THIS IS FOR, AND WHO IT IS NOT FOR. A broker who comes from the BenefitLab dashboard
+  // ALREADY has their name, agency, phone, email and agency logo carried in on the `?rerun=`
+  // payload -- verified live 2026-08-18. ⛔ THEY DO NOT NEED AN ABY ACCOUNT AND MUST NOT BE PUSHED
+  // TOWARDS ONE. This table exists for the ABY-ONLY broker, who today retypes everything into
+  // every quote and gets no logo at all.
+  //
+  // ⭐ EMAIL IS THE JOIN, WHICH IS WHY IT IS UNIQUE AND STORED LOWERCASE. `quotes.broker_email`
+  // already carries it, so an ABY-only broker who later signs up for BenefitLab gets their whole
+  // history with no migration and nobody doing anything. That property is the reason (a) was
+  // chosen over SSO or a shared account system.
+  //
+  // ⚠️ `logo_data_url` HOLDS THE IMAGE ITSELF, not a link. The tool has no object storage, and the
+  // quote form already turns an uploaded file into a data URL client-side, so this stores what the
+  // renderer already knows how to draw. A link would rot; ABY cannot host the broker's file.
+  { sql: "CREATE TABLE IF NOT EXISTS brokers (" +
+         "  id TEXT PRIMARY KEY," +
+         "  email TEXT NOT NULL," +
+         "  password_hash TEXT NOT NULL," +
+         "  name TEXT, agency TEXT, phone TEXT," +
+         "  logo_data_url TEXT," +
+         "  created_at TEXT, last_login_at TEXT)",
+    table: "brokers", column: "email" },
+  // 🔴 UNIQUE, AND IT CAN GENUINELY FAIL ON DATA the way the quote_number index can: two accounts
+  // on one address would make "show me my quotes" ambiguous, and the email IS the identity here.
+  { sql: "CREATE UNIQUE INDEX IF NOT EXISTS brokers_email_unique ON brokers (lower(trim(email)))",
+    index: "brokers_email_unique" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column

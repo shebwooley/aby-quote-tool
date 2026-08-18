@@ -29,6 +29,10 @@
   var carriedClientId = null;
   var carriedBrokerLogoUrl = null;
 
+  // The logo from the broker's own ABY ACCOUNT (F-6), as a data URL. Lowest precedence of the
+  // three: an uploaded file wins, then the BenefitLab hand-off, then this.
+  var accountLogoDataUrl = null;
+
   /**
    * Is this a broker logo URL we are willing to put in the quote's <img src>?
    *
@@ -481,7 +485,11 @@
       // ⭐ AN UPLOADED FILE WINS OVER THE CARRIED URL, and that order is deliberate: the broker
       // is standing at the form. If they took the trouble to attach a logo on this quote, that
       // is a more recent statement of intent than whatever their agency profile holds.
+      // ⭐ THREE SOURCES, ONE ORDER, MOST-DELIBERATE FIRST: the file attached to THIS quote (handled
+      // above), then the logo the BenefitLab dashboard handed over for THIS client, then the one
+      // saved on the broker's ABY account. Each is a statement of intent; the narrower one wins.
       if (carriedBrokerLogoUrl) form.brokerLogoUrl = carriedBrokerLogoUrl;
+      else if (accountLogoDataUrl) form.brokerLogoDataUrl = accountLogoDataUrl;
       renderQuote(form);
     }
   }
@@ -689,6 +697,38 @@
   // Pre-populate form from a ?rerun= URL param (set by admin Re-run link)
   // -------------------------------------------------------------
 
+  /**
+   * Fill the broker's own details from their ABY account, for a broker who has one (F-6).
+   *
+   * ⭐⭐ THIS IS THE FEATURE ERIC ASKED FOR: "brokers who are using the ABY dashboard instead of
+   * BenefitLab to upload their logo and input their contact info there once and have it carry to
+   * the quote."
+   *
+   * 🔴 IT NEVER OVERWRITES A FIELD THAT ALREADY HAS A VALUE, AND THAT ORDERING IS THE WHOLE
+   * DESIGN. `prePopulateFromRerun()` runs FIRST and carries what the BenefitLab dashboard handed
+   * over. A broker who has BOTH an ABY account and a BenefitLab profile is a real case -- Eric
+   * himself is one -- and the dashboard hand-off is the more specific answer, because it was
+   * chosen for THIS client on THIS visit. ⛔ Filling from the account afterwards would silently
+   * replace it with whatever is older.
+   *
+   * ⚠️ ASYNC AND UNAWAITED, DELIBERATELY. A broker with no account gets a 401 and nothing happens;
+   * the form must never wait on a network call to become usable.
+   */
+  function prefillFromBrokerAccount() {
+    fetch('/api/broker/me').then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+      var b = d && d.broker;
+      if (!b) return;
+      var map = { brokerName: b.name, brokerAgency: b.agency, brokerPhone: b.phone, brokerEmail: b.email };
+      Object.keys(map).forEach(function (key) {
+        var el = formEl && formEl.querySelector('[name="' + key + '"]');
+        if (el && !el.value && map[key]) el.value = map[key];
+      });
+      // The logo travels as a data URL the renderer already knows how to draw. Same rule: the
+      // dashboard's logo, if one came over, wins.
+      if (b.logoDataUrl && !carriedBrokerLogoUrl) accountLogoDataUrl = b.logoDataUrl;
+    }).catch(function () { /* no account, or offline -- the form is unaffected */ });
+  }
+
   function prePopulateFromRerun() {
     var params = new URLSearchParams(window.location.search);
     var rerunParam = params.get('rerun');
@@ -861,6 +901,7 @@
     if (srcParam) window.__abySourceTag = srcParam;
 
     prePopulateFromRerun();
+    prefillFromBrokerAccount();
 
     formEl.addEventListener('submit', generateQuote);
     var resetBtn = document.getElementById('resetBtn');
