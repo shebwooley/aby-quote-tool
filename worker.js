@@ -227,8 +227,8 @@ async function handleSaveQuote(request, env, ctx) {
           (id, quote_number, created_at, client_name, effective_date,
            broker_name, broker_agency, broker_phone, broker_email,
            rep_name, rep_phone, rep_email, commission_included, products,
-           ran_by, state, adjustment, adjustment_note, client_id, source_tag, revision)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+           ran_by, state, adjustment, adjustment_note, client_id, revision)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
       `).bind(
         id, quoteNumber, now, clientName, effectiveDate,
         brokerName, brokerAgency, brokerPhone, brokerEmail,
@@ -236,11 +236,32 @@ async function handleSaveQuote(request, env, ctx) {
         commissionIncluded ? 1 : 0,
         productsJson,
         ranBy, stateCode, adjustmentJson, adjustmentNoteVal,
-        String(clientId || ''), String(sourceTag || '').slice(0, 40)
+        String(clientId || '')
       ).run();
     } catch (err) {
       console.error('DB insert failed:', err);
       return jsonResp({ error: 'Failed to save quote' }, 500);
+    }
+
+    // ── The source tag, written SEPARATELY and best-effort (F-347) ──────────────────────────
+    //
+    // 🔴🔴 IT IS NOT IN THE INSERT ABOVE, AND THAT IS THE WHOLE POINT. `source_tag` is a NEW
+    // column. Putting it in the INSERT means that between this deploy and somebody opening
+    // /api/migrate, EVERY INSERT REFERENCES A COLUMN THAT DOES NOT EXIST AND FAILS -- and
+    // `save-hook.js` swallows failures by design, so the broker gets their quote on screen and
+    // nothing is saved. Nobody is told. The site is no longer locked, so real brokers would hit it.
+    // ⭐ THAT IS THE EXACT FAILURE F-343 KEPT THE TOOL LOCKED FOR TWELVE DAYS TO AVOID, and the
+    // first version of this change walked straight back into it.
+    // ▶️ So the quote saves first and the tag is a separate, ignorable write: before the migration
+    // it is a no-op, after it the tag lands. No ordering requirement, no window.
+    if (sourceTag) {
+      try {
+        await env.DB.prepare('UPDATE quotes SET source_tag = ? WHERE id = ?')
+          .bind(String(sourceTag).slice(0, 40), id).run();
+      } catch (err) {
+        // No `source_tag` column yet. The quote is already saved, which is what matters.
+        console.warn('source_tag not stored (column missing?):', String(err && err.message || err));
+      }
     }
   } else if (!unchanged) {
     try {
