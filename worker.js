@@ -930,7 +930,7 @@ function adminRatesHTML() {
  // one apostrophe. This project has been bitten by exactly this before.
  function cell(v){
    var t=(v==null?'':String(v));
-   if(/^[=+\-@\t\r]/.test(t)) t="'"+t;
+   if(/^[=+\\-@\\t\\r]/.test(t)) t="'"+t;
    return '"'+t.replace(/"/g,'""')+'"';
  }
  document.getElementById('dl').onclick=function(e){
@@ -944,7 +944,7 @@ function adminRatesHTML() {
        });
      });
    });
-   var blob=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
+   var blob=new Blob(['\ufeff'+lines.join('\\r\\n')],{type:'text/csv;charset=utf-8'});
    var a=document.createElement('a');
    a.href=URL.createObjectURL(blob); a.download='aby-rates.csv'; a.click();
  };
@@ -1176,7 +1176,7 @@ function brokerPageHTML() {
    show($('aMsg'),r.ok?'Saved.':(d.error||'Could not save.'),r.ok?'ok':'err');
  };
  $('inviteGo').onclick=async function(){
-   var people=$('inviteBox').value.split(/\r?\n/).map(function(l){
+   var people=$('inviteBox').value.split(/\\r?\\n/).map(function(l){
      var parts=l.split(','); if(parts.length<2) return null;
      return {name:parts[0].trim(), email:parts[parts.length-1].trim()};
    }).filter(function(x){return x&&x.email});
