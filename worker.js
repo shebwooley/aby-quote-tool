@@ -46,6 +46,10 @@ export default {
     if (path === '/api/agency/quotes'   && method === 'GET')  return handleAgencyQuotes(request, env);
     if (path === '/api/agency/me'       && method === 'GET')  return handleAgencyMe(request, env);
     if (path === '/api/agency/role'     && method === 'POST') return handleAgencyRole(request, env);
+    // ABY's own admin views (Eric, 2026-08-18). Admin-gated, not broker-gated.
+    if (path === '/api/admin/brokers' && method === 'GET')  return withAuth(request, env, () => handleAdminBrokers(request, env));
+    if (path === '/api/admin/assign'  && method === 'POST') return withAuth(request, env, () => handleAdminAssign(request, env));
+    if (path === '/api/admin/stats'   && method === 'GET')  return withAuth(request, env, () => handleAdminStats(request, env));
     // The broker's own page. Public by design -- it IS the sign-in screen; everything behind it
     // is gated per request by the `aby_broker` cookie, not by hiding this route.
     if (path === '/broker/set-password') {
@@ -97,6 +101,14 @@ export default {
     }
 
     // ── Admin page ──────────────────────────────────────────────────────────────
+    if (path === '/admin/brokers') {
+      return withAuth(request, env, () => new Response(adminBrokersHTML(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
+    }
+    if (path === '/admin/rates') {
+      return withAuth(request, env, () => new Response(adminRatesHTML(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
+    }
     if (path === '/admin' || path === '/admin/') {
       return withAuth(request, env, () =>
         new Response(adminHTML(), {
@@ -733,6 +745,299 @@ async function verifyToken(token, password) {
   if (!password) return false;
   try { return token === await makeToken(password); }
   catch { return false; }
+}
+
+// ─── ABY admin sub-pages (Eric, 2026-08-18) ────────────────────────────────────
+//
+// ⭐ SEPARATE PAGES RATHER THAN MORE TABS ON `adminHTML()`. That function is the quote log, it
+// works, and it is long. New capability goes beside it so a mistake here cannot take the log down.
+function adminBrokersHTML() {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Brokers &amp; agencies — ABY admin</title>
+<style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
+ header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
+ header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85} header a:hover{opacity:1}
+ main{max-width:1180px;margin:22px auto;padding:0 18px}
+ .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
+ h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
+ table{width:100%;border-collapse:collapse;font-size:14px}
+ th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
+ td{padding:8px 6px;border-bottom:1px solid #eef2f6} .muted{color:#8a97a8}
+ .n{text-align:right;font-variant-numeric:tabular-nums}
+ .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
+ .filters button{background:#fff;border:1px solid #c8d2de;border-radius:6px;padding:7px 13px;cursor:pointer;font-size:14px}
+ .filters button.on{background:#143c73;color:#fff;border-color:#143c73}
+ select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
+ a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
+</style></head><body>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/rates">Rates</a></header>
+<main>
+  <div class="filters">
+    <span class="muted" style="font-size:13px">Show:</span>
+    <button data-rep="" class="on">Everyone</button>
+    <button data-rep="eric">Eric</button>
+    <button data-rep="niels">Niels</button>
+    <span class="muted" id="totals" style="margin-left:auto;font-size:13px"></span>
+  </div>
+  <div class="card"><h2>Registered brokers</h2>
+    <p class="sub">Everyone with an ABY account. Assign each one to whoever owns the relationship.</p>
+    <div id="brokers"><p class="muted">Loading...</p></div></div>
+  <div class="card"><h2>Quotes by agency</h2>
+    <p class="sub">Counted from every quote ever run, including from people who never made an account.</p>
+    <div id="byAgency"><p class="muted">Loading...</p></div></div>
+  <div class="card"><h2>Quotes by agent</h2>
+    <div id="byAgent"><p class="muted">Loading...</p></div></div>
+</main>
+<script>
+ var rep='';
+ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+ function day(s){return s?String(s).slice(0,10):'\u2014'}
+ Array.prototype.forEach.call(document.querySelectorAll('.filters button'),function(b){
+   b.onclick=function(){
+     rep=b.getAttribute('data-rep');
+     Array.prototype.forEach.call(document.querySelectorAll('.filters button'),function(x){x.className=''});
+     b.className='on'; load();
+   };
+ });
+ function repSelect(kind,id,cur){
+   var o=['','eric','niels'].map(function(v){
+     return '<option value="'+v+'"'+((cur||'')===v?' selected':'')+'>'+(v===''?'\u2014':(v==='eric'?'Eric':'Niels'))+'</option>';
+   }).join('');
+   return '<select data-kind="'+kind+'" data-id="'+esc(id)+'">'+o+'</select>';
+ }
+ function wireSelects(){
+   Array.prototype.forEach.call(document.querySelectorAll('select[data-id]'),function(sel){
+     sel.onchange=async function(){
+       await fetch('/api/admin/assign',{method:'POST',headers:{'Content-Type':'application/json'},
+         body:JSON.stringify({kind:sel.getAttribute('data-kind'),id:sel.getAttribute('data-id'),rep:sel.value})});
+       load();
+     };
+   });
+ }
+ async function load(){
+   var q=rep?('?rep='+encodeURIComponent(rep)):'';
+   var b=await (await fetch('/api/admin/brokers'+q)).json().catch(function(){return{}});
+   var list=b.brokers||[];
+   document.getElementById('brokers').innerHTML = list.length
+     ? '<table><thead><tr><th>Name</th><th>Email</th><th>Agency</th><th>Role</th><th class="n">Quotes</th><th>Last sign-in</th><th>Status</th><th>Owner</th></tr></thead><tbody>'
+       + list.map(function(x){
+           return '<tr><td>'+esc(x.name||'\u2014')+'</td><td>'+esc(x.email)+'</td><td>'+esc(x.agency_name||'\u2014')+'</td><td>'+esc(x.role||'member')+'</td>'
+             +'<td class="n">'+x.quote_count+'</td><td>'+day(x.last_login_at)+'</td>'
+             +'<td>'+(x.pending?'<span class="muted">invited</span>':'active')+'</td><td>'+repSelect('broker',x.id,x.assigned_rep)+'</td></tr>';
+         }).join('')+'</tbody></table>'
+     : '<p class="muted">No broker accounts yet.</p>';
+
+   var st=await (await fetch('/api/admin/stats'+q)).json().catch(function(){return{}});
+   if(st.totals) document.getElementById('totals').textContent=
+     st.totals.quotes+' quotes \u00b7 '+st.totals.brokers+' brokers \u00b7 '+st.totals.agencies+' agencies';
+   var ag=st.byAgency||[];
+   document.getElementById('byAgency').innerHTML = ag.length
+     ? '<table><thead><tr><th>Agency</th><th class="n">Quotes</th><th class="n">Agents</th><th>Last quote</th><th>Owner</th></tr></thead><tbody>'
+       + ag.map(function(x){
+           return '<tr><td>'+esc(x.agency)+'</td><td class="n">'+x.n+'</td><td class="n">'+x.agents+'</td><td>'+day(x.last_quote)+'</td>'
+             +'<td>'+(x.agency_id?repSelect('agency',x.agency_id,x.rep):'<span class="muted">\u2014</span>')+'</td></tr>';
+         }).join('')+'</tbody></table>'
+     : '<p class="muted">Nothing yet.</p>';
+   var agt=st.byAgent||[];
+   document.getElementById('byAgent').innerHTML = agt.length
+     ? '<table><thead><tr><th>Agent</th><th>Email</th><th>Agency</th><th class="n">Quotes</th><th>Last quote</th></tr></thead><tbody>'
+       + agt.map(function(x){
+           return '<tr><td>'+esc(x.name||'\u2014')+'</td><td>'+esc(x.email)+'</td><td>'+esc(x.agency||'\u2014')+'</td><td class="n">'+x.n+'</td><td>'+day(x.last_quote)+'</td></tr>';
+         }).join('')+'</tbody></table>'
+     : '<p class="muted">Nothing yet.</p>';
+   wireSelects();
+ }
+ load();
+</script></body></html>`;
+}
+
+// The rate viewer. Reads the SAME `pricing.js` the quote tool uses, loaded as a script, so there is
+// no second copy of the rates to drift out of step.
+function adminRatesHTML() {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Rates — ABY admin</title>
+<style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
+ header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
+ header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85} header a:hover{opacity:1}
+ main{max-width:1180px;margin:22px auto;padding:0 18px}
+ .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
+ h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
+ table{width:100%;border-collapse:collapse;font-size:14px}
+ th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
+ td{padding:8px 6px;border-bottom:1px solid #eef2f6} .muted{color:#8a97a8}
+ .n{text-align:right;font-variant-numeric:tabular-nums}
+ .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
+ .filters button{background:#fff;border:1px solid #c8d2de;border-radius:6px;padding:7px 13px;cursor:pointer;font-size:14px}
+ .filters button.on{background:#143c73;color:#fff;border-color:#143c73}
+ select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
+ a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
+</style></head><body>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/rates">Rates</a></header>
+<main>
+  <div class="filters">
+    <span class="muted" style="font-size:13px">State:</span>
+    <select id="state"></select>
+    <span class="muted" style="font-size:13px">Book:</span>
+    <select id="book"><option value="commissioned">Commissioned</option><option value="noCommission">No commission</option></select>
+    <a href="#" class="dl" id="dl" style="margin-left:auto">Download all rates (CSV)</a>
+  </div>
+  <div class="card"><h2 id="title">Rates</h2>
+    <p class="sub">Read from the same pricing file the quote tool uses, so this is what a broker would be quoted.</p>
+    <div id="out"><p class="muted">Loading...</p></div></div>
+</main>
+<script src="/assets/js/data/pricing.js"></script>
+<script>
+ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+ var P=(window.ABYQuote&&ABYQuote.pricing)||{};
+ var st=document.getElementById('state');
+ Object.keys(P).forEach(function(k){var o=document.createElement('option');o.value=k;o.textContent=(k==='OUTSIDE'?'Outside Texas':k);st.appendChild(o)});
+ function money(v){return (v==null||v==='')?'':('$'+v)}
+ // Every priced thing, flattened to one row each. Used for BOTH the screen and the CSV, so what is
+ // downloaded is what was displayed.
+ function rows(state,book){
+   var out=[], b=(P[state]||{})[book]||{};
+   Object.keys(b).forEach(function(pid){
+     var p=b[pid]; if(!p||typeof p!=='object') return;
+     function tiers(list,pkg){(list||[]).forEach(function(t){
+       out.push({product:pid,pkg:pkg||'',item:t.label||'',type:t.type||'',amount:t.amount,min:t.minMonthly,max:t.maxCount,setup:'',renewal:'',annual:''});
+     })}
+     if(p.monthlyTiers) tiers(p.monthlyTiers,'');
+     if(p.packages) Object.keys(p.packages).forEach(function(k){
+       var pk=p.packages[k];
+       out.push({product:pid,pkg:k,item:pk.description||'',type:pk.formula?'formula':'package',
+         amount:pk.formula?pk.formula.base:'',min:pk.formula?pk.formula.perForm:'',max:'',
+         setup:pk.setupFee,renewal:pk.renewalFee,annual:pk.annualFee});
+       if(pk.monthlyTiers) tiers(pk.monthlyTiers,k);
+     });
+     if(!p.monthlyTiers&&!p.packages) out.push({product:pid,pkg:'',item:p.description||'',type:p.type||'',amount:'',min:'',max:'',setup:p.setupFee,renewal:p.renewalFee,annual:p.annualFee});
+     (p.additionalFees||[]).forEach(function(f){
+       out.push({product:pid,pkg:'additional fee',item:f.label||'',type:f.unit||'',amount:f.amount,min:'',max:'',setup:'',renewal:'',annual:''});
+     });
+   });
+   return out;
+ }
+ function draw(){
+   var state=st.value, book=document.getElementById('book').value;
+   document.getElementById('title').textContent='Rates \u2014 '+(state==='OUTSIDE'?'Outside Texas':state)+', '+(book==='commissioned'?'commissioned':'no commission');
+   var r=rows(state,book);
+   document.getElementById('out').innerHTML='<table><thead><tr><th>Product</th><th>Package</th><th>Item</th><th>Type</th><th class="n">Amount</th><th class="n">Min</th><th class="n">Max</th><th class="n">Setup</th><th class="n">Renewal</th><th class="n">Annual</th></tr></thead><tbody>'
+     + r.map(function(x){return '<tr><td>'+esc(x.product)+'</td><td>'+esc(x.pkg)+'</td><td>'+esc(x.item)+'</td><td>'+esc(x.type)+'</td><td class="n">'+esc(money(x.amount))+'</td><td class="n">'+esc(money(x.min))+'</td><td class="n">'+esc(x.max==null?'':x.max)+'</td><td class="n">'+esc(money(x.setup))+'</td><td class="n">'+esc(money(x.renewal))+'</td><td class="n">'+esc(money(x.annual))+'</td></tr>'}).join('')
+     + '</tbody></table><p class="sub" style="margin-top:10px">'+r.length+' priced rows.</p>';
+ }
+ st.onchange=draw; document.getElementById('book').onchange=draw; draw();
+ // 🔴 CSV INJECTION GUARD. A cell beginning = + - or @ is executed as a FORMULA by Excel when the
+ // file is opened. These values are broker-facing product names, so the risk is real and the fix is
+ // one apostrophe. This project has been bitten by exactly this before.
+ function cell(v){
+   var t=(v==null?'':String(v));
+   if(/^[=+\-@\t\r]/.test(t)) t="'"+t;
+   return '"'+t.replace(/"/g,'""')+'"';
+ }
+ document.getElementById('dl').onclick=function(e){
+   e.preventDefault();
+   var head=['state','book','product','package','item','type','amount','min','max','setup','renewal','annual'];
+   var lines=[head.map(cell).join(',')];
+   Object.keys(P).forEach(function(state){
+     ['commissioned','noCommission'].forEach(function(book){
+       rows(state,book).forEach(function(x){
+         lines.push([state,book,x.product,x.pkg,x.item,x.type,x.amount,x.min,x.max,x.setup,x.renewal,x.annual].map(cell).join(','));
+       });
+     });
+   });
+   var blob=new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'});
+   var a=document.createElement('a');
+   a.href=URL.createObjectURL(blob); a.download='aby-rates.csv'; a.click();
+ };
+</script></body></html>`;
+}
+
+// ─── ABY admin: brokers, agencies and sales stats (Eric, 2026-08-18) ───────────
+//
+// ⭐ ALL BEHIND `withAuth`, i.e. the ABY admin login. These answer ABY's own commercial questions
+// ("who has registered, whose account is it, how much are they quoting"), which is a different
+// audience from /api/broker/* (one broker's own data) and /api/broker-quotes (the dashboard).
+//
+// ⚠️ `rep` FILTERING IS A VIEW, NOT A PERMISSION. Eric: "filter brokers and quotes by me and Niels
+// so we only see ours." Both of them are ABY admins and can see everything; this narrows a list so
+// it is readable, and must not be mistaken for access control.
+
+/** Everyone who has registered, with their agency, their owner, and how much they have quoted. */
+async function handleAdminBrokers(request, env) {
+  const rep = (new URL(request.url).searchParams.get('rep') || '').trim().toLowerCase();
+  const where = rep ? "WHERE lower(COALESCE(b.assigned_rep,'')) = ?" : '';
+  const args = rep ? [rep] : [];
+  const sql =
+    "SELECT b.id, b.email, b.name, b.phone, b.role, b.assigned_rep, b.created_at, b.last_login_at, " +
+    "       CASE WHEN b.password_hash = '' THEN 1 ELSE 0 END AS pending, " +
+    "       a.id AS agency_id, a.name AS agency_name, a.assigned_rep AS agency_rep, " +
+    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email))) AS quote_count " +
+    "FROM brokers b LEFT JOIN agencies a ON a.id = b.agency_id " +
+    where + " ORDER BY quote_count DESC, b.created_at DESC LIMIT 500";
+  try {
+    const r = await env.DB.prepare(sql).bind(...args).all();
+    return jsonResp({ brokers: r.results || [] });
+  } catch (err) {
+    // The brokers table may not exist on an un-migrated database. Say so plainly rather than 500.
+    return jsonResp({ brokers: [], error: String(err && err.message || err) });
+  }
+}
+
+/** Assign a broker or an agency to a rep. */
+async function handleAdminAssign(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const rep = String(body.rep || '').trim().toLowerCase();
+  // '' clears the assignment, which has to stay possible -- an unassigned broker is a real state
+  // and "assign to somebody to make the warning go away" is how a list stops meaning anything.
+  if (rep && rep !== 'eric' && rep !== 'niels') return jsonResp({ error: 'Unknown rep.' }, 400);
+  const table = body.kind === 'agency' ? 'agencies' : 'brokers';
+  const id = String(body.id || '');
+  if (!id) return jsonResp({ error: 'Which one?' }, 400);
+  await env.DB.prepare(`UPDATE ${table} SET assigned_rep = ? WHERE id = ?`).bind(rep || null, id).run();
+  return jsonResp({ ok: true });
+}
+
+/**
+ * Quote counts by agency and by agent.
+ *
+ * ⚠️ COUNTED FROM `quotes`, JOINED ON EMAIL, WHICH MEANS QUOTES FROM PEOPLE WITH NO ACCOUNT STILL
+ * COUNT -- they simply have no agency. That is the honest picture: most of ABY's quoting history
+ * predates accounts entirely, and a stat that silently dropped it would understate the tool.
+ */
+async function handleAdminStats(request, env) {
+  const rep = (new URL(request.url).searchParams.get('rep') || '').trim().toLowerCase();
+  const repFilter = rep ? "AND lower(COALESCE(b.assigned_rep,'')) = ?" : '';
+  const args = rep ? [rep] : [];
+  try {
+    const byAgent = await env.DB.prepare(
+      "SELECT lower(trim(q.broker_email)) AS email, MAX(q.broker_name) AS name, " +
+      "       MAX(COALESCE(a.name, q.broker_agency)) AS agency, MAX(b.assigned_rep) AS rep, " +
+      "       COUNT(*) AS n, MAX(q.created_at) AS last_quote " +
+      "FROM quotes q " +
+      "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) " +
+      "LEFT JOIN agencies a ON a.id = b.agency_id " +
+      "WHERE trim(COALESCE(q.broker_email,'')) <> '' " + repFilter +
+      " GROUP BY email ORDER BY n DESC LIMIT 200").bind(...args).all();
+
+    const byAgency = await env.DB.prepare(
+      "SELECT COALESCE(a.name, q.broker_agency, '(no agency)') AS agency, MAX(a.id) AS agency_id, " +
+      "       MAX(COALESCE(a.assigned_rep, b.assigned_rep)) AS rep, " +
+      "       COUNT(*) AS n, COUNT(DISTINCT lower(trim(q.broker_email))) AS agents, " +
+      "       MAX(q.created_at) AS last_quote " +
+      "FROM quotes q " +
+      "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) " +
+      "LEFT JOIN agencies a ON a.id = b.agency_id " +
+      "WHERE 1=1 " + repFilter +
+      " GROUP BY agency ORDER BY n DESC LIMIT 200").bind(...args).all();
+
+    const totals = await env.DB.prepare(
+      "SELECT (SELECT COUNT(*) FROM quotes) AS quotes, " +
+      "       (SELECT COUNT(*) FROM brokers) AS brokers, " +
+      "       (SELECT COUNT(*) FROM agencies) AS agencies").first();
+
+    return jsonResp({ byAgent: byAgent.results || [], byAgency: byAgency.results || [], totals });
+  } catch (err) {
+    return jsonResp({ byAgent: [], byAgency: [], error: String(err && err.message || err) });
+  }
 }
 
 // ─── The broker dashboard page (F-6) ───────────────────────────────────────────
@@ -1548,6 +1853,14 @@ const MIGRATIONS = [
   // near-identical flows is how one of them rots.
   { sql: "ALTER TABLE brokers ADD COLUMN reset_token TEXT",   table: "brokers", column: "reset_token" },
   { sql: "ALTER TABLE brokers ADD COLUMN reset_expires TEXT", table: "brokers", column: "reset_expires" },
+
+  // ── Who at ABY owns this relationship (Eric, 2026-08-18) ────────────────────────────────────
+  // "I'd like to be able to see all the brokers who are registered (and who they're assigned to -
+  // Neils or me)... filter brokers and quotes by me and Niels so we only see ours."
+  // ⭐ The values are the ids already in `reps.js` (`eric` / `niels`), NOT new ones, so the sales
+  // rep on a quote and the owner of a broker are the same vocabulary.
+  { sql: "ALTER TABLE brokers  ADD COLUMN assigned_rep TEXT", table: "brokers",  column: "assigned_rep" },
+  { sql: "ALTER TABLE agencies ADD COLUMN assigned_rep TEXT", table: "agencies", column: "assigned_rep" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column
