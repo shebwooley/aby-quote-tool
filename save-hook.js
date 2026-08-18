@@ -133,6 +133,13 @@
       // unknown field until the `client_id` column and the INSERT are in place, so this is
       // harmless on its own (handleSaveQuote destructures known keys only).
       clientId: window.__abyClientId || '',
+      // WHICH SHARED LINK THIS CAME FROM (F-347). Set by app.js from `?src=` on the URL.
+      // ⚠️ Eric was told its one cost when he approved it ("Not sure yet, build it anyway, it's
+      // cheap"): a tag lives in a URL, and a URL gets copied, so a broker who forwards their link
+      // to another broker attributes that second broker's quotes to the first tag. It is a HINT
+      // about where a link travelled, never an identity -- `ran_by` and `client_id` are the fields
+      // that mean something, and both are decided server-side or handed over deliberately.
+      sourceTag: window.__abySourceTag || '',
       products: collectProducts(),
     };
 

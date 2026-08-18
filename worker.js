@@ -154,6 +154,7 @@ async function handleSaveQuote(request, env, ctx) {
     brokerAgency       = '',
     brokerPhone        = '',
     brokerEmail        = '',
+    sourceTag          = '',
     repName            = '',
     repPhone           = '',
     repEmail           = '',
@@ -226,8 +227,8 @@ async function handleSaveQuote(request, env, ctx) {
           (id, quote_number, created_at, client_name, effective_date,
            broker_name, broker_agency, broker_phone, broker_email,
            rep_name, rep_phone, rep_email, commission_included, products,
-           ran_by, state, adjustment, adjustment_note, client_id, revision)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+           ran_by, state, adjustment, adjustment_note, client_id, source_tag, revision)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
       `).bind(
         id, quoteNumber, now, clientName, effectiveDate,
         brokerName, brokerAgency, brokerPhone, brokerEmail,
@@ -235,7 +236,7 @@ async function handleSaveQuote(request, env, ctx) {
         commissionIncluded ? 1 : 0,
         productsJson,
         ranBy, stateCode, adjustmentJson, adjustmentNoteVal,
-        String(clientId || '')
+        String(clientId || ''), String(sourceTag || '').slice(0, 40)
       ).run();
     } catch (err) {
       console.error('DB insert failed:', err);
@@ -295,7 +296,7 @@ async function handleListQuotes(request, env) {
 
   const ranByFilter = (url.searchParams.get('ran_by') || '').trim();   // '', 'ABY', or 'broker'
   const stateFilter  = (url.searchParams.get('state')  || '').trim().toUpperCase();
-  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, COALESCE(state, 'TX') AS state, adjustment, adjustment_note, client_id";
+  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, COALESCE(state, 'TX') AS state, adjustment, adjustment_note, client_id, source_tag";
 
   try {
     const where = [];
@@ -757,6 +758,11 @@ const MIGRATIONS = [
   // Added 2026-08-06. `client_id` is the BenefitLab client this quote is for, so a quote
   // no longer has to be matched to an employer by a TYPED company name (F-268).
   { sql: "ALTER TABLE quotes ADD COLUMN client_id TEXT",        table: "quotes", column: "client_id" },
+  // `source_tag` is F-347: WHICH SHARED LINK a quote came in on, from `?src=`. Eric approved it
+  // as "not sure yet, build it anyway, it's cheap". ⚠️ It is a HINT, not an identity -- a tag
+  // lives in a URL and URLs get copied, so a forwarded link attributes the wrong broker. `ran_by`
+  // (server-side) and `client_id` (handed over deliberately) are the fields that mean something.
+  { sql: "ALTER TABLE quotes ADD COLUMN source_tag TEXT",       table: "quotes", column: "source_tag" },
   // `revision` implements Eric's decision: re-running a saved quote keeps its number and
   // becomes revision 2, rather than minting a new number (F-339).
   { sql: "ALTER TABLE quotes ADD COLUMN revision INTEGER DEFAULT 1", table: "quotes", column: "revision" },
@@ -1243,6 +1249,11 @@ function detailHTML(q, products) {
       '<div class="detail-item"><label>Effective Date</label><span>' + (esc(q.effective_date) || '—') + '</span></div>' +
       '<div class="detail-item"><label>Broker Phone</label><span>' + (esc(q.broker_phone) || '—') + '</span></div>' +
       '<div class="detail-item"><label>Broker Email</label><span>' + (esc(q.broker_email) || '—') + '</span></div>' +
+      // F-347. Shown only when there IS one, because a "Source —" line on every quote that ever
+      // came in through the plain link is noise on the row a reader is trying to scan.
+      (q.source_tag
+        ? '<div class="detail-item"><label>Link source</label><span>' + esc(q.source_tag) + '</span></div>'
+        : '') +
     '</div>' +
     '<div class="detail-actions">' +
       '<a href="' + rerunUrl + '&readonly=1" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:#e8f4ec;color:#1a5c3a;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4">View Quote ↗</a>' +

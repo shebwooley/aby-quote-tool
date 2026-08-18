@@ -849,6 +849,17 @@
     // Capture readonly flag BEFORE prePopulateFromRerun() strips URL params via history.replaceState.
     var isReadOnly = new URLSearchParams(window.location.search).get('readonly') === '1';
 
+    // WHICH SHARED LINK THIS VISIT CAME FROM (F-347), from `?src=`.
+    // 🔴 READ HERE, BESIDE `readonly`, AND FOR THE SAME REASON: prePopulateFromRerun() clears the
+    // query string with history.replaceState, so anything read after it is already gone. Putting
+    // this inside that function would not work either -- it returns early when there is no
+    // `rerun` param, which is exactly the case a shared generic link is.
+    // ⚠️ Sanitised and capped: it is broker-supplied text that reaches an admin screen and a
+    // database, and a tag is a short label, not a payload.
+    var srcParam = (new URLSearchParams(window.location.search).get('src') || '')
+      .replace(/[^A-Za-z0-9._-]/g, '').slice(0, 40);
+    if (srcParam) window.__abySourceTag = srcParam;
+
     prePopulateFromRerun();
 
     formEl.addEventListener('submit', generateQuote);
