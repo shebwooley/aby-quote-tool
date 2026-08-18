@@ -667,38 +667,127 @@ async function serveAbyTool(request, env) {
   });
 }
 
-// Idempotent migration: add attribution columns if they do not exist yet.
-async function handleMigrate(env) {
-  const stmts = [
-    "ALTER TABLE quotes ADD COLUMN ran_by TEXT",
-    "ALTER TABLE quotes ADD COLUMN state TEXT",
-    "ALTER TABLE quotes ADD COLUMN adjustment TEXT",
-    "ALTER TABLE quotes ADD COLUMN adjustment_note TEXT",
-    // Added 2026-08-06. `client_id` is the BenefitLab client this quote is for, so a quote
-    // no longer has to be matched to an employer by a TYPED company name (F-268).
-    "ALTER TABLE quotes ADD COLUMN client_id TEXT",
-    // `revision` implements Eric's decision: re-running a saved quote keeps its number and
-    // becomes revision 2, rather than minting a new number (F-339).
-    "ALTER TABLE quotes ADD COLUMN revision INTEGER DEFAULT 1",
-    // The quote number is the only human-readable identity the tool has, and `commitments`
-    // join employers' signed authorisations to it -- so it must not be issuable twice.
-    // SAFE TO ADD: measured in D1 on 2026-08-06, 45 quotes / 45 distinct numbers.
-    "CREATE UNIQUE INDEX IF NOT EXISTS quotes_quote_number_unique ON quotes (quote_number)",
-    // Added 2026-08-06 (F-345). The employer's signed authorization had no broker on it at
-    // all; `broker_email` is stored on the row so the answer survives even if the quote it
-    // came from is ever renumbered, and `client_id` is the BenefitLab employer.
-    // ⭐ Denormalised ON PURPOSE rather than joined: a commitment is a RECORD OF SOMETHING
-    // SOMEBODY SIGNED, and it should not be able to change its meaning because a row it
-    // points at changed later.
-    "ALTER TABLE commitments ADD COLUMN client_id TEXT",
-    "ALTER TABLE commitments ADD COLUMN broker_email TEXT",
-  ];
-  const applied = [];
-  for (const sql of stmts) {
-    try { await env.DB.prepare(sql).run(); applied.push(sql); }
-    catch (e) { /* duplicate column => already migrated; ignore */ }
+// ─── The migration, as DATA ─────────────────────────────────────────────────────
+//
+// 🔴🔴 EACH ENTRY CARRIES BOTH THE STATEMENT AND HOW TO PROVE IT LANDED, IN ONE PLACE, ON PURPOSE.
+// A second list of "things to check afterwards" would drift from this one the first time somebody
+// added a column and forgot the other half -- and the whole point of F-357 is that a migration
+// which cannot prove itself is indistinguishable from one that did not run.
+const MIGRATIONS = [
+  { sql: "ALTER TABLE quotes ADD COLUMN ran_by TEXT",           table: "quotes", column: "ran_by" },
+  { sql: "ALTER TABLE quotes ADD COLUMN state TEXT",            table: "quotes", column: "state" },
+  { sql: "ALTER TABLE quotes ADD COLUMN adjustment TEXT",       table: "quotes", column: "adjustment" },
+  { sql: "ALTER TABLE quotes ADD COLUMN adjustment_note TEXT",  table: "quotes", column: "adjustment_note" },
+  // Added 2026-08-06. `client_id` is the BenefitLab client this quote is for, so a quote
+  // no longer has to be matched to an employer by a TYPED company name (F-268).
+  { sql: "ALTER TABLE quotes ADD COLUMN client_id TEXT",        table: "quotes", column: "client_id" },
+  // `revision` implements Eric's decision: re-running a saved quote keeps its number and
+  // becomes revision 2, rather than minting a new number (F-339).
+  { sql: "ALTER TABLE quotes ADD COLUMN revision INTEGER DEFAULT 1", table: "quotes", column: "revision" },
+  // The quote number is the only human-readable identity the tool has, and `commitments`
+  // join employers' signed authorisations to it -- so it must not be issuable twice.
+  // SAFE TO ADD: measured in D1 on 2026-08-06, 45 quotes / 45 distinct numbers.
+  //
+  // 🔴 THIS IS THE ONE STATEMENT HERE THAT CAN GENUINELY FAIL ON DATA. `IF NOT EXISTS` only
+  // suppresses "this index already exists"; a UNIQUE index still ABORTS if two rows share a
+  // quote_number. So it is the statement most worth reporting on, and the one the old
+  // swallow-everything loop hid most completely.
+  { sql: "CREATE UNIQUE INDEX IF NOT EXISTS quotes_quote_number_unique ON quotes (quote_number)",
+    index: "quotes_quote_number_unique" },
+  // Added 2026-08-06 (F-345). The employer's signed authorization had no broker on it at
+  // all; `broker_email` is stored on the row so the answer survives even if the quote it
+  // came from is ever renumbered, and `client_id` is the BenefitLab employer.
+  // ⭐ Denormalised ON PURPOSE rather than joined: a commitment is a RECORD OF SOMETHING
+  // SOMEBODY SIGNED, and it should not be able to change its meaning because a row it
+  // points at changed later.
+  { sql: "ALTER TABLE commitments ADD COLUMN client_id TEXT",    table: "commitments", column: "client_id" },
+  { sql: "ALTER TABLE commitments ADD COLUMN broker_email TEXT", table: "commitments", column: "broker_email" },
+];
+
+// Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column
+// resolution happens at PREPARE time, so the probe answers even on an empty table, and its failure
+// message names the exact problem ("no such column" vs "no such table").
+// ⚠️ Deliberately NOT reused for the index: an index is invisible to a SELECT.
+async function columnExists(env, table, column) {
+  try {
+    await env.DB.prepare(`SELECT "${column}" FROM "${table}" LIMIT 1`).all();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
   }
-  return jsonResp({ ok: true, applied });
+}
+
+async function indexExists(env, name) {
+  try {
+    const r = await env.DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?"
+    ).bind(name).all();
+    return { ok: Boolean(r && r.results && r.results.length) };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+
+// Idempotent migration: add attribution columns if they do not exist yet.
+//
+// 🔴🔴 WHY THIS REPORTS THE WAY IT DOES (F-357, 2026-08-12). It used to run every statement inside
+// its own `try { } catch { /* ignore */ }` and then return `{ ok: true, applied }` no matter what.
+// Three completely different outcomes -- "I added it", "it was already there", "it FAILED" -- came
+// back as one word, and a real failure was reported as success.
+//
+// ⭐⭐ THAT IS NOT HYPOTHETICAL AND IT COST A DAY AND A HALF. On 2026-08-11 the migration was run
+// and `client_id` demonstrably landed (the admin quote log went from `D1_ERROR: no such column:
+// client_id` to rendering). Nothing could say whether the four statements AFTER it landed, and two
+// of those are the columns Change H writes -- on a path where a failed write is swallowed too. So
+// "did the migration run" stayed genuinely unanswerable while the response said `ok: true`.
+//
+// ⭐ THE VERDICT IS READ BACK OFF THE SCHEMA, NOT INFERRED FROM THE STATEMENT'S OWN RESULT. That is
+// the same rule the `client_id` half was eventually settled by: verify on the thing that needed the
+// change, never on the change's own report of itself. It also means a column added by hand, or by
+// an earlier run, verifies correctly -- `already` and `applied` are both fine, only `failed` is not.
+async function handleMigrate(env) {
+  const statements = [];
+
+  for (const m of MIGRATIONS) {
+    try {
+      await env.DB.prepare(m.sql).run();
+      statements.push({ sql: m.sql, result: "applied" });
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      // "duplicate column name: x" is SQLite saying the migration already ran. It is the ONLY
+      // benign failure here, so it is the only one matched by name -- anything else is reported
+      // as a failure with its message, rather than being assumed harmless.
+      const benign = /duplicate column name/i.test(msg) || /already exists/i.test(msg);
+      statements.push({ sql: m.sql, result: benign ? "already" : "failed", error: msg });
+    }
+  }
+
+  // ── Now prove it, against the schema ────────────────────────────────────────
+  const verified = [];
+  for (const m of MIGRATIONS) {
+    if (m.index) {
+      const r = await indexExists(env, m.index);
+      verified.push({ what: `index ${m.index}`, present: r.ok, ...(r.error ? { error: r.error } : {}) });
+    } else {
+      const r = await columnExists(env, m.table, m.column);
+      verified.push({ what: `${m.table}.${m.column}`, present: r.ok, ...(r.error ? { error: r.error } : {}) });
+    }
+  }
+
+  const missing = verified.filter((v) => !v.present).map((v) => v.what);
+
+  // ⚠️ `ok` NOW MEANS "every object this migration is responsible for is present", which is the
+  // question anybody opening this URL is actually asking. It used to be the constant `true`.
+  // Nothing calls this endpoint programmatically (grep: one route, no callers) -- it is opened by
+  // a human in a browser -- so tightening the meaning breaks nothing.
+  return jsonResp({
+    ok: missing.length === 0,
+    missing,
+    verified,
+    statements,
+    // Kept so an older eye still finds what it is looking for in the same payload.
+    applied: statements.filter((s) => s.result === "applied").map((s) => s.sql),
+  });
 }
 
 // The internal overlay: state selector + rate override, served ONLY to a valid
@@ -1486,7 +1575,7 @@ const ABY_INTERNAL_JS = `
   if (!window.ABYQuote || !window.ABYQuote.engine) return;
 
   // States ABY can quote. Add a state here once its pricing is provisioned.
-  var STATES = [{ code: 'TX', name: 'Texas' }];
+  var STATES = [{ code: 'TX', name: 'Texas' }, { code: 'OUTSIDE', name: 'Outside Texas' }];
 
   window.ABY_STATE = 'TX';
   window.ABY_ADJUSTMENT = null;   // { mode:'percent'|'flat', amount:Number, scope:'all'|productId }
@@ -1497,7 +1586,11 @@ const ABY_INTERNAL_JS = `
   window.ABYQuote.engine.calculateAll = function (selections, commissioned, state) {
     var st = window.ABY_STATE || state || 'TX';
     var results = origCalcAll.call(this, selections, commissioned, st);
-    if (window.ABY_ADJUSTMENT) results = window.ABYQuote.engine.applyAdjustment(results, window.ABY_ADJUSTMENT);
+    if (window.ABY_ADJUSTMENT) {
+      results = (window.ABY_ADJUSTMENT.mode === 'set')
+        ? applySetPrice(results, window.ABY_ADJUSTMENT)
+        : window.ABYQuote.engine.applyAdjustment(results, window.ABY_ADJUSTMENT);
+    }
     return results;
   };
 
@@ -1511,7 +1604,7 @@ const ABY_INTERNAL_JS = `
         b.state = window.ABY_STATE || 'TX';
         if (window.ABY_ADJUSTMENT) {
           b.adjustment = window.ABY_ADJUSTMENT;
-          b.adjustmentNote = window.ABYQuote.engine.describeAdjustment(window.ABY_ADJUSTMENT) +
+          b.adjustmentNote = describeOverride(window.ABY_ADJUSTMENT) +
             (window.ABY_ADJ_NOTE ? (' — ' + window.ABY_ADJ_NOTE) : '');
         }
         init.body = JSON.stringify(b);
@@ -1519,6 +1612,57 @@ const ABY_INTERNAL_JS = `
     } catch (e) {}
     return origFetch.apply(this, arguments);
   };
+
+  // ── Typed price override (Eric, 2026-08-18: "I'd like for us to be able to just
+  // enter a price") ──────────────────────────────────────────────────────────────
+  // Percent and flat SHIFT the computed price; this REPLACES it. Any box left blank
+  // is untouched, so ABY can set one figure without disturbing the rest.
+  // ⛔ Lives here rather than in engine.applyAdjustment because engine.js is not part
+  // of this change set, and patching it from the stale local clone would be a diff
+  // against the wrong base.
+  var SET_FIELDS = [
+    { key: 'setupFee',   input: 'abySetSetup',   label: 'Setup' },
+    { key: 'renewalFee', input: 'abySetRenewal', label: 'Renewal' },
+    { key: 'annualFee',  input: 'abySetAnnual',  label: 'Annual' }
+  ];
+
+  function applySetPrice(results, adj) {
+    var p = adj.prices || {};
+    return results.map(function (r) {
+      if (adj.scope !== 'all' && adj.scope !== r.productId) return r;
+      var copy = JSON.parse(JSON.stringify(r));
+      SET_FIELDS.forEach(function (f) {
+        var v = p[f.key];
+        if (v == null || isNaN(v)) return;
+        if (!copy[f.key]) copy[f.key] = { label: f.label + ' Fee' };
+        copy[f.key].amount = v;
+        copy[f.key].adjusted = true;
+      });
+      if (p.monthlyFee != null && !isNaN(p.monthlyFee) && copy.monthlyFee) {
+        copy.monthlyFee.amount = p.monthlyFee;
+        copy.monthlyFee.breakdown = money(p.monthlyFee) + ' per month (agreed price)';
+        copy.monthlyFee.adjusted = true;
+        // The tier no longer describes what is being charged, so stop printing it.
+        copy.monthlyFee.tierLabel = '';
+      }
+      copy.adjusted = true;
+      return copy;
+    });
+  }
+
+  function describeOverride(adj) {
+    if (!adj) return '';
+    if (adj.mode !== 'set') return window.ABYQuote.engine.describeAdjustment(adj);
+    var scope = (!adj.scope || adj.scope === 'all') ? 'all products' : adj.scope;
+    var parts = [];
+    SET_FIELDS.forEach(function (f) {
+      var v = (adj.prices || {})[f.key];
+      if (v != null && !isNaN(v)) parts.push(f.label + ' ' + money(v));
+    });
+    var m = (adj.prices || {}).monthlyFee;
+    if (m != null && !isNaN(m)) parts.push('Monthly ' + money(m));
+    return parts.length ? ('Price set on ' + scope + ': ' + parts.join(', ')) : '';
+  }
 
   function money(n) { return (n < 0 ? '-$' : '$') + Math.abs(n); }
 
@@ -1530,6 +1674,31 @@ const ABY_INTERNAL_JS = `
     window.ABY_STATE = panel.querySelector('#abyState').value || 'TX';
     window.ABY_ADJ_NOTE = panel.querySelector('#abyNote').value || '';
     var summary = panel.querySelector('#abySummary');
+    var setRow = panel.querySelector('#abySetRow');
+    setRow.style.display = (mode === 'set') ? 'flex' : 'none';
+    amtEl.parentNode.style.display = (mode === 'set') ? 'none' : '';
+
+    // 'set' is not driven by #abyAmt, so it must be handled BEFORE the isNaN(amt)
+    // guard below -- otherwise an empty Amount box would silently clear a typed price.
+    if (mode === 'set') {
+      var prices = {};
+      SET_FIELDS.forEach(function (f) {
+        var v = parseFloat(panel.querySelector('#' + f.input).value);
+        if (!isNaN(v)) prices[f.key] = v;
+      });
+      var mv = parseFloat(panel.querySelector('#abySetMonthly').value);
+      if (!isNaN(mv)) prices.monthlyFee = mv;
+      if (!Object.keys(prices).length) {
+        window.ABY_ADJUSTMENT = null;
+        summary.textContent = 'Set price selected, but no price typed yet. State: ' + window.ABY_STATE + '.';
+        return;
+      }
+      window.ABY_ADJUSTMENT = { mode: 'set', scope: scope, prices: prices };
+      summary.textContent = 'Applied: ' + describeOverride(window.ABY_ADJUSTMENT) +
+        '. State: ' + window.ABY_STATE + '. Re-generate the quote to apply.';
+      return;
+    }
+
     if (mode === 'none' || isNaN(amt) || amt === 0) {
       window.ABY_ADJUSTMENT = null;
       summary.textContent = 'No override. State: ' + window.ABY_STATE + '. Quotes run at standard ' + window.ABY_STATE + ' pricing.';
@@ -1560,17 +1729,25 @@ const ABY_INTERNAL_JS = `
       '<p style="margin:0 0 12px;color:#4a5568;font-size:12.5px;">State pricing and rate overrides. Overrides change the quoted price; the override itself is recorded internally and never appears on the client proposal or PDF.</p>' +
       '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">' +
         '<label style="font-size:12px;color:#143c73;">State<br><select id="abyState" style="padding:6px;min-width:150px;">' + stateOpts + '</select></label>' +
-        '<label style="font-size:12px;color:#143c73;">Override<br><select id="abyMode" style="padding:6px;"><option value="none">None</option><option value="percent">Percent (%)</option><option value="flat">Flat ($)</option></select></label>' +
+        '<label style="font-size:12px;color:#143c73;">Override<br><select id="abyMode" style="padding:6px;"><option value="none">None</option><option value="percent">Percent (%)</option><option value="flat">Flat ($)</option><option value="set">Set price ($)</option></select></label>' +
         '<label style="font-size:12px;color:#143c73;">Amount<br><input id="abyAmt" type="number" step="0.01" placeholder="e.g. 10 or -15" style="padding:6px;width:130px;"></label>' +
         '<label style="font-size:12px;color:#143c73;">Applies to<br><select id="abyScope" style="padding:6px;min-width:150px;">' + scopeOpts + '</select></label>' +
         '<label style="font-size:12px;color:#143c73;flex:1;min-width:180px;">Reason (internal note)<br><input id="abyNote" type="text" placeholder="e.g. DFW regional / ABC brokerage discount" style="padding:6px;width:100%;box-sizing:border-box;"></label>' +
+      '</div>' +
+      '<div id="abySetRow" style="display:none;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-top:12px;padding-top:12px;border-top:1px dashed #a9c2e0;">' +
+        '<span style="font-size:12px;color:#143c73;width:100%;">Type the agreed price. Any box left blank keeps the standard price.</span>' +
+        '<label style="font-size:12px;color:#143c73;">Setup<br><input id="abySetSetup" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:120px;"></label>' +
+        '<label style="font-size:12px;color:#143c73;">Renewal<br><input id="abySetRenewal" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:120px;"></label>' +
+        '<label style="font-size:12px;color:#143c73;">Annual<br><input id="abySetAnnual" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:120px;"></label>' +
+        '<label style="font-size:12px;color:#143c73;">Monthly admin<br><input id="abySetMonthly" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:130px;"></label>' +
       '</div>' +
       '<div id="abySummary" style="margin-top:10px;font-size:12.5px;color:#143c73;font-weight:bold;"></div>';
 
     if (host === form && form.parentNode) form.parentNode.insertBefore(panel, form);
     else host.insertBefore(panel, host.firstChild);
 
-    ['abyState', 'abyMode', 'abyAmt', 'abyScope', 'abyNote'].forEach(function (id) {
+    ['abyState', 'abyMode', 'abyAmt', 'abyScope', 'abyNote',
+     'abySetSetup', 'abySetRenewal', 'abySetAnnual', 'abySetMonthly'].forEach(function (id) {
       var el = panel.querySelector('#' + id);
       el.addEventListener('input', function () { recompute(panel); });
       el.addEventListener('change', function () { recompute(panel); });

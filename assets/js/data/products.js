@@ -87,12 +87,14 @@ ABYQuote.products = [
     countLabel: 'forms',
     packages: [
       { id: 'smallB',    name: 'Small Group / Self/Level/Balance Funded: 1094/1095-B (per-form)', requiresCount: true },
-      { id: 'fullLt100', name: 'ALE Full Service: under 100 forms',     requiresCount: false },
-      { id: 'fullMid',   name: 'ALE Full Service: 100–249 forms',       requiresCount: false },
-      { id: 'fullHigh',  name: 'ALE Full Service: 250–499 forms',       requiresCount: false },
-      { id: 'selfLt100', name: 'ALE Self Service: under 100 forms',     requiresCount: false },
-      { id: 'selfMid',   name: 'ALE Self Service: 100–249 forms',       requiresCount: false },
-      { id: 'selfHigh',  name: 'ALE Self Service: 250–499 forms',       requiresCount: false }
+      { id: 'fullLt100', name: 'ALE Full Service: up to 100 forms',       requiresCount: false },
+      { id: 'fullMid',   name: 'ALE Full Service: 101 to 250 forms',      requiresCount: false },
+      { id: 'fullHigh',  name: 'ALE Full Service: 251 to 500 forms',      requiresCount: false },
+      { id: 'fullXL',    name: 'ALE Full Service: 501 to 1,000 forms',    requiresCount: false },
+      { id: 'selfLt100', name: 'ALE Self Service: up to 100 forms',       requiresCount: false },
+      { id: 'selfMid',   name: 'ALE Self Service: 101 to 250 forms',      requiresCount: false },
+      { id: 'selfHigh',  name: 'ALE Self Service: 251 to 500 forms',      requiresCount: false },
+      { id: 'selfXL',    name: 'ALE Self Service: 501 to 1,000 forms',    requiresCount: false }
     ]
   },
   {

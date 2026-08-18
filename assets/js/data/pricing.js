@@ -9,16 +9,49 @@
 
 window.ABYQuote = window.ABYQuote || {};
 
+// ACA reporting add-on fees, read off FIVE signed ABY proposals supplied by Eric 2026-08-18:
+//   Brown & Brown (2025, no commission) - Advocate / SPSD (2026, no commission) -
+//   Smarter Benefits / St. George Episcopal School (2026, 1095-B) - Gibson (2026,
+//   multi-tier, commissioned) - Lone Star National Bancshares (2026, up to 1,000 forms).
+// ERIC: "For the extra fees, there is no commission." So BOTH rate sets get the same
+// figures. A FUNCTION rather than a shared constant, so the two sets cannot end up
+// pointing at one array and mutating together.
+//
+// Every figure below appears identically in all five EXCEPT the additional-EIN fee:
+// the 2025 document says $725 and ALL THREE 2026 documents say $750. The 2026 figure is
+// used. That is a dated reading, not a coin flip, and it is recorded here so the next
+// person does not have to re-derive it.
+function acaAdditionalFees() {
+  return [
+    { label: 'Print and mail forms to employees', amount: 2, unit: 'per form',
+      description: 'Optional. $2.00 per form when the forms are ready to print before March 2; $2.50 per form after March 2. Elected in ABY secure portal once the forms are complete.' },
+    { label: 'Correct and refile forms accepted with errors', amount: 150, unit: 'plus $2.00 per form resubmitted',
+      description: 'Charged each time a correction is submitted. Waived, or applied to the following filing year, if the group renews by July 1. Optional, though ABY strongly recommends that all corrections are made and resubmitted.' },
+    { label: 'Each additional EIN, 10 or more W-2s', amount: 750, unit: 'per additional EIN',
+      description: 'Pricing is per EIN. Self service is not available to multi-EIN employers.' },
+    { label: 'Each additional EIN, fewer than 10 W-2s', amount: 375, unit: 'per additional EIN',
+      description: 'Pricing is per EIN. Self service is not available to multi-EIN employers.' },
+    { label: 'State filing, large group (1095-C): first state', amount: 500, unit: 'per EIN',
+      description: 'Rhode Island, New Jersey, Massachusetts, California, Washington DC and Vermont require state filing for employees residing there. Elected in the portal and billed the following April. Most fully insured carriers file the state forms, so confirm with the carrier first.' },
+    { label: 'State filing, large group (1095-C): each additional state', amount: 350, unit: 'per EIN',
+      description: 'As above, for every state after the first.' },
+    { label: 'State filing, small group (1095-B)', amount: 275, unit: 'per state, per EIN',
+      description: 'Billed during onboarding rather than in April, which is the small-group difference.' }
+  ];
+}
+
 // Helper to build the seven ACA packages — same shape both rate sets
 function buildAcaPackages(rates) {
   return {
-    smallB:    { description: 'Small Group / Self/Level/Balance Funded: Forms 1094/1095-B', formula: { base: 450, perForm: rates.smallB_perForm }, requiresCount: true },
-    fullLt100: { description: 'ALE: Forms 1094/1095-C, Full Service (<100 forms)',          annualFee: rates.fullLt100 },
-    fullMid:   { description: 'ALE: Forms 1094/1095-C, Full Service (100–249 forms)',       annualFee: rates.fullMid },
-    fullHigh:  { description: 'ALE: Forms 1094/1095-C, Full Service (250–499 forms)',       annualFee: rates.fullHigh },
-    selfLt100: { description: 'ALE: Forms 1094/1095-C, Self Service (<100 forms)',          annualFee: rates.selfLt100 },
-    selfMid:   { description: 'ALE: Forms 1094/1095-C, Self Service (100–249 forms)',       annualFee: rates.selfMid },
-    selfHigh:  { description: 'ALE: Forms 1094/1095-C, Self Service (250–499 forms)',       annualFee: rates.selfHigh }
+    smallB:    { description: 'Small Group / Self/Level/Balance Funded: Forms 1094/1095-B', formula: { base: rates.smallB_base, perForm: rates.smallB_perForm }, requiresCount: true },
+    fullLt100: { description: 'ALE: Forms 1094/1095-C, Full Service (up to 100 forms)',     annualFee: rates.fullLt100 },
+    fullMid:   { description: 'ALE: Forms 1094/1095-C, Full Service (101 to 250 forms)',    annualFee: rates.fullMid },
+    fullHigh:  { description: 'ALE: Forms 1094/1095-C, Full Service (251 to 500 forms)',    annualFee: rates.fullHigh },
+    fullXL:    { description: 'ALE: Forms 1094/1095-C, Full Service (501 to 1,000 forms)',  annualFee: rates.fullXL },
+    selfLt100: { description: 'ALE: Forms 1094/1095-C, Self Service (up to 100 forms)',     annualFee: rates.selfLt100 },
+    selfMid:   { description: 'ALE: Forms 1094/1095-C, Self Service (101 to 250 forms)',    annualFee: rates.selfMid },
+    selfHigh:  { description: 'ALE: Forms 1094/1095-C, Self Service (251 to 500 forms)',    annualFee: rates.selfHigh },
+    selfXL:    { description: 'ALE: Forms 1094/1095-C, Self Service (501 to 1,000 forms)',  annualFee: rates.selfXL }
   };
 }
 
@@ -48,7 +81,7 @@ ABYQuote.pricing = {
       monthlyTiers: [
         { maxCount: 19,   type: 'flat', amount: 85,   label: '<20 participants' },
         { maxCount: 99,   type: 'pppm', amount: 4.50, minMonthly: 85, label: '20–99 participants' },
-        { maxCount: null, type: 'pppm', amount: 4.25, minMonthly: 85, label: '100+ participants' }
+        { maxCount: 200,  type: 'pppm', amount: 4.25, minMonthly: 85, label: '100 to 200 participants' }
       ],
       additionalFees: [
         { label: 'Plan documents (FSA/DCAP/LFSA/POP w/SPD)', amount: 0, description: '' },
@@ -69,7 +102,7 @@ ABYQuote.pricing = {
       monthlyTiers: [
         { maxCount: 14,   type: 'flat', amount: 50,   label: '<15 accounts' },
         { maxCount: 99,   type: 'pppm', amount: 3.20, minMonthly: 50, label: '15–99 accounts' },
-        { maxCount: null, type: 'pppm', amount: 3.05, minMonthly: 50, label: '100+ accounts' }
+        { maxCount: 200,  type: 'pppm', amount: 3.05, minMonthly: 50, label: '100 to 200 accounts' }
       ],
       additionalFees: [
         { label: 'Debit card order', amount: 5, unit: 'per order', description: 'Charged when new or replacement participant debit cards are ordered.' },
@@ -87,7 +120,7 @@ ABYQuote.pricing = {
       monthlyTiers: [
         { maxCount: 19,   type: 'flat', amount: 85,   label: '<20 participants' },
         { maxCount: 99,   type: 'pppm', amount: 4.50, minMonthly: 85, label: '20–99 participants' },
-        { maxCount: null, type: 'pppm', amount: 4.25, minMonthly: 85, label: '100+ participants' }
+        { maxCount: 200,  type: 'pppm', amount: 4.25, minMonthly: 85, label: '100 to 200 participants' }
       ],
       additionalFees: [
         { label: 'Plan documents (HRA w/SPD)', amount: 0, description: '' },
@@ -190,12 +223,26 @@ ABYQuote.pricing = {
     aca: {
       type: 'package-with-count',
       packages: buildAcaPackages({
-        smallB_perForm: 2,
-        fullLt100: 3300, fullMid: 3650, fullHigh: 4100,
-        selfLt100: 1250, selfMid: 1600, selfHigh: 1600
-        // NOTE: Per Eric's pricing template, Self Service 250–499 is the same as 100–249 ($1600).
+        // Gibson 2026 (commissioned, multi-tier). Where its rate table and its signature
+        // page disagreed, the HIGHER figure is used, per Eric 2026-08-18. The 501-1,000
+        // band is Lone Star National Bancshares 2026, whose two pages agree.
+        //
+        // 2026-08-18: ERIC SET THE COMMISSIONED FIGURES HIMSELF, which is what resolved the
+        // open question below. Every proposal supplied was a NO-COMMISSION quote, so taking the
+        // higher figure from them had left the two books IDENTICAL -- i.e. ACA reporting
+        // carrying no commission differential at all. It now carries one: +$200 on every Full
+        // Service band, and +$50/$125/$100/$100 on Self Service.
+        // DO NOT re-derive these from the proposals; they are his numbers, not the documents'.
+        smallB_base: 475, smallB_perForm: 2.50,
+        fullLt100: 3500, fullMid: 3900, fullHigh: 4300, fullXL: 4750,
+        selfLt100: 1250, selfMid: 1675, selfHigh: 1950, selfXL: 2300
       }),
-      additionalFees: []
+      additionalFees: acaAdditionalFees(),
+      notes: [
+        'Pricing is per EIN and is based on the number of forms created and filed. To count forms, total the employees who were full time on any day of the calendar year.',
+        'Multi-EIN employers must take Full Service: Self Service is not available where a second EIN is involved. Each additional EIN is charged separately.',
+        'These packages cover up to 1,000 forms. Above 1,000 forms please contact ABY, as pricing is quoted individually.'
+      ]
     },
 
     mpra: {
@@ -229,9 +276,9 @@ ABYQuote.pricing = {
         fullAdmin: {
           setupFee: 125, renewalFee: 125,
           monthlyTiers: [
-            { maxCount: 50,   type: 'pppm', amount: 4.00, minMonthly: 65, label: '2 to 50 participants' },
-            { maxCount: 100,  type: 'pppm', amount: 3.75, label: '51 to 100 participants' },
-            { maxCount: null, type: 'pppm', amount: 3.50, label: '101 to 250 participants' }
+            { maxCount: 100, type: 'pppm', amount: 4.00, minMonthly: 65, label: '2 to 100 participants' },
+            { maxCount: 200, type: 'pppm', amount: 3.75, label: '101 to 200 participants' },
+            { maxCount: 500, type: 'pppm', amount: 3.50, label: '201 to 500 participants' }
           ],
           description: 'Full administration including plan document, annual nondiscrimination testing, and monthly administration',
           requiresCount: true
@@ -250,10 +297,9 @@ ABYQuote.pricing = {
         fullAdmin: {
           setupFee: 125, renewalFee: 125,
           monthlyTiers: [
-            { maxCount: 15,   type: 'flat', amount: 85, minMonthly: 85, label: '2 to 15 participants' },
-            { maxCount: 50,   type: 'pppm', amount: 4.50, label: '16 to 50 participants' },
-            { maxCount: 100,  type: 'pppm', amount: 4.25, label: '51 to 100 participants' },
-            { maxCount: null, type: 'pppm', amount: 4.00, label: '101 to 200 participants' }
+            { maxCount: 19,   type: 'flat', amount: 85,   label: '<20 participants' },
+            { maxCount: 99,   type: 'pppm', amount: 4.50, minMonthly: 85, label: '20–99 participants' },
+            { maxCount: 200,  type: 'pppm', amount: 4.25, minMonthly: 85, label: '100 to 200 participants' }
           ],
           description: 'Full administration including plan document, annual nondiscrimination testing, and monthly administration',
           requiresCount: true
@@ -274,10 +320,9 @@ ABYQuote.pricing = {
         fullAdmin: {
           setupFee: 125, renewalFee: 125,
           monthlyTiers: [
-            { maxCount: 50,   type: 'pppm', amount: 4.00, minMonthly: 65, label: '2 to 50 participants' },
-            { maxCount: 100,  type: 'pppm', amount: 3.75, label: '51 to 100 participants' },
-            { maxCount: 250,  type: 'pppm', amount: 3.50, label: '101 to 250 participants' },
-            { maxCount: null, type: 'pppm', amount: 3.25, label: '251 to 500 participants' }
+            { maxCount: 100, type: 'pppm', amount: 4.00, minMonthly: 65, label: '2 to 100 participants' },
+            { maxCount: 200, type: 'pppm', amount: 3.75, label: '101 to 200 participants' },
+            { maxCount: 500, type: 'pppm', amount: 3.50, label: '201 to 500 participants' }
           ],
           description: 'Full administration including plan document, monthly administration, and required notices',
           requiresCount: true
@@ -331,7 +376,7 @@ ABYQuote.pricing = {
       monthlyTiers: [
         { maxCount: 19,   type: 'flat', amount: 80,   label: '<20 participants' },
         { maxCount: 99,   type: 'pppm', amount: 4.25, minMonthly: 80, label: '20–99 participants' },
-        { maxCount: null, type: 'pppm', amount: 4.00, minMonthly: 80, label: '100+ participants' }
+        { maxCount: 200,  type: 'pppm', amount: 4.00, minMonthly: 80, label: '100 to 200 participants' }
       ],
       additionalFees: [
         { label: 'Plan documents (FSA/DCAP/LFSA/POP w/SPD)', amount: 0, description: '' },
@@ -352,7 +397,7 @@ ABYQuote.pricing = {
       monthlyTiers: [
         { maxCount: 14,   type: 'flat', amount: 45,   label: '<15 accounts' },
         { maxCount: 99,   type: 'pppm', amount: 3.05, minMonthly: 45, label: '15–99 accounts' },
-        { maxCount: null, type: 'pppm', amount: 2.90, minMonthly: 45, label: '100+ accounts' }
+        { maxCount: 200,  type: 'pppm', amount: 2.90, minMonthly: 45, label: '100 to 200 accounts' }
       ],
       additionalFees: [
         { label: 'Debit card order', amount: 5, unit: 'per order', description: 'Charged when new or replacement participant debit cards are ordered.' },
@@ -370,7 +415,7 @@ ABYQuote.pricing = {
       monthlyTiers: [
         { maxCount: 19,   type: 'flat', amount: 80,   label: '<20 participants' },
         { maxCount: 99,   type: 'pppm', amount: 4.25, minMonthly: 80, label: '20–99 participants' },
-        { maxCount: null, type: 'pppm', amount: 4.00, minMonthly: 80, label: '100+ participants' }
+        { maxCount: 200,  type: 'pppm', amount: 4.00, minMonthly: 80, label: '100 to 200 participants' }
       ],
       additionalFees: [
         { label: 'Plan documents (HRA w/SPD)', amount: 0, description: '' },
@@ -473,11 +518,23 @@ ABYQuote.pricing = {
     aca: {
       type: 'package-with-count',
       packages: buildAcaPackages({
-        smallB_perForm: 1,
-        fullLt100: 3150, fullMid: 3500, fullHigh: 3925,
-        selfLt100: 1200, selfMid: 1525, selfHigh: 1525
+        // Brown & Brown 2025 and Advocate 2026, both marked "no commission", taking the
+        // higher figure where each document contradicted itself.
+        // WARNING, AND IT IS A COMMERCIAL POINT FOR ERIC, NOT A CODING ONE: those figures
+        // come out IDENTICAL to the commissioned book above. On the evidence supplied,
+        // ACA C-form reporting carries no commission differential at all. That is a
+        // change from what this file used to hold and it is flagged rather than assumed.
+        // The two values with NO no-commission source are marked below.
+        smallB_base: 450, smallB_perForm: 1,      // no no-commission B-form proposal supplied; left as they were
+        fullLt100: 3300, fullMid: 3700, fullHigh: 4100, fullXL: 4550,   // fullXL: no no-comm source, matched to commissioned
+        selfLt100: 1200, selfMid: 1550, selfHigh: 1850, selfXL: 2200    // selfXL: same
       }),
-      additionalFees: []
+      additionalFees: acaAdditionalFees(),
+      notes: [
+        'Pricing is per EIN and is based on the number of forms created and filed. To count forms, total the employees who were full time on any day of the calendar year.',
+        'Multi-EIN employers must take Full Service: Self Service is not available where a second EIN is involved. Each additional EIN is charged separately.',
+        'These packages cover up to 1,000 forms. Above 1,000 forms please contact ABY, as pricing is quoted individually.'
+      ]
     },
 
     mpra: {
@@ -511,9 +568,9 @@ ABYQuote.pricing = {
         fullAdmin: {
           setupFee: 100, renewalFee: 100,
           monthlyTiers: [
-            { maxCount: 50,   type: 'pppm', amount: 3.75, minMonthly: 60, label: '2 to 50 participants' },
-            { maxCount: 100,  type: 'pppm', amount: 3.50, label: '51 to 100 participants' },
-            { maxCount: null, type: 'pppm', amount: 3.25, label: '101 to 250 participants' }
+            { maxCount: 100, type: 'pppm', amount: 3.75, minMonthly: 60, label: '2 to 100 participants' },
+            { maxCount: 200, type: 'pppm', amount: 3.50, label: '101 to 200 participants' },
+            { maxCount: 500, type: 'pppm', amount: 3.25, label: '201 to 500 participants' }
           ],
           description: 'Full administration including plan document, annual nondiscrimination testing, and monthly administration',
           requiresCount: true
@@ -532,10 +589,9 @@ ABYQuote.pricing = {
         fullAdmin: {
           setupFee: 100, renewalFee: 100,
           monthlyTiers: [
-            { maxCount: 15,   type: 'flat', amount: 80, minMonthly: 80, label: '2 to 15 participants' },
-            { maxCount: 50,   type: 'pppm', amount: 4.25, label: '16 to 50 participants' },
-            { maxCount: 100,  type: 'pppm', amount: 4.00, label: '51 to 100 participants' },
-            { maxCount: null, type: 'pppm', amount: 3.75, label: '101 to 200 participants' }
+            { maxCount: 19,   type: 'flat', amount: 80,   label: '<20 participants' },
+            { maxCount: 99,   type: 'pppm', amount: 4.25, minMonthly: 80, label: '20–99 participants' },
+            { maxCount: 200,  type: 'pppm', amount: 4.00, minMonthly: 80, label: '100 to 200 participants' }
           ],
           description: 'Full administration including plan document, annual nondiscrimination testing, and monthly administration',
           requiresCount: true
@@ -556,10 +612,9 @@ ABYQuote.pricing = {
         fullAdmin: {
           setupFee: 100, renewalFee: 100,
           monthlyTiers: [
-            { maxCount: 50,   type: 'pppm', amount: 3.75, minMonthly: 60, label: '2 to 50 participants' },
-            { maxCount: 100,  type: 'pppm', amount: 3.50, label: '51 to 100 participants' },
-            { maxCount: 250,  type: 'pppm', amount: 3.25, label: '101 to 250 participants' },
-            { maxCount: null, type: 'pppm', amount: 3.00, label: '251 to 500 participants' }
+            { maxCount: 100, type: 'pppm', amount: 3.75, minMonthly: 60, label: '2 to 100 participants' },
+            { maxCount: 200, type: 'pppm', amount: 3.50, label: '101 to 200 participants' },
+            { maxCount: 500, type: 'pppm', amount: 3.25, label: '201 to 500 participants' }
           ],
           description: 'Full administration including plan document, monthly administration, and required notices',
           requiresCount: true
@@ -595,4 +650,84 @@ ABYQuote.pricing = {
 // other states are ABY-only and are supplied to the /aby view separately, so
 // broker (public) pages never contain non-TX pricing. Adding a state later is
 // a pure data addition: ABYQuote.pricing.CA = { commissioned:{...}, noCommission:{...} }.
+// ── Outside Texas ───────────────────────────────────────────────
+// Eric, 2026-08-18: "Out of Texas, PPPM fees for everything but COBRA can match the
+// Texas prices, but make min billing $100 and setup/renewal $250. Outside Texas, COBRA
+// pppm should be $1 with commissions and $.95 without. Setup $250 with commission or
+// $200 without. Minimum is still $50." (and "match the Texas minimums: $55 and $50")
+//
+// ⛔ THIS IS A DEEP COPY, NEVER A REFERENCE. The obvious one-liner --
+//    ABYQuote.pricing.OUTSIDE = ABYQuote.pricing.TX -- makes both keys point at ONE
+//    object, so editing an Outside-Texas rate would silently change Texas too, and
+//    every value-equality check would still pass because they ARE equal. The clone
+//    below is what makes the two books independent.
+//
+// ⭐ It is DERIVED rather than duplicated on purpose: Eric's rule is "match the Texas
+//    per-participant prices", so a Texas rate change should carry across by itself.
+//    When a state needs genuinely independent numbers, replace this with a literal.
+function buildOutsideTexas(tx) {
+  var book = JSON.parse(JSON.stringify(tx));   // the deep copy
+
+  ['commissioned', 'noCommission'].forEach(function (set) {
+    var rates = book[set];
+    if (!rates) return;
+    var isComm      = (set === 'commissioned');
+    var cobraSetup  = isComm ? 250 : 200;
+    var cobraPppm   = isComm ? 1.00 : 0.95;
+    var cobraMin    = isComm ? 55 : 50;
+
+    // Texas State Continuation is a Texas product. It is not offered elsewhere.
+    delete rates.stateContinuation;
+
+    Object.keys(rates).forEach(function (productId) {
+      var p = rates[productId];
+      if (!p || typeof p !== 'object') return;
+
+      if (productId === 'cobra') {
+        p.setupFee = cobraSetup;
+        p.renewalFee = cobraSetup;
+        (p.monthlyTiers || []).forEach(function (t) {
+          if (t.type === 'pppm') { t.amount = cobraPppm; t.minMonthly = cobraMin; }
+          else if (t.type === 'flat') { t.amount = cobraMin; if (t.minMonthly) t.minMonthly = cobraMin; }
+        });
+        return;
+      }
+
+      // Everything else: Texas per-participant rates, a $100 monthly floor, and the
+      // STANDARD admin setup/renewal lifted. Anything priced differently is left alone.
+      applyOutside(p, isComm);
+      if (p.packages) Object.keys(p.packages).forEach(function (k) { applyOutside(p.packages[k], isComm); });
+    });
+  });
+
+  // Products Texas prices that are deliberately NOT sold outside Texas.
+  // Read by check_state_parity.js so the absence is a decision on the record,
+  // not an omission: an absent product looks identical to a forgotten one.
+  book.notOffered = ['stateContinuation'];
+
+  return book;
+
+  function applyOutside(node, isComm) {
+    if (!node || typeof node !== 'object') return;
+    // ⭐ ERIC, 2026-08-18, asked twice and this is the SECOND, narrower answer:
+    // "the docs only stay the way they are. It's the ones that normally have a $125/100
+    // setup and renewal that should go to $250/200."
+    // ⛔ So this is NOT a blanket $250 and NOT a floor. It moves exactly the STANDARD
+    // administration fee and leaves every other price at its Texas value -- the
+    // documents-only packages ($350/$325) and the POP packages ($550/$500) are untouched.
+    // A blanket rule would have cut POP full from $550 to $250.
+    var standard = isComm ? 125 : 100;   // what Texas charges for standard admin
+    var lifted   = isComm ? 250 : 200;   // what it becomes outside Texas
+    if (node.setupFee === standard) node.setupFee = lifted;
+    if (node.renewalFee === standard) node.renewalFee = lifted;
+    (node.monthlyTiers || []).forEach(function (t) {
+      // A flat charge below the floor becomes the floor; per-participant rates are
+      // unchanged and only their minimum moves.
+      if (t.type === 'flat') { if (t.amount < 100) t.amount = 100; if (t.minMonthly != null) t.minMonthly = 100; }
+      else { t.minMonthly = 100; }
+    });
+  }
+}
+
 ABYQuote.pricing = { TX: ABYQuote.pricing };
+ABYQuote.pricing.OUTSIDE = buildOutsideTexas(ABYQuote.pricing.TX);

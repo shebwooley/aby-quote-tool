@@ -410,7 +410,17 @@ ABYQuote.renderer = (function () {
   function collectWarnings(results) {
     var warnings = [];
     (results || []).forEach(function (r) {
-      (r.warnings || []).forEach(function (w) { warnings.push({ productId: r.productId, message: w }); });
+      // The engine flags an over-the-top-tier count on monthlyFee, not on the warning
+      // string, so carry it across here -- otherwise the red branch in renderWarnings
+      // is unreachable and would look implemented while never once firing.
+      var exceeded = !!(r.monthlyFee && r.monthlyFee.tierExceeded);
+      (r.warnings || []).forEach(function (w) {
+        warnings.push({
+          productId: r.productId,
+          message: w,
+          tierExceeded: exceeded && w.indexOf('exceeds the highest defined pricing tier') !== -1
+        });
+      });
     });
     return warnings;
   }
@@ -418,9 +428,23 @@ ABYQuote.renderer = (function () {
   function renderWarnings(results) {
     var warnings = collectWarnings(results);
     if (warnings.length === 0) return '';
+    // ⭐ Eric, 2026-08-18: a group over the top pricing tier must stand out in RED and say
+    // to contact ABY. Everything here is already gated on opts.includeWarnings and carries
+    // no-print, so it shows in the on-screen preview and NEVER on the client's file.
+    // ⛔ The colour is inline rather than a CSS class on purpose: quote.css is not part of
+    // this change set, so a class would style nothing until a second file shipped.
     var items = warnings.map(function (w) {
       var meta = findProduct(w.productId);
-      return '<li><strong>' + esc(meta ? meta.shortName : w.productId) + ':</strong> ' + esc(w.message) + '</li>';
+      var name = esc(meta ? meta.shortName : w.productId);
+      if (w.tierExceeded) {
+        return '<li style="color:#b3261e;font-weight:bold;">' +
+          '<strong>' + name + ':</strong> ' + esc(w.message) +
+          ' Please contact ABY for pricing.' +
+          '<span style="display:block;font-weight:normal;color:#8c1d18;">' +
+          'If you continue, the quote uses the highest published tier, which understates the price for a group this size.' +
+          '</span></li>';
+      }
+      return '<li><strong>' + name + ':</strong> ' + esc(w.message) + '</li>';
     }).join('');
     return '<aside class="quote-warnings no-print"><h4>Internal notes (hidden in print / client file)</h4><ul>' + items + '</ul></aside>';
   }
