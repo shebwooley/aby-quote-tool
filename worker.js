@@ -1655,12 +1655,26 @@ function renderBrokers() {
       '<td>' + pw + '</td>' +
       '<td>' + st + '</td>' +
       '<td>' + escAdmin((b.last_seen_at || '').slice(0, 10) || '—') + '</td>' +
-      '<td><button onclick="toggleBroker(\'' + escAdmin(b.email) + '\',' + (disabled ? 'false' : 'true') + ')" ' +
+      // 🔴 NO QUOTES INSIDE QUOTES HERE, AND THIS IS THE REASON. The whole admin page is emitted
+      // from a JS TEMPLATE LITERAL in worker.js, and a template literal CONSUMES backslash
+      // escapes -- so an inline onclick written with escaped quotes reached the browser as
+      // `toggleBroker('' + ...`, a SYNTAX ERROR that killed every script on the page, including
+      // the quote list, which has nothing to do with brokers. Data attributes need no escaping.
+      '<td><button class="bk-toggle" data-email="' + escAdmin(b.email) + '" data-disable="' +
+        (disabled ? '0' : '1') + '" ' +
         'style="padding:.3rem .7rem;border:1px solid #ddd;background:#fff;border-radius:5px;cursor:pointer;font:inherit;font-size:.8rem">' +
         (disabled ? 'Re-enable' : 'Disable') + '</button></td>' +
     '</tr>';
   }).join('');
 }
+
+// ⚠️ ONE DELEGATED LISTENER rather than a handler per row: the rows are rebuilt on every load,
+// and this survives that without re-attaching anything.
+document.addEventListener('click', function (e) {
+  var btn = e.target && e.target.closest ? e.target.closest('.bk-toggle') : null;
+  if (!btn) return;
+  toggleBroker(btn.getAttribute('data-email'), btn.getAttribute('data-disable') === '1');
+});
 
 function escAdmin(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
