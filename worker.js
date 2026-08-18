@@ -17,7 +17,7 @@ const COOKIE_NAME = 'aby_admin';
 // TEMPORARY SITE LOCK. While true, the whole public tool (and its assets) requires
 // the same aby_admin login as /admin. The standalone /july-2026 page stays open so
 // it can be shared with brokers. Flip to false (and redeploy) to reopen the tool.
-const SITE_LOCKED = true;
+const SITE_LOCKED = false;
 
 export default {
   async fetch(request, env, ctx) {
