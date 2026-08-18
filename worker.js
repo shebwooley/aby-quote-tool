@@ -39,8 +39,20 @@ export default {
     if (path === '/api/broker/me'      && method === 'GET')  return handleBrokerMe(request, env);
     if (path === '/api/broker/profile' && method === 'POST') return handleBrokerProfile(request, env);
     if (path === '/api/broker/quotes'  && method === 'GET')  return handleBrokerOwnQuotes(request, env);
+    if (path === '/api/broker/forgot'   && method === 'POST') return handleForgotPassword(request, env);
+    if (path === '/api/broker/set-password' && method === 'POST') return handleSetPassword(request, env);
+    if (path === '/api/agency/invite'   && method === 'POST') return handleAgencyInvite(request, env);
+    if (path === '/api/agency/settings' && method === 'POST') return handleAgencySettings(request, env);
+    if (path === '/api/agency/quotes'   && method === 'GET')  return handleAgencyQuotes(request, env);
+    if (path === '/api/agency/me'       && method === 'GET')  return handleAgencyMe(request, env);
+    if (path === '/api/agency/role'     && method === 'POST') return handleAgencyRole(request, env);
     // The broker's own page. Public by design -- it IS the sign-in screen; everything behind it
     // is gated per request by the `aby_broker` cookie, not by hiding this route.
+    if (path === '/broker/set-password') {
+      return new Response(setPasswordPageHTML(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+      });
+    }
     if (path === '/broker' || path === '/broker/') {
       return new Response(brokerPageHTML(), {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
@@ -766,7 +778,8 @@ function brokerPageHTML() {
     <label>Email</label><input type="email" id="sEmail" autocomplete="email">
     <label>Password</label><input type="password" id="sPass" autocomplete="current-password">
     <button class="primary" id="go">Sign in</button>
-    <div class="msg err" id="authMsg"></div>
+    <div><a href="#" id="forgot" style="font-size:13px;color:#143c73;display:inline-block;margin-top:12px">Forgot your password?</a></div>
+    <div class="msg" id="authMsg"></div>
   </div>
 
   <div id="appArea" style="display:none">
@@ -782,9 +795,31 @@ function brokerPageHTML() {
       <button class="primary" id="save">Save details</button>
       <div class="msg" id="saveMsg"></div>
     </div>
+    <div class="card" id="agencyCard" style="display:none">
+      <h2>Your agency</h2>
+      <p class="sub">The logo here applies to everyone in the agency who has not uploaded their own.</p>
+      <label>Agency name</label><input type="text" id="aName">
+      <label>Agency logo <span class="muted" style="font-weight:400">(PNG or JPG, under 300KB)</span></label>
+      <input type="file" id="aLogo" accept="image/*">
+      <img id="aLogoPrev" class="logo-prev" alt="Agency logo">
+      <label style="margin-top:16px"><input type="checkbox" id="aShare" style="width:auto;margin-right:8px">Let everyone in the agency see each other's quotes</label>
+      <p class="sub" style="margin-top:6px">You can see all of them either way, because you are the administrator.</p>
+      <button class="primary" id="aSave">Save agency settings</button>
+      <div class="msg" id="aMsg"></div>
+    </div>
+
+    <div class="card" id="inviteCard" style="display:none">
+      <h2>Add people</h2>
+      <p class="sub">One per line, as <strong>name, email</strong>. Each person gets an email inviting them to choose a password. People who already have an account are skipped.</p>
+      <textarea id="inviteBox" rows="6" style="width:100%;padding:9px 11px;border:1px solid #c8d2de;border-radius:6px;font:14px monospace" placeholder="Jane Smith, jane@agency.com&#10;Raj Patel, raj@agency.com"></textarea>
+      <button class="primary" id="inviteGo">Send invitations</button>
+      <div class="msg" id="inviteMsg"></div>
+      <div id="memberList" style="margin-top:18px"></div>
+    </div>
+
     <div class="card">
-      <h2>Your quotes</h2>
-      <p class="sub">Every quote run under your email address.</p>
+      <div class="tabs"><button id="tabMine" class="on">My quotes</button><button id="tabAgency">Agency quotes</button></div>
+      <p class="sub" id="quotesSub">Every quote run under your email address.</p>
       <div id="quotes"><p class="muted">Loading…</p></div>
     </div>
   </div>
@@ -816,25 +851,136 @@ function brokerPageHTML() {
    if(!r.ok){show($('saveMsg'),d.error||'Could not save.','err');return}
    show($('saveMsg'),'Saved. These will fill in on your next quote.','ok');
  };
+ $('forgot').onclick=async function(e){
+   e.preventDefault();
+   if(!$('sEmail').value){show($('authMsg'),'Enter your email address first, then click again.','err');return}
+   var r=await fetch('/api/broker/forgot',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('sEmail').value})});
+   var d=await r.json().catch(function(){return{}});
+   show($('authMsg'),d.message||'If there is an account for that address, a link is on its way.','ok');
+ };
+ var agencyLogoData='', meEmail='';
+ $('aLogo').onchange=function(){
+   var f=this.files[0]; if(!f) return;
+   var rd=new FileReader(); rd.onload=function(){agencyLogoData=rd.result;$('aLogoPrev').src=agencyLogoData;$('aLogoPrev').style.display='block'};
+   rd.readAsDataURL(f);
+ };
+ $('aSave').onclick=async function(){
+   var r=await fetch('/api/agency/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({name:$('aName').value,logoDataUrl:agencyLogoData,shareQuotes:$('aShare').checked})});
+   var d=await r.json().catch(function(){return{}});
+   show($('aMsg'),r.ok?'Saved.':(d.error||'Could not save.'),r.ok?'ok':'err');
+ };
+ $('inviteGo').onclick=async function(){
+   var people=$('inviteBox').value.split(/\r?\n/).map(function(l){
+     var parts=l.split(','); if(parts.length<2) return null;
+     return {name:parts[0].trim(), email:parts[parts.length-1].trim()};
+   }).filter(function(x){return x&&x.email});
+   if(!people.length){show($('inviteMsg'),'Add at least one line as: name, email','err');return}
+   $('inviteGo').disabled=true;$('inviteGo').textContent='Sending...';
+   var r=await fetch('/api/agency/invite',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({people:people})});
+   var d=await r.json().catch(function(){return{}});
+   $('inviteGo').disabled=false;$('inviteGo').textContent='Send invitations';
+   if(!r.ok){show($('inviteMsg'),d.error||'Could not send.','err');return}
+   var bits=[];
+   if(d.invited.length) bits.push(d.invited.length+' invited');
+   if(d.skipped.length) bits.push(d.skipped.length+' skipped ('+d.skipped.map(function(x){return x.email+' - '+x.why}).join('; ')+')');
+   if(d.failed.length)  bits.push(d.failed.length+' failed ('+d.failed.map(function(x){return x.email+' - '+x.why}).join('; ')+')');
+   show($('inviteMsg'),bits.join('. '),d.failed.length?'err':'ok');
+   $('inviteBox').value=''; loadAgency();
+ };
+ async function setRole(email,role){
+   var r=await fetch('/api/agency/role',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email,role:role})});
+   var d=await r.json().catch(function(){return{}});
+   if(!r.ok){show($('inviteMsg'),d.error||'Could not change that.','err');return}
+   loadAgency();
+ }
+ async function loadAgency(){
+   var r=await fetch('/api/agency/me'); var d=await r.json().catch(function(){return{}});
+   if(!d||!d.agency) return;
+   $('aName').value=d.agency.name||''; $('aShare').checked=!!d.agency.shareQuotes;
+   if(d.agency.logoDataUrl){agencyLogoData=d.agency.logoDataUrl;$('aLogoPrev').src=agencyLogoData;$('aLogoPrev').style.display='block'}
+   var rows=(d.members||[]).map(function(m){
+     var other=m.email!==meEmail;
+     var btn=other?'<button style="font-size:12px;padding:4px 9px;border:1px solid #c8d2de;background:#fff;border-radius:5px;cursor:pointer" data-e="'+esc(m.email)+'" data-r="'+(m.role==='admin'?'member':'admin')+'">'+(m.role==='admin'?'Make member':'Make admin')+'</button>':'<span class="muted">you</span>';
+     return '<tr><td>'+esc(m.name||'-')+'</td><td>'+esc(m.email)+'</td><td>'+esc(m.role||'member')+'</td><td>'+(m.pending?'<span class="muted">invited, not signed in yet</span>':'active')+'</td><td>'+btn+'</td></tr>';
+   }).join('');
+   $('memberList').innerHTML='<table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+   Array.prototype.forEach.call($('memberList').querySelectorAll('button[data-e]'),function(b){
+     b.onclick=function(){setRole(b.getAttribute('data-e'),b.getAttribute('data-r'))};
+   });
+ }
+ $('tabMine').onclick=function(){$('tabMine').className='on';$('tabAgency').className='';$('quotesSub').textContent='Every quote run under your email address.';loadQuotes('/api/broker/quotes')};
+ $('tabAgency').onclick=function(){$('tabAgency').className='on';$('tabMine').className='';$('quotesSub').textContent='Every quote run by anyone in your agency.';loadQuotes('/api/agency/quotes')};
  function enter(b){
+   meEmail=b.email||'';
    $('authCard').style.display='none';$('appArea').style.display='block';$('out').style.display='inline-block';
    $('pName').value=b.name||'';$('pAgency').value=b.agency||'';$('pPhone').value=b.phone||'';
    if(b.logoDataUrl){logoData=b.logoDataUrl;$('logoPrev').src=logoData;$('logoPrev').style.display='block'}
+   if(b.role==='admin'){$('agencyCard').style.display='block';$('inviteCard').style.display='block';loadAgency()}
    loadQuotes();
  }
- async function loadQuotes(){
-   var r=await fetch('/api/broker/quotes'); var d=await r.json().catch(function(){return{}});
+ async function loadQuotes(url){
+   var r=await fetch(url||'/api/broker/quotes'); var d=await r.json().catch(function(){return{}});
    var q=(d.quotes)||[];
-   if(!q.length){$('quotes').innerHTML='<p class="muted">No quotes yet. Ones you run while signed in will appear here.</p>';return}
+   if(!q.length){
+     var why=d.reason==='not-shared'?'Your agency administrator has not turned on shared quotes.'
+       :d.reason==='no-agency'?'You are not part of an agency yet.'
+       :'No quotes yet. Ones you run while signed in will appear here.';
+     $('quotes').innerHTML='<p class="muted">'+why+'</p>';return}
    var rows=q.map(function(x){
-     return '<tr><td>'+esc((x.created_at||'').slice(0,10))+'</td><td>'+esc(x.client_name||'—')+'</td><td>'+esc(x.quote_number||'')+'</td><td>'+esc(x.state||'')+'</td></tr>';
+     return '<tr><td>'+esc((x.created_at||'').slice(0,10))+'</td><td>'+esc(x.client_name||'—')+'</td><td>'+esc(x.broker_name||x.broker_email||'—')+'</td><td>'+esc(x.quote_number||'')+'</td><td>'+esc(x.state||'')+'</td></tr>';
    }).join('');
-   $('quotes').innerHTML='<table><thead><tr><th>Date</th><th>Client</th><th>Quote number</th><th>State</th></tr></thead><tbody>'+rows+'</tbody></table>';
+   $('quotes').innerHTML='<table><thead><tr><th>Date</th><th>Client</th><th>Run by</th><th>Quote number</th><th>State</th></tr></thead><tbody>'+rows+'</tbody></table>';
  }
  (async function(){
    var r=await fetch('/api/broker/me'); var d=await r.json().catch(function(){return{}});
    if(d && d.broker) enter(d.broker);
  })();
+</script></body></html>`;
+}
+
+// The page an invited broker, or one who forgot their password, lands on from the email link.
+// ⭐ ONE PAGE FOR BOTH, matching the one token column: "set your password because you were
+// invited" and "set your password because you forgot" are the same action to the person doing it.
+function setPasswordPageHTML() {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Choose your password</title>
+<style>
+ body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
+ header{background:#143c73;color:#fff;padding:14px 22px;font-size:17px;font-weight:600}
+ main{max-width:460px;margin:40px auto;padding:0 18px}
+ .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:24px}
+ h2{font-size:17px;margin:0 0 6px} p.sub{color:#5b6b7f;font-size:13px;margin:0 0 18px}
+ label{display:block;font-size:13px;font-weight:600;margin:12px 0 4px}
+ input{width:100%;padding:9px 11px;border:1px solid #c8d2de;border-radius:6px;font-size:14px;box-sizing:border-box}
+ button{background:#143c73;color:#fff;border:0;border-radius:6px;padding:10px 18px;font-size:14px;font-weight:600;cursor:pointer;margin-top:18px}
+ .msg{margin-top:14px;padding:10px 12px;border-radius:6px;font-size:13px;display:none}
+ .err{background:#fdecec;color:#a12622;border:1px solid #f3c2c2}
+ .ok{background:#e8f4ec;color:#1a5c3a;border:1px solid #b8d9c4}
+</style></head><body>
+<header>ABY Quote Tool</header>
+<main><div class="card">
+  <h2>Choose your password</h2>
+  <p class="sub">At least 10 characters. You will be signed in straight away.</p>
+  <label>New password</label><input type="password" id="p1" autocomplete="new-password">
+  <label>Confirm</label><input type="password" id="p2" autocomplete="new-password">
+  <button id="go">Set password and sign in</button>
+  <div class="msg" id="m"></div>
+</div></main>
+<script>
+ var $=function(i){return document.getElementById(i)};
+ function show(t,c){var m=$('m');m.textContent=t;m.className='msg '+c;m.style.display='block'}
+ var token=new URLSearchParams(location.search).get('token')||'';
+ if(!token) show('That link is missing its code. Ask for a new one.','err');
+ $('go').onclick=async function(){
+   if($('p1').value!==$('p2').value){show('Those two passwords do not match.','err');return}
+   var r=await fetch('/api/broker/set-password',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({token:token,password:$('p1').value})});
+   var d=await r.json().catch(function(){return{}});
+   if(!r.ok){show(d.error||'Could not set your password.','err');return}
+   show('Done. Taking you to your account...','ok');
+   setTimeout(function(){location.href='/broker'},900);
+ };
 </script></body></html>`;
 }
 
@@ -844,7 +990,9 @@ const MAX_LOGO_CHARS = 400000;   // ~300KB of image, generous for a logo and sma
 
 function brokerPublic(b) {
   return b ? { email: b.email, name: b.name || '', agency: b.agency || '', phone: b.phone || '',
-               logoDataUrl: b.logo_data_url || '' } : null;
+               logoDataUrl: b.logo_data_url || '',
+               // The page shows the agency tab and the admin controls off these two.
+               agencyId: b.agency_id || '', role: b.role || 'member' } : null;
 }
 
 function sessionCookie(value, maxAgeSeconds) {
@@ -864,13 +1012,26 @@ async function handleBrokerSignup(request, env) {
   if (existing) return jsonResp({ error: 'An account already exists for that email. Try signing in.' }, 409);
 
   const id = crypto.randomUUID();
-  await env.DB.prepare(
-    'INSERT INTO brokers (id, email, password_hash, name, agency, phone, created_at, last_login_at) VALUES (?,?,?,?,?,?,?,?)'
-  ).bind(id, email, await hashPassword(password),
-    String(body.name || '').slice(0, 120), String(body.agency || '').slice(0, 120),
-    String(body.phone || '').slice(0, 40), new Date().toISOString(), new Date().toISOString()).run();
+  const agencyName = String(body.agency || '').slice(0, 120);
 
-  return new Response(JSON.stringify({ ok: true, broker: brokerPublic({ id, email, name: body.name, agency: body.agency, phone: body.phone }) }),
+  // ⭐ SELF-SIGNUP ALWAYS CREATES A NEW AGENCY WITH THIS PERSON AS ITS ADMIN, and it deliberately
+  // does NOT try to attach them to an existing one. There is nothing trustworthy to match on --
+  // agency names are typed free text and email domains are mixed and often personal -- so guessing
+  // would put a stranger inside somebody's book. ⛔ Joining an existing agency happens by
+  // INVITATION, which is the direction Eric chose and the only one where somebody with authority
+  // asserts the membership.
+  const agencyId = crypto.randomUUID();
+  await env.DB.prepare('INSERT INTO agencies (id, name, share_quotes, created_at) VALUES (?,?,?,?)')
+    .bind(agencyId, agencyName || (String(body.name || '').slice(0, 120) || email), 0, new Date().toISOString()).run();
+
+  await env.DB.prepare(
+    'INSERT INTO brokers (id, email, password_hash, name, agency, phone, agency_id, role, created_at, last_login_at) VALUES (?,?,?,?,?,?,?,?,?,?)'
+  ).bind(id, email, await hashPassword(password),
+    String(body.name || '').slice(0, 120), agencyName,
+    String(body.phone || '').slice(0, 40), agencyId, 'admin',
+    new Date().toISOString(), new Date().toISOString()).run();
+
+  return new Response(JSON.stringify({ ok: true, broker: brokerPublic({ id, email, name: body.name, agency: agencyName, phone: body.phone, agency_id: agencyId, role: 'admin' }) }),
     { status: 200, headers: { 'Content-Type': 'application/json',
       'Set-Cookie': sessionCookie(await makeBrokerToken(id, env), 60 * 60 * 24 * 30) } });
 }
@@ -942,6 +1103,220 @@ async function handleBrokerOwnQuotes(request, env) {
   return jsonResp({ quotes: r.results || [] });
 }
 
+// ─── Agencies, invitations and resets (F-53) ───────────────────────────────────
+
+/** Send one "set your password" email. Used for BOTH an invitation and a forgotten password. */
+async function sendSetPasswordEmail(env, { to, link, agencyName, invited }) {
+  if (!env.RESEND_API_KEY) { console.warn('RESEND_API_KEY not set — cannot send'); return false; }
+  const subject = invited
+    ? `You have been added to the ABY Quote Tool${agencyName ? ' by ' + agencyName : ''}`
+    : 'Reset your ABY Quote Tool password';
+  const intro = invited
+    ? `${agencyName ? agencyName + ' has' : 'Your agency has'} set up an account for you on the ABY Quote Tool. Choose a password to get started.`
+    : 'Somebody asked to reset the password on this account. If it was not you, ignore this email and nothing will change.';
+  const html =
+    `<div style="font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;color:#12263f">` +
+    `<p>${esc(intro)}</p>` +
+    `<p style="margin:24px 0"><a href="${esc(link)}" style="background:#143c73;color:#fff;padding:11px 20px;border-radius:6px;text-decoration:none">Choose your password</a></p>` +
+    `<p style="color:#5b6b7f;font-size:13px">This link works once and expires in 7 days.</p></div>`;
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: `ABY Quote Tool <${env.FROM_EMAIL || 'onboarding@resend.dev'}>`,
+                             to: [to], subject, html }),
+    });
+    if (!res.ok) console.error('invite/reset email failed:', res.status, await res.text());
+    return res.ok;
+  } catch (err) { console.error('invite/reset email threw:', err); return false; }
+}
+
+async function issueResetToken(env, brokerId) {
+  const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
+  const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  await env.DB.prepare('UPDATE brokers SET reset_token = ?, reset_expires = ? WHERE id = ?')
+    .bind(token, expires, brokerId).run();
+  return token;
+}
+
+/**
+ * Bulk-invite agency members from pasted names and emails.
+ *
+ * ⭐ ERIC'S FLOW, BUILT AS HE DESCRIBED IT: the agency supplies names and emails, accounts are
+ * created, and each person gets a link to choose a password.
+ * ⚠️ EXISTING ACCOUNTS ARE SKIPPED, NEVER OVERWRITTEN. Re-pasting a list that includes somebody
+ * who already signed up must not reset their password or move their quotes.
+ */
+async function handleAgencyInvite(request, env) {
+  const me = await currentBroker(request, env);
+  if (!me) return jsonResp({ error: 'Please sign in.' }, 401);
+  if (me.role !== 'admin' || !me.agency_id) return jsonResp({ error: 'Only an agency administrator can invite people.' }, 403);
+
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const rows = Array.isArray(body.people) ? body.people.slice(0, 200) : [];
+  if (!rows.length) return jsonResp({ error: 'No names and emails were supplied.' }, 400);
+
+  const agency = await env.DB.prepare('SELECT name FROM agencies WHERE id = ?').bind(me.agency_id).first();
+  const origin = new URL(request.url).origin;
+  const invited = [], skipped = [], failed = [];
+
+  for (const p of rows) {
+    const email = String(p.email || '').trim().toLowerCase();
+    const name = String(p.name || '').trim().slice(0, 120);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { failed.push({ email: email || '(blank)', why: 'not a valid email' }); continue; }
+    const existing = await env.DB.prepare('SELECT id, agency_id FROM brokers WHERE lower(trim(email)) = ?').bind(email).first();
+    if (existing) { skipped.push({ email, why: existing.agency_id === me.agency_id ? 'already in your agency' : 'already has an account' }); continue; }
+
+    const id = crypto.randomUUID();
+    // ⛔ password_hash is '' — an account nobody can sign into until they set one. `verifyPassword`
+    // returns false for an empty stored hash, so this is a locked account, not an open one.
+    await env.DB.prepare(
+      'INSERT INTO brokers (id, email, password_hash, name, agency, phone, agency_id, role, created_at) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).bind(id, email, '', name, agency ? agency.name : '', '', me.agency_id, 'member', new Date().toISOString()).run();
+
+    const token = await issueResetToken(env, id);
+    const ok = await sendSetPasswordEmail(env, {
+      to: email, link: `${origin}/broker/set-password?token=${token}`,
+      agencyName: agency ? agency.name : '', invited: true,
+    });
+    (ok ? invited : failed).push(ok ? { email } : { email, why: 'account created, but the email could not be sent' });
+  }
+  return jsonResp({ ok: true, invited, skipped, failed });
+}
+
+async function handleForgotPassword(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const email = String(body.email || '').trim().toLowerCase();
+  const row = await env.DB.prepare('SELECT id FROM brokers WHERE lower(trim(email)) = ?').bind(email).first();
+  if (row) {
+    const token = await issueResetToken(env, row.id);
+    await sendSetPasswordEmail(env, { to: email, link: `${new URL(request.url).origin}/broker/set-password?token=${token}`, invited: false });
+  }
+  // ⚠️ THE SAME ANSWER WHETHER OR NOT THE ACCOUNT EXISTS, for the same reason the login does:
+  // otherwise this endpoint answers "is this person one of ABY's brokers?" for anyone who asks.
+  return jsonResp({ ok: true, message: 'If there is an account for that address, a link is on its way.' });
+}
+
+async function handleSetPassword(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const token = String(body.token || '');
+  const password = String(body.password || '');
+  if (password.length < 10) return jsonResp({ error: 'Use at least 10 characters.' }, 400);
+  if (!token) return jsonResp({ error: 'That link is not valid.' }, 400);
+
+  const row = await env.DB.prepare('SELECT id, email, reset_expires FROM brokers WHERE reset_token = ?').bind(token).first();
+  if (!row) return jsonResp({ error: 'That link is not valid. Ask for a new one.' }, 400);
+  if (!row.reset_expires || new Date(row.reset_expires) < new Date()) {
+    return jsonResp({ error: 'That link has expired. Ask for a new one.' }, 400);
+  }
+  // ⭐ The token is cleared in the same statement that sets the password, so a link works ONCE.
+  await env.DB.prepare('UPDATE brokers SET password_hash = ?, reset_token = NULL, reset_expires = NULL WHERE id = ?')
+    .bind(await hashPassword(password), row.id).run();
+
+  return new Response(JSON.stringify({ ok: true }), { status: 200,
+    headers: { 'Content-Type': 'application/json',
+      'Set-Cookie': sessionCookie(await makeBrokerToken(row.id, env), 60 * 60 * 24 * 30) } });
+}
+
+/** The signed-in broker's agency, so the page knows what to show. Any member may read it. */
+async function handleAgencyMe(request, env) {
+  const me = await currentBroker(request, env);
+  if (!me) return jsonResp({ error: 'Please sign in.' }, 401);
+  if (!me.agency_id) return jsonResp({ agency: null });
+  const a = await env.DB.prepare('SELECT id, name, logo_data_url, share_quotes FROM agencies WHERE id = ?')
+    .bind(me.agency_id).first();
+  if (!a) return jsonResp({ agency: null });
+  const members = await env.DB.prepare(
+    "SELECT email, name, role, CASE WHEN password_hash = '' THEN 1 ELSE 0 END AS pending " +
+    "FROM brokers WHERE agency_id = ? ORDER BY name").bind(me.agency_id).all();
+  return jsonResp({
+    agency: { id: a.id, name: a.name || '', logoDataUrl: a.logo_data_url || '', shareQuotes: !!a.share_quotes },
+    // ⭐ `pending` is "invited but has never set a password" -- an admin needs to see who has not
+    // acted yet, or a bulk invite is a black hole.
+    members: members.results || [],
+  });
+}
+
+/**
+ * Promote or demote a member. Admin only.
+ *
+ * ⭐ ERIC ASKED WHETHER MULTIPLE ADMINS ARE POSSIBLE, 2026-08-18. They must be, and for this
+ * flag's own reason: an agency whose ONE admin leaves cannot change its settings, cannot add
+ * anybody, and cannot promote a replacement -- the "agent leaves and the agency loses something"
+ * problem, applied to the role instead of the quotes.
+ *
+ * 🔴 THE LAST ADMIN CANNOT BE DEMOTED. Counted in the same request, not assumed, because an
+ * agency with zero admins is unrecoverable without a developer.
+ */
+async function handleAgencyRole(request, env) {
+  const me = await currentBroker(request, env);
+  if (!me) return jsonResp({ error: 'Please sign in.' }, 401);
+  if (me.role !== 'admin' || !me.agency_id) return jsonResp({ error: 'Only an agency administrator can do that.' }, 403);
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+
+  const email = String(body.email || '').trim().toLowerCase();
+  const role = body.role === 'admin' ? 'admin' : 'member';
+  const target = await env.DB.prepare(
+    'SELECT id, agency_id, role FROM brokers WHERE lower(trim(email)) = ?').bind(email).first();
+  if (!target || target.agency_id !== me.agency_id) return jsonResp({ error: 'That person is not in your agency.' }, 404);
+
+  if (role === 'member' && target.role === 'admin') {
+    const admins = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM brokers WHERE agency_id = ? AND role = 'admin'").bind(me.agency_id).first();
+    if (Number(admins && admins.n) <= 1) {
+      return jsonResp({ error: 'Somebody has to be an administrator. Make someone else one first.' }, 400);
+    }
+  }
+  await env.DB.prepare('UPDATE brokers SET role = ? WHERE id = ?').bind(role, target.id).run();
+  return jsonResp({ ok: true });
+}
+
+/** Agency settings: the name, the shared logo, and the sharing switch. Admin only. */
+async function handleAgencySettings(request, env) {
+  const me = await currentBroker(request, env);
+  if (!me) return jsonResp({ error: 'Please sign in.' }, 401);
+  if (me.role !== 'admin' || !me.agency_id) return jsonResp({ error: 'Only an agency administrator can change these.' }, 403);
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+
+  const logo = String(body.logoDataUrl || '');
+  if (logo && !/^data:image\/(png|jpeg|jpg|gif|webp|svg\+xml);base64,/.test(logo)) {
+    return jsonResp({ error: 'That does not look like an image file.' }, 400);
+  }
+  if (logo.length > MAX_LOGO_CHARS) return jsonResp({ error: 'That image is too large — please use one under 300KB.' }, 400);
+
+  await env.DB.prepare('UPDATE agencies SET name = ?, logo_data_url = ?, share_quotes = ? WHERE id = ?')
+    .bind(String(body.name || '').slice(0, 120), logo, body.shareQuotes ? 1 : 0, me.agency_id).run();
+  return jsonResp({ ok: true });
+}
+
+/**
+ * The agency's quotes: every member's, newest first.
+ *
+ * 🔴 GATED TWICE. An admin always sees them, because somebody has to be able to answer "what did
+ * the agent who left leave behind" -- which is the problem this row exists for. A MEMBER sees them
+ * only while `share_quotes` is on, which is the administrator's decision to make and reverse.
+ */
+async function handleAgencyQuotes(request, env) {
+  const me = await currentBroker(request, env);
+  if (!me) return jsonResp({ error: 'Please sign in.' }, 401);
+  if (!me.agency_id) return jsonResp({ quotes: [], reason: 'no-agency' });
+
+  const agency = await env.DB.prepare('SELECT share_quotes FROM agencies WHERE id = ?').bind(me.agency_id).first();
+  if (me.role !== 'admin' && !(agency && agency.share_quotes)) {
+    return jsonResp({ quotes: [], reason: 'not-shared' });
+  }
+  const cols = "q.id, q.quote_number, q.created_at, q.client_name, q.client_id, q.effective_date, " +
+               "q.broker_name, q.broker_agency, q.broker_email, q.rep_name, q.products, " +
+               "COALESCE(q.status, 'P') AS status, COALESCE(q.ran_by, 'broker') AS ran_by, " +
+               "COALESCE(q.state, 'TX') AS state";
+  // Joined on email, which is the same key everything else in this system uses.
+  const r = await env.DB.prepare(
+    `SELECT ${cols} FROM quotes q JOIN brokers b ON lower(trim(q.broker_email)) = lower(trim(b.email)) ` +
+    `WHERE b.agency_id = ? ORDER BY q.created_at DESC LIMIT 500`
+  ).bind(me.agency_id).all();
+  return jsonResp({ quotes: r.results || [] });
+}
+
 // ─── Broker accounts: passwords and sessions (F-6) ─────────────────────────────
 //
 // 🔴 A BROKER PASSWORD IS NOT THE ADMIN PASSWORD AND MUST NOT BORROW ITS SCHEME. `makeToken`
@@ -997,7 +1372,7 @@ async function currentBroker(request, env) {
   if (!safeEqual(raw, await makeBrokerToken(id, env))) return null;
   try {
     return await env.DB.prepare(
-      'SELECT id, email, name, agency, phone, logo_data_url FROM brokers WHERE id = ?').bind(id).first();
+      'SELECT id, email, name, agency, phone, logo_data_url, agency_id, role FROM brokers WHERE id = ?').bind(id).first();
   } catch { return null; }   // table not migrated yet
 }
 
@@ -1132,6 +1507,47 @@ const MIGRATIONS = [
   // on one address would make "show me my quotes" ambiguous, and the email IS the identity here.
   { sql: "CREATE UNIQUE INDEX IF NOT EXISTS brokers_email_unique ON brokers (lower(trim(email)))",
     index: "brokers_email_unique" },
+
+  // ── Agencies (F-53) ─────────────────────────────────────────────────────────────────────────
+  //
+  // ⭐⭐ THE PROBLEM F-53 EXISTS FOR: "quotes belong to PEOPLE in ABY, not agencies. An agent runs
+  // 40 quotes, leaves, and the agency loses all 40."
+  //
+  // 🔴 `share_quotes` IS AN AGENCY-LEVEL SWITCH, AND IT DEFAULTS TO OFF. Eric, 2026-08-18: "let
+  // the agency administrator (the one who sets up the main agency account) decide if everyone
+  // gets access or not." ⛔ Defaulting it ON would disclose every agent's book to their
+  // colleagues the moment a second person joined -- a decision nobody made, made silently.
+  //
+  // ⭐ `logo_data_url` LIVES HERE TOO, and that is Eric's other ask: "have the agency upload the
+  // logo and it automatically apply to everyone under them." A member with no logo of their own
+  // inherits this one, so an agency sets its brand once.
+  { sql: "CREATE TABLE IF NOT EXISTS agencies (" +
+         "  id TEXT PRIMARY KEY," +
+         "  name TEXT NOT NULL," +
+         "  logo_data_url TEXT," +
+         "  share_quotes INTEGER DEFAULT 0," +
+         "  created_at TEXT)",
+    table: "agencies", column: "name" },
+  { sql: "ALTER TABLE brokers ADD COLUMN agency_id TEXT", table: "brokers", column: "agency_id" },
+  // 'admin' can invite people and flip sharing; 'member' cannot. The first account of an agency
+  // is its admin, because somebody has to be.
+  { sql: "ALTER TABLE brokers ADD COLUMN role TEXT",      table: "brokers", column: "role" },
+
+  // ── Invitations and password resets (F-53) ──────────────────────────────────────────────────
+  //
+  // ⭐ ERIC, 2026-08-18, AND THE REASONING IS SOUND: "For the agency to provide names and emails
+  // of each broker, maybe via spreadsheet, and have accounts created for all of them. And if so,
+  // would they just click forgot password... Seems like that would be easier than having each one
+  // try to set up an account and get it tied to the agency."
+  // 🔴 IT IS NOT ONLY EASIER, IT IS THE ONLY RELIABLE WAY TO GET THE AGENCY LINK RIGHT. A
+  // self-registering broker cannot be attached to an agency by anything trustworthy -- email
+  // domains are mixed and often personal -- so the AGENCY has to assert who belongs to it.
+  //
+  // ⚠️ ONE TOKEN COLUMN SERVES BOTH INVITE AND RESET, deliberately: "set your password because you
+  // were invited" and "set your password because you forgot it" are the same action, and two
+  // near-identical flows is how one of them rots.
+  { sql: "ALTER TABLE brokers ADD COLUMN reset_token TEXT",   table: "brokers", column: "reset_token" },
+  { sql: "ALTER TABLE brokers ADD COLUMN reset_expires TEXT", table: "brokers", column: "reset_expires" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column
