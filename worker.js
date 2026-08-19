@@ -1594,7 +1594,12 @@ function adminBrokersHTML() {
        renders blank on a database error is indistinguishable from one with no data. -->
   <div id="statsWarn" style="display:none;margin:0 0 14px;padding:10px 14px;border-radius:7px;
        background:#fdf1e0;border:1px solid #f0d9ae;color:#7a5410;font-size:13px"></div>
-  <div class="card"><h2>Quotes by status</h2>
+  <div class="card"><h2>Quotes by agency</h2>
+    <p class="sub">Counted from every quote ever run, including from people who never made an account.</p>
+    <div id="byAgency"><p class="muted">Loading...</p></div></div>
+  <div class="card"><h2>Quotes by agent</h2>
+    <div id="byAgent"><p class="muted">Loading...</p></div></div>
+<div class="card"><h2>Quotes by status</h2>
     <p class="sub">Value is the first year of a quote: setup, plan documents, annual fees and twelve months of any monthly fee.</p>
     <div id="byStatus"><p class="muted">Loading...</p></div></div>
   <div class="card"><h2>Open quotes, by age</h2>
@@ -1603,12 +1608,7 @@ function adminBrokersHTML() {
   <div class="card"><h2>Registered brokers</h2>
     <p class="sub">Everyone with an ABY account. Assign each one to whoever owns the relationship.</p>
     <div id="brokers"><p class="muted">Loading...</p></div></div>
-  <div class="card"><h2>Quotes by agency</h2>
-    <p class="sub">Counted from every quote ever run, including from people who never made an account.</p>
-    <div id="byAgency"><p class="muted">Loading...</p></div></div>
-  <div class="card"><h2>Quotes by agent</h2>
-    <div id="byAgent"><p class="muted">Loading...</p></div></div>
-</main>
+  </main>
 <script>
  var rep='';
  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
@@ -1777,7 +1777,14 @@ function adminBrokersHTML() {
        +hc('byAgent','agency','Agency')+hc('byAgent','n','Quotes','n')
        +hc('byAgent','last','Last quote')+'</tr></thead><tbody>'
        + agt.map(function(x){
-           return '<tr><td>'+esc(x.name||'\u2014')+'</td><td>'+esc(x.email)+'</td><td>'+esc(x.agency||'\u2014')+'</td><td class="n">'+x.n+'</td><td>'+day(x.last_quote)+'</td></tr>';
+           // \u2b50 A ROW IS NAMED BY WHATEVER IT HAS. Most of the imported book carries an agency and
+           // no broker name or email, and printing a dash where the name goes made those rows look
+           // like broken data rather than what they are: a quote we know the agency for.
+           var who = x.name || x.email || (x.agency ? x.agency : '') || 'Not stated';
+           var viaAgency = !x.name && !x.email && x.agency;
+           return '<tr><td>'+esc(who)
+             +(viaAgency?' <span class="muted" title="This quote records an agency but no individual broker">(agency only)</span>':'')
+             +'</td><td>'+esc(x.email||'\u2014')+'</td><td>'+esc(x.agency||'\u2014')+'</td><td class="n">'+x.n+'</td><td>'+day(x.last_quote)+'</td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
    }
@@ -2155,15 +2162,33 @@ async function handleAdminStats(request, env) {
   const repFilter = rep ? "AND lower(COALESCE(b.assigned_rep,'')) = ?" : '';
   const args = rep ? [rep] : [];
   try {
+    // 🔴🔴 IT USED TO REQUIRE A BROKER EMAIL, WHICH HID MOST OF THE BOOK.
+    // Eric, 2026-08-19: "Why would it only work if it carries a broker email? That makes it fairly
+    // worthless to us." He is right. The 321 rows imported from the 2026 spreadsheet carry an
+    // AGENCY and an ABY rep, and largely no broker email -- so a WHERE on email quietly dropped
+    // them and the table reported on the handful of quotes run through the live tool.
+    // ⭐ THE IDENTITY IS NOW WHATEVER THE ROW ACTUALLY HAS: email if there is one, else the broker
+    // name, else the agency. Nothing is excluded, and rows with none of the three are GROUPED and
+    // COUNTED as "(not stated)" rather than dropped -- an unattributable quote is a real fact about
+    // the book, and a table that silently omits it reports a smaller business than exists.
+    // ⚠️ A name-keyed group is weaker than an email-keyed one: "Niels" and "Niels Andersen" are two
+    // rows. That is a known cost, and it is far smaller than showing none of them.
+    const agentKey =
+      "COALESCE(NULLIF(lower(trim(q.broker_email)),''), " +
+      "         NULLIF(lower(trim(q.broker_name)),''), " +
+      "         NULLIF(lower(trim(q.broker_agency)),''), '(not stated)')";
     const byAgent = await env.DB.prepare(
-      "SELECT lower(trim(q.broker_email)) AS email, MAX(q.broker_name) AS name, " +
-      "       MAX(COALESCE(a.name, q.broker_agency)) AS agency, MAX(b.assigned_rep) AS rep, " +
+      "SELECT " + agentKey + " AS key, " +
+      "       MAX(NULLIF(trim(q.broker_email),'')) AS email, " +
+      "       MAX(NULLIF(trim(q.broker_name),'')) AS name, " +
+      "       MAX(COALESCE(a.name, NULLIF(trim(q.broker_agency),''))) AS agency, " +
+      "       MAX(b.assigned_rep) AS rep, " +
       "       COUNT(*) AS n, MAX(q.created_at) AS last_quote " +
       "FROM quotes q " +
       "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) " +
       "LEFT JOIN agencies a ON a.id = b.agency_id " +
-      "WHERE trim(COALESCE(q.broker_email,'')) <> '' " + repFilter +
-      " GROUP BY email ORDER BY n DESC LIMIT 200").bind(...args).all();
+      "WHERE 1=1 " + repFilter +
+      " GROUP BY key ORDER BY n DESC LIMIT 200").bind(...args).all();
 
     const byAgency = await env.DB.prepare(
       "SELECT COALESCE(a.name, q.broker_agency, '(no agency)') AS agency, MAX(a.id) AS agency_id, " +
@@ -2242,12 +2267,18 @@ async function statsPerBlock(env, firstError) {
     catch (err) { out.unavailable[name] = String(err && err.message || err); return null; }
   };
 
+  // ⚠️ SAME IDENTITY RULE AS THE MAIN QUERY. The fallback existing at all is only useful if it
+  // answers the same question; a fallback that quietly applies a different rule is a second bug
+  // waiting for the day the first one fires.
   const agent = await attempt('byAgent', () => env.DB.prepare(
-    "SELECT lower(trim(q.broker_email)) AS email, MAX(q.broker_name) AS name, " +
-    "       MAX(q.broker_agency) AS agency, NULL AS rep, COUNT(*) AS n, " +
+    "SELECT COALESCE(NULLIF(lower(trim(q.broker_email)),''), " +
+    "                NULLIF(lower(trim(q.broker_name)),''), " +
+    "                NULLIF(lower(trim(q.broker_agency)),''), '(not stated)') AS key, " +
+    "       MAX(NULLIF(trim(q.broker_email),'')) AS email, " +
+    "       MAX(NULLIF(trim(q.broker_name),'')) AS name, " +
+    "       MAX(NULLIF(trim(q.broker_agency),'')) AS agency, NULL AS rep, COUNT(*) AS n, " +
     "       MAX(q.created_at) AS last_quote " +
-    "FROM quotes q WHERE trim(COALESCE(q.broker_email,'')) <> '' " +
-    " GROUP BY email ORDER BY n DESC LIMIT 200").all());
+    "FROM quotes q GROUP BY key ORDER BY n DESC LIMIT 200").all());
   if (agent) out.byAgent = agent.results || [];
 
   const agency = await attempt('byAgency', () => env.DB.prepare(
