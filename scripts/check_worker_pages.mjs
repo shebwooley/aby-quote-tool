@@ -22,12 +22,19 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdtempSync, rmSync } from "node:fs";
 import { execSync } from "node:child_process";
 
 // Resolved from THIS file, not from a hardcoded path and not from the working directory:
 // a pre-commit hook runs with the repo root as cwd, and a developer may run it from scripts/.
 const WORKER = join(dirname(fileURLToPath(import.meta.url)), "..", "worker.js");
 const src = readFileSync(WORKER, "utf8");
+// ⚠️ Extracted scripts go to a TEMP directory, never the working tree. Writing them beside
+// the code litters the repo and -- as happened the first time this hook ran -- gets them
+// committed. A checker must not change the thing it is checking.
+const SCRATCH = mkdtempSync(join(tmpdir(), "abypages-"));
+process.on("exit", () => { try { rmSync(SCRATCH, { recursive: true, force: true }); } catch {} });
 
 function body(name, text) {
   const s = text || src;
@@ -128,9 +135,9 @@ function runAll(text) {
       .map(m => m[1]);
     let ok = true;
     scripts.forEach((code, n) => {
-      const f = `_s_${name}_${n}.js`;
+      const f = join(SCRATCH, `_s_${name}_${n}.js`);
       writeFileSync(f, code, "utf8");
-      try { execSync(`node --check ${f}`, { stdio: "pipe" }); }
+      try { execSync(`node --check "${f}"`, { stdio: "pipe" }); }
       catch (e) {
         ok = false; bad++;
         console.log("  FAIL " + name + " script#" + n + ": " +

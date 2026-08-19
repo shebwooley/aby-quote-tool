@@ -8,3 +8,6 @@
 # Import working files: generated SQL, previews and a pre-import backup of the live table.
 # Data dumps, not code -- they must not enter the repo.
 scripts/_import_out/
+
+# The page checker's extracted scripts (it now writes to a temp dir; this is belt and braces).
+_s_*.js
