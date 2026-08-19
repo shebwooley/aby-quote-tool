@@ -1689,6 +1689,7 @@ function adminBrokersHTML() {
  // ⭐ The rows are CACHED so re-sorting does not re-query. Reordering what is already on screen
  // must not be able to return a different set than the one being looked at.
  var CACHE={brokers:[],byAgency:[],byAgent:[]}, SORTS={}, paint=function(){};
+ var TOP_N=25, SHOW_ALL={};
  // ⚠️ THE DEFAULT DIRECTION FOLLOWS THE DEFAULT KEY. Initialising every table ascending put
  // '(no agency)' with 12 quotes above MMA with 36 on first paint -- technically sorted, and the
  // wrong way round for the only question that table is opened to answer.
@@ -1773,7 +1774,35 @@ function adminBrokersHTML() {
    }
    CACHE.byAgency=st.byAgency||[];
    paintByAgency();
-   function paintByAgency(){
+   // 🔴🔴 THESE TWO TABLES HOLD 235 ROWS EACH SINCE THE 2024-2026 IMPORT, AND THE PAGE WAS 31
+ // SCREENS TALL. "Quotes by status" and "Open quotes, by age" -- the two short summaries most
+ // worth glancing at -- sat below 18,000 pixels of table and were effectively unreachable.
+ // ⭐ The top rows are the valuable ones (both tables sort by volume), so the fix is a CAP with a
+ // way past it, not a collapse: you still land on the biggest agencies without scrolling.
+ // ⛔ AND THE CAP SAYS SO. A list that quietly stops at 25 is indistinguishable from an agency
+ // book that only has 25 in it -- the same defect as the 300-of-1795 quote count (TRAPS #237).
+ // ⚠️ TOP_N and SHOW_ALL are declared with CACHE, not here: paint() runs before this point
+ // in load(), and a var assigned later reads as undefined when the first paint uses it.
+ function capRows(key, rows){
+   return SHOW_ALL[key] ? rows : rows.slice(0, TOP_N);
+ }
+ function moreRow(key, shown, total, cols){
+   if (total <= TOP_N) return '';
+   var label = SHOW_ALL[key]
+     ? 'Showing all ' + total + ' \u2014 show the top ' + TOP_N + ' only'
+     : 'Showing the top ' + shown + ' of ' + total + ' \u2014 show all';
+   return '<tr class="morerow"><td colspan="' + cols + '" style="text-align:center;padding:10px">'
+     + '<button type="button" class="morebtn" data-k="' + key + '" style="background:none;border:0;'
+     + 'color:#2f6f4f;font-size:12.5px;cursor:pointer;text-decoration:underline">' + label + '</button>'
+     + '</td></tr>';
+ }
+ function wireMore(){
+   Array.prototype.forEach.call(document.querySelectorAll('.morebtn'), function(b){
+     b.onclick = function(){ var k = b.getAttribute('data-k'); SHOW_ALL[k] = !SHOW_ALL[k]; paint(); };
+   });
+ }
+
+ function paintByAgency(){
    var ag=sorted('byAgency',CACHE.byAgency,{
      agency:function(x){return String(x.agency_label||x.agency||'').toLowerCase()},
      n:function(x){return Number(x.n||0)},
@@ -1784,10 +1813,10 @@ function adminBrokersHTML() {
      ? '<table><thead><tr>'+hc('byAgency','agency','Agency')+hc('byAgency','n','Quotes','n')
        +hc('byAgency','agents','Agents','n')+hc('byAgency','last','Last quote')
        +'<th>Owner</th></tr></thead><tbody>'
-       + ag.map(function(x){
+       + capRows('byAgency', ag).map(function(x){
            return '<tr><td>'+esc(x.agency_label||x.agency||'(no agency)')+'</td><td class="n">'+x.n+'</td><td class="n">'+x.agents+'</td><td class="date">'+day(x.last_quote)+'</td>'
              +'<td>'+(x.agency_id?repSelect('agency',x.agency_id,x.rep):'<span class="muted">\u2014</span>')+'</td></tr>';
-         }).join('')+'</tbody></table>'
+         }).join('')+moreRow('byAgency', capRows('byAgency', ag).length, ag.length, 5)+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
    }
    var SL={P:'Pending',I:'In process',S:'Sold',D:'Dead'};
@@ -1824,7 +1853,7 @@ function adminBrokersHTML() {
      ? '<table><thead><tr>'+hc('byAgent','name','Agent')+hc('byAgent','email','Email')
        +hc('byAgent','agency','Agency')+hc('byAgent','n','Quotes','n')
        +hc('byAgent','last','Last quote')+'</tr></thead><tbody>'
-       + agt.map(function(x){
+       + capRows('byAgent', agt).map(function(x){
            // \u2b50 A ROW IS NAMED BY WHATEVER IT HAS. Most of the imported book carries an agency and
            // no broker name or email, and printing a dash where the name goes made those rows look
            // like broken data rather than what they are: a quote we know the agency for.
@@ -1833,14 +1862,20 @@ function adminBrokersHTML() {
            return '<tr><td>'+esc(who)
              +(viaAgency?' <span class="muted" title="This quote records an agency but no individual broker">(agency only)</span>':'')
              +'</td><td>'+esc(x.email||'\u2014')+'</td><td>'+esc(x.agency||'\u2014')+'</td><td class="n">'+x.n+'</td><td class="date">'+day(x.last_quote)+'</td></tr>';
-         }).join('')+'</tbody></table>'
+         }).join('')+moreRow('byAgent', capRows('byAgent', agt).length, agt.length, 5)+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
    }
    wireSelects();
    wireSort();
    // Re-render the three lists from the cache when a header is clicked.
-   paint=function(){ paintBrokers(); paintByAgency(); paintByAgent(); wireSelects(); wireSort(); wireCollapse(); };
+   paint=function(){ paintBrokers(); paintByAgency(); paintByAgent(); wireSelects(); wireSort(); wireCollapse(); wireMore(); };
+   // ⚠️ BOTH OF THESE MUST BE CALLED HERE AS WELL AS INSIDE paint().
+   // The first render happens by calling paintBrokers/paintByAgency/paintByAgent directly,
+   // BEFORE paint is assigned -- so anything wired only inside paint() is missing on the
+   // page you actually land on, and only appears once something triggers a repaint. The
+   // show-all buttons had no handler at all until you happened to click a sort header.
    wireCollapse();
+   wireMore();
  }
 
  // Collapse / expand, remembered in localStorage per section.
