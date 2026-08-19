@@ -513,6 +513,27 @@
     // `window.__abyClientId` / `window.__abyReadOnly`.
     window.__abyQuoteNumber = quoteNumber;
 
+    // What this quote is worth, computed from the SAME results the document is rendered from, so
+    // the stored figure and the printed one cannot disagree.
+    // ⭐ FIRST YEAR: setup + documents + annual + twelve months of the monthly fee. Setup is a
+    // one-off, so a recurring total would understate the sale; including it every year would
+    // overstate everything after the first.
+    // ⚠️ Published on `window` because save-hook.js is a separate script -- the same channel
+    // `__abyClientId` and `__abyQuoteNumber` already use.
+    try {
+      var fyv = 0, heads = 0;
+      results.forEach(function (r) {
+        if (r.setupFee && r.setupFee.amount)   fyv += Number(r.setupFee.amount) || 0;
+        if (r.docsFee && r.docsFee.amount)     fyv += Number(r.docsFee.amount) || 0;
+        if (r.annualFee && r.annualFee.amount) fyv += Number(r.annualFee.amount) || 0;
+        if (r.monthlyFee && r.monthlyFee.amount) fyv += (Number(r.monthlyFee.amount) || 0) * 12;
+        var c = r.count != null ? Number(r.count) : 0;
+        if (c > heads) heads = c;
+      });
+      window.__abyQuoteValue = { firstYear: Math.round(fyv * 100) / 100, employees: heads || null };
+    } catch (e) { window.__abyQuoteValue = null; }
+
+
     var html = ABYQuote.renderer.renderInternal(form, results, quoteNumber, {
       includeAuthorization: true,
       clientId: window.__abyClientId || '',

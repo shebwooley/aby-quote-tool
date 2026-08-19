@@ -140,6 +140,10 @@
       // about where a link travelled, never an identity -- `ran_by` and `client_id` are the fields
       // that mean something, and both are decided server-side or handed over deliberately.
       sourceTag: window.__abySourceTag || '',
+      // What the quote is worth, published by app.js after the engine has run (see
+      // `__abyQuoteValue`). Sent from day one; the worker ignores unknown keys.
+      firstYearValue: (window.__abyQuoteValue && window.__abyQuoteValue.firstYear) || null,
+      employeeCount:  (window.__abyQuoteValue && window.__abyQuoteValue.employees) || null,
       products: collectProducts(),
     };
 

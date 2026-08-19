@@ -81,7 +81,7 @@ export default {
       'Access-Control-Allow-Headers': 'Content-Type',
       'Access-Control-Max-Age': '86400',
     }});
-    if (path === '/api/commitments' && method === 'POST') return handleSaveCommitment(request, env);
+    if (path === '/api/commitments' && method === 'POST') return handleSaveCommitment(request, env, ctx);
     if (path === '/api/commitments' && method === 'GET')  return withAuth(request, env, () => handleListCommitments(request, env));
     if (/^\/api\/commitments\/[^/]+$/.test(path) && method === 'DELETE') {
       return withAuth(request, env, () => handleDeleteCommitment(path.split('/').pop(), env));
@@ -201,6 +201,8 @@ async function handleSaveQuote(request, env, ctx) {
     brokerPhone        = '',
     brokerEmail        = '',
     sourceTag          = '',
+    firstYearValue     = null,
+    employeeCount      = null,
     repName            = '',
     repPhone           = '',
     repEmail           = '',
@@ -300,6 +302,16 @@ async function handleSaveQuote(request, env, ctx) {
     // first version of this change walked straight back into it.
     // ▶️ So the quote saves first and the tag is a separate, ignorable write: before the migration
     // it is a no-op, after it the tag lands. No ordering requirement, no window.
+    // Value and headcount ride the same best-effort path as the source tag, and for the same
+    // reason: they are newer columns than the INSERT above, and a quote must save whether or not
+    // the migration has run.
+    try {
+      await env.DB.prepare('UPDATE quotes SET first_year_value = ?, employee_count = ? WHERE id = ?')
+        .bind(Number(firstYearValue) || null, Number(employeeCount) || null, id).run();
+    } catch (err) {
+      console.warn('value/headcount not stored (columns missing?):', String(err && err.message || err));
+    }
+
     if (sourceTag) {
       try {
         await env.DB.prepare('UPDATE quotes SET source_tag = ? WHERE id = ?')
@@ -492,7 +504,11 @@ async function handleUpdateQuoteStatus(request, id, env) {
   try { body = await request.json(); }
   catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
   const { status } = body;
-  if (!['P', 'S', 'D'].includes(status)) {
+  // 'I' = IN PROCESS: the employer has signed and is buying, but nothing has been received.
+  // ⛔ It had to be added HERE as well as in the commitment handler -- that one writes the
+  // value straight to the database, so without this an admin could see the status and never
+  // be able to set it back.
+  if (!['P', 'I', 'S', 'D'].includes(status)) {
     return jsonResp({ error: 'Invalid status' }, 400);
   }
   try {
@@ -575,7 +591,7 @@ async function sendEmail(env, { quoteNumber, clientName, effectiveDate, brokerNa
 
 // ─── Admin auth ────────────────────────────────────────────────────────────────
 
-async function handleSaveCommitment(request, env) {
+async function handleSaveCommitment(request, env, ctx) {
   let body;
   try { body = await request.json(); }
   catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
@@ -630,6 +646,32 @@ async function handleSaveCommitment(request, env) {
     console.error('Commitment insert failed:', err);
     return jsonResp({ error: 'Failed to save commitment' }, 500);
   }
+
+    // ── The two things a signature should DO, added 2026-08-18 ──────────────────────────────
+    //
+    // Both are deliberately AFTER the insert and individually wrapped: the employer has already
+    // signed, and neither a status update nor an email is worth losing that record over.
+
+    // ① Move the quote out of Pending. 'I' = in process: they are buying, nothing has been
+    // received yet. Eric's distinction, and it keeps 'S' meaning money.
+    try {
+      await env.DB.prepare(
+        "UPDATE quotes SET status = 'I', committed_at = ? WHERE quote_number = ? AND COALESCE(status,'P') = 'P'"
+      ).bind(now, quoteNumber).run();
+    } catch (err) {
+      console.error('commitment: could not update quote status:', err);
+    }
+
+    // ② Tell ABY. Until 2026-08-18 a signed authorization emailed NOBODY -- it landed in the
+    // database and waited for somebody to look, which made the strongest buying signal in the
+    // system its quietest event.
+    try {
+      ctx && ctx.waitUntil
+        ? ctx.waitUntil(sendCommitmentEmail(env, { quoteNumber, employerName, authSigner, authEmail, authPhone, brokerEmail, products, origin: new URL(request.url).origin }))
+        : await sendCommitmentEmail(env, { quoteNumber, employerName, authSigner, authEmail, authPhone, brokerEmail, products, origin: new URL(request.url).origin });
+    } catch (err) {
+      console.error('commitment: could not send email:', err);
+    }
 
   return jsonResp({ id, quoteNumber, submitted_at: now });
 }
@@ -754,6 +796,78 @@ async function verifyToken(token, password) {
   catch { return false; }
 }
 
+/**
+ * Which of these people already have a BenefitLab BROKER account?
+ *
+ * ⭐ Answers Eric's question, 2026-08-18: "the ones with an ABY or BenefitLab account (and the
+ * ability to easily quote) should also be noted." ABY knows its OWN accounts for free; this is the
+ * other half.
+ *
+ * 🔴🔴 IT RETURNS `null` — NOT `false` — WHEN IT CANNOT ASK. A broker wrongly shown as having no
+ * BenefitLab account is exactly the kind of wrong that prompts a pointless sales call, so an
+ * unreachable dashboard, a missing token or a bad response must read as UNKNOWN on the screen.
+ * ⛔ Never let a failure collapse into "no".
+ *
+ * ⚠️ This is ABY's only outbound dependency. It is deliberately best-effort: the pipeline renders
+ * fully without it, with one column saying "unknown".
+ */
+async function benefitlabAccounts(env, emails) {
+  const base = env.BENEFITLAB_URL, token = env.ABY_INTEGRATION_TOKEN;
+  if (!base || !token || !emails.length) return null;
+  try {
+    const res = await fetch(base.replace(/\/$/, '') + '/api/aby/account-check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ emails }),
+    });
+    if (!res.ok) { console.warn('account-check returned', res.status); return null; }
+    const d = await res.json();
+    return (d && d.accounts && typeof d.accounts === 'object') ? d.accounts : null;
+  } catch (err) {
+    console.warn('account-check unreachable:', String(err && err.message || err));
+    return null;
+  }
+}
+
+/**
+ * Tell ABY that an employer has signed.
+ *
+ * 🔴 RECIPIENTS COME FROM `NOTIFY_EMAILS`, NOT FROM A HARDCODED ADDRESS. The quote email has
+ * `eric@comedyce.com` baked into it, which Eric explains was deliberate while testing -- "I didn't
+ * want to annoy Niels" -- and is due to become both work addresses in about a week. ⭐ A comma-
+ * separated secret means that switch is a one-line change with no deploy, and Niels starts hearing
+ * about his own quotes the moment it is set.
+ */
+async function sendCommitmentEmail(env, c) {
+  if (!env.RESEND_API_KEY) { console.warn('RESEND_API_KEY not set -- commitment email skipped'); return; }
+  const to = String(env.NOTIFY_EMAILS || 'eric@comedyce.com')
+    .split(',').map((x) => x.trim()).filter(Boolean);
+  if (!to.length) return;
+
+  const lines = (Array.isArray(c.products) ? c.products : []).map((p) => `<li>${esc(String(p))}</li>`).join('');
+  const html =
+    `<div style="font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;color:#12263f">` +
+    `<p><strong>${esc(c.employerName || 'An employer')}</strong> has signed the authorization on quote ` +
+    `<strong>${esc(c.quoteNumber || '')}</strong>.</p>` +
+    (lines ? `<p>Services authorized:</p><ul>${lines}</ul>` : '') +
+    `<p><strong>Signed by:</strong> ${esc(c.authSigner || '\u2014')}` +
+    (c.authEmail ? ` &middot; ${esc(c.authEmail)}` : '') +
+    (c.authPhone ? ` &middot; ${esc(c.authPhone)}` : '') + `</p>` +
+    (c.brokerEmail ? `<p><strong>Broker:</strong> ${esc(c.brokerEmail)}</p>` : '') +
+    `<p style="color:#5b6b7f;font-size:13px">The quote is now marked <strong>In process</strong>. ` +
+    `Mark it Sold once the paperwork is in.</p>` +
+    `<p><a href="${esc(c.origin || '')}/admin" style="background:#143c73;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none">Open the quote log</a></p></div>`;
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: `ABY Quote Tool <${env.FROM_EMAIL || 'onboarding@resend.dev'}>`,
+        to, subject: `Authorization signed: ${c.employerName || 'employer'} (${c.quoteNumber || ''})`, html }),
+    });
+    if (!res.ok) console.error('commitment email failed:', res.status, await res.text());
+  } catch (err) { console.error('commitment email threw:', err); }
+}
+
 // ─── The sales pipeline (Eric, 2026-08-18) ─────────────────────────────────────
 
 /**
@@ -810,7 +924,15 @@ async function handleAdminPipeline(request, env) {
     // WHERE clause reference it. Filtering on the whole expression again would mean writing it
     // twice, and two copies of a rule is how they stop agreeing.
     if (status) rows = rows.filter((x) => x.status === status);
-    return jsonResp({ people: rows, windowDays: PIPELINE_WINDOW_DAYS });
+
+    // How much friction is between this person and their next quote? ABY's own account is already
+    // on the row; this adds the BenefitLab half. `null` means we could not ask, and the screen says
+    // so rather than guessing "no".
+    const bl = await benefitlabAccounts(env, rows.map((x) => String(x.email || '').toLowerCase()));
+    for (const r of rows) {
+      r.benefitlab = bl ? !!bl[String(r.email || '').toLowerCase()] : null;
+    }
+    return jsonResp({ people: rows, windowDays: PIPELINE_WINDOW_DAYS, benefitlabChecked: bl !== null });
   } catch (err) {
     return jsonResp({ people: [], error: String(err && err.message || err) });
   }
@@ -938,6 +1060,15 @@ function adminPipelineHTML() {
  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
  function day(s){return s?String(s).slice(0,10):'\u2014'}
  var LBL={producing:'Producing',quoting:'Quoting',dormant:'Dormant',prospect:'Prospect'};
+ // Least friction first. BenefitLab carries name, agency, phone, email AND logo into the quote;
+ // an ABY account prefills their own details; neither means retyping everything, every time --
+ // which is the row worth a phone call.
+ function canQuote(x){
+   if(x.benefitlab===true) return '<span class="pill producing">BenefitLab</span>';
+   if(x.has_account) return '<span class="pill quoting">ABY account</span>';
+   if(x.benefitlab===null) return '<span class="pill prospect" title="BenefitLab could not be reached, so this may be understated">unknown</span>';
+   return '<span class="muted">neither</span>';
+ }
  function msg(el,t,good){el.textContent=t;el.style.display='block';el.style.background=good?'#e8f4ec':'#fdecec';el.style.color=good?'#1a5c3a':'#a12622'}
  function priSelect(kind,id,cur){
    return '<select data-k="'+kind+'" data-id="'+esc(id)+'" class="pri">'
@@ -973,15 +1104,18 @@ function adminPipelineHTML() {
      +(d.windowDays||365)+' days, Quoting means a quote in that window, Dormant means quoted before but not since, Prospect means never quoted.';
    var c={producing:0,quoting:0,dormant:0,prospect:0};
    rows.forEach(function(x){c[x.status]=(c[x.status]||0)+1});
+   if(d.benefitlabChecked===false)
+     document.getElementById('explain').textContent+=
+       ' \u26a0 BenefitLab could not be reached, so "Can quote" shows unknown rather than guessing.';
    document.getElementById('counts').textContent=
      c.producing+' producing \u00b7 '+c.quoting+' quoting \u00b7 '+c.dormant+' dormant \u00b7 '+c.prospect+' prospect';
    document.getElementById('list').innerHTML = rows.length
-     ? '<table><thead><tr><th>Agency</th><th>Agent</th><th>Email</th><th>Status</th><th class="n">Quotes</th><th>Last quote</th><th>Account</th><th>Priority</th><th>Note</th></tr></thead><tbody>'
+     ? '<table><thead><tr><th>Agency</th><th>Agent</th><th>Email</th><th>Status</th><th class="n">Quotes</th><th>Last quote</th><th>Can quote</th><th>Priority</th><th>Note</th></tr></thead><tbody>'
        + rows.map(function(x){
            return '<tr><td>'+esc(x.agency_name||'\u2014')+'</td><td>'+esc(x.name||'\u2014')+'</td><td>'+esc(x.email)+'</td>'
              +'<td><span class="pill '+x.status+'">'+LBL[x.status]+'</span></td>'
              +'<td class="n">'+x.quote_count+'</td><td>'+day(x.last_quote)+'</td>'
-             +'<td>'+(x.has_account?'yes':'<span class="muted">no</span>')+'</td>'
+             +'<td>'+canQuote(x)+'</td>'
              +'<td>'+priSelect('broker',x.id,x.priority)+'</td>'
              +'<td><input class="note" data-id="'+esc(x.id)+'" value="'+esc(x.notes||'')+'" placeholder="\u2026"></td></tr>';
          }).join('')+'</tbody></table>'
@@ -1036,6 +1170,12 @@ function adminBrokersHTML() {
     <button data-rep="niels">Niels</button>
     <span class="muted" id="totals" style="margin-left:auto;font-size:13px"></span>
   </div>
+  <div class="card"><h2>Quotes by status</h2>
+    <p class="sub">Value is the first year of a quote: setup, plan documents, annual fees and twelve months of any monthly fee.</p>
+    <div id="byStatus"><p class="muted">Loading...</p></div></div>
+  <div class="card"><h2>Open quotes, by age</h2>
+    <p class="sub">Pending and in-process quotes only &mdash; a sold or dead quote is not waiting on anybody.</p>
+    <div id="aging"><p class="muted">Loading...</p></div></div>
   <div class="card"><h2>Registered brokers</h2>
     <p class="sub">Everyone with an ABY account. Assign each one to whoever owns the relationship.</p>
     <div id="brokers"><p class="muted">Loading...</p></div></div>
@@ -1095,6 +1235,26 @@ function adminBrokersHTML() {
              +'<td>'+(x.agency_id?repSelect('agency',x.agency_id,x.rep):'<span class="muted">\u2014</span>')+'</td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
+   var SL={P:'Pending',I:'In process',S:'Sold',D:'Dead'};
+   function money(v){return v?('$'+Number(v).toLocaleString('en-US',{maximumFractionDigits:0})):'\u2014'}
+   var bs=st.byStatus||[];
+   document.getElementById('byStatus').innerHTML = bs.length
+     ? '<table><thead><tr><th>Status</th><th class="n">Quotes</th><th class="n">First-year value</th><th>Based on</th></tr></thead><tbody>'
+       + bs.map(function(x){
+           return '<tr><td>'+esc(SL[x.status]||x.status)+'</td><td class="n">'+x.n+'</td><td class="n">'+money(x.value)+'</td>'
+             +'<td class="muted">'+x.valued+' of '+x.n+' priced</td></tr>';
+         }).join('')+'</tbody></table>'
+       + '<p class="sub" style="margin-top:8px">Quotes run before today carry no value, so those totals are drawn only from the ones that do.</p>'
+     : '<p class="muted">Nothing yet.</p>';
+   var AL={week:'Last 7 days',month:'8 to 30 days',quarter:'31 to 90 days',older:'Over 90 days'};
+   var ordered=['week','month','quarter','older'], ag2=st.aging||[];
+   document.getElementById('aging').innerHTML = ag2.length
+     ? '<table><thead><tr><th>Age</th><th class="n">Open quotes</th><th class="n">Value</th></tr></thead><tbody>'
+       + ordered.filter(function(k){return ag2.some(function(x){return x.bucket===k})}).map(function(k){
+           var x=ag2.find(function(y){return y.bucket===k});
+           return '<tr><td>'+AL[k]+'</td><td class="n">'+x.n+'</td><td class="n">'+money(x.value)+'</td></tr>';
+         }).join('')+'</tbody></table>'
+     : '<p class="muted">No open quotes.</p>';
    var agt=st.byAgent||[];
    document.getElementById('byAgent').innerHTML = agt.length
      ? '<table><thead><tr><th>Agent</th><th>Email</th><th>Agency</th><th class="n">Quotes</th><th>Last quote</th></tr></thead><tbody>'
@@ -1291,7 +1451,35 @@ async function handleAdminStats(request, env) {
       "       (SELECT COUNT(*) FROM brokers) AS brokers, " +
       "       (SELECT COUNT(*) FROM agencies) AS agencies").first();
 
-    return jsonResp({ byAgent: byAgent.results || [], byAgency: byAgency.results || [], totals });
+    // ── By status, with value (Eric, 2026-08-18) ───────────────────────────────────────────
+    // ⚠️ `valued` IS REPORTED ALONGSIDE `n` ON PURPOSE. Value was only added today, so most rows
+    // have none, and a total presented without saying how many quotes it is drawn from would read
+    // as the whole book. A proportion is not a fact unless its denominator travels with it.
+    let byStatus = [], aging = [];
+    try {
+      const r1 = await env.DB.prepare(
+        "SELECT COALESCE(status,'P') AS status, COUNT(*) AS n, " +
+        "       SUM(CASE WHEN first_year_value IS NOT NULL THEN 1 ELSE 0 END) AS valued, " +
+        "       COALESCE(SUM(first_year_value),0) AS value " +
+        "FROM quotes GROUP BY status").all();
+      byStatus = r1.results || [];
+
+      // How long has each open quote been sitting? Only P and I -- a Sold or Dead quote is not
+      // waiting on anybody, and including them would bury the ones that are.
+      const r2 = await env.DB.prepare(
+        "SELECT CASE " +
+        "  WHEN created_at >= datetime('now','-7 days')  THEN 'week' " +
+        "  WHEN created_at >= datetime('now','-30 days') THEN 'month' " +
+        "  WHEN created_at >= datetime('now','-90 days') THEN 'quarter' " +
+        "  ELSE 'older' END AS bucket, COUNT(*) AS n, COALESCE(SUM(first_year_value),0) AS value " +
+        "FROM quotes WHERE COALESCE(status,'P') IN ('P','I') GROUP BY bucket").all();
+      aging = r2.results || [];
+    } catch (err) {
+      // Columns may predate the migration. Report nothing rather than a wrong zero.
+      console.warn('value/aging unavailable:', String(err && err.message || err));
+    }
+
+    return jsonResp({ byAgent: byAgent.results || [], byAgency: byAgency.results || [], totals, byStatus, aging });
   } catch (err) {
     return jsonResp({ byAgent: [], byAgency: [], error: String(err && err.message || err) });
   }
@@ -2141,6 +2329,34 @@ const MIGRATIONS = [
   { sql: "ALTER TABLE agencies ADD COLUMN priority TEXT", table: "agencies", column: "priority" },
   { sql: "ALTER TABLE brokers  ADD COLUMN notes TEXT",    table: "brokers",  column: "notes" },
   { sql: "ALTER TABLE agencies ADD COLUMN notes TEXT",    table: "agencies", column: "notes" },
+
+  // ── When the employer signed (Eric, 2026-08-18) ─────────────────────────────────────────────
+  //
+  // ⭐ THE SIGNATURE IS THE STRONGEST SIGNAL IN THE SYSTEM AND IT USED TO MOVE NOTHING. An employer
+  // committed, the quote still said Pending, and somebody had to notice and hand-edit it.
+  //
+  // 🔴 IT SETS 'I' (IN PROCESS), NOT 'S' (SOLD), AND THAT IS ERIC'S DISTINCTION: "we need to have a
+  // category for in process or something - ones that are buying but we don't have anything yet."
+  // ⛔ A signature is intent, not money received. Marking it Sold would overstate the book, and the
+  // whole point of adding value reporting is that the numbers become worth trusting.
+  { sql: "ALTER TABLE quotes ADD COLUMN committed_at TEXT", table: "quotes", column: "committed_at" },
+
+  // ── What a quote is WORTH (Eric, 2026-08-18) ────────────────────────────────────────────────
+  //
+  // 🔴 THE TOOL COMPUTED THE PRICE, PRINTED IT ON THE DOCUMENT, AND THREW IT AWAY. Every count in
+  // the admin therefore weighed a 5-life POP exactly the same as a 500-life ACA engagement.
+  //
+  // `first_year_value` = setup + plan documents + annual + twelve months of PPPM, summed across the
+  // products on the quote. ⭐ FIRST YEAR SPECIFICALLY, because setup is a one-off: a recurring
+  // figure would understate the sale and an all-in figure would overstate every year after it.
+  // ⚠️ It is what the QUOTE said, not what was invoiced. Stored on the row so a later rate change
+  // cannot silently restate the history.
+  //
+  // `employee_count` is the largest count on the quote. Eric asked whether to store headcount too;
+  // it is worth it because value alone cannot tell a big group from an expensive one, and the
+  // broker has already typed it.
+  { sql: "ALTER TABLE quotes ADD COLUMN first_year_value REAL", table: "quotes", column: "first_year_value" },
+  { sql: "ALTER TABLE quotes ADD COLUMN employee_count INTEGER", table: "quotes", column: "employee_count" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column
