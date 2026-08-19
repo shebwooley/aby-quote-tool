@@ -2725,6 +2725,21 @@ tbody tr.data-row.expanded td{background:#f0f8f2;border-top-color:#d4ead9}
 .date-main{font-size:.875rem}
 .date-time{font-size:.78rem;color:#999}
 .muted{color:#aaa;font-style:italic}
+.nowrap{white-space:nowrap}
+/* EDIT IN PLACE. ⭐ It must read as TEXT until touched -- a table full of visible input boxes is
+   the look Eric objected to in the panel, and putting it in every row would be worse. The outline
+   appears on hover so the affordance is discoverable without being permanent. */
+.ip{display:inline-block;min-width:2ch;padding:1px 3px;margin:-1px -3px;border-radius:4px;
+    cursor:text;outline:none}
+.ip:hover{background:#fff;box-shadow:inset 0 0 0 1px #cfdcd4}
+.ip:focus{background:#fff;box-shadow:inset 0 0 0 2px #1a5c3a}
+.ip-saving{background:#fffbe8}
+.ip-saved{background:#e8f5ee;transition:background .6s}
+.ip-failed{background:#fdecea;box-shadow:inset 0 0 0 2px #c0392b}
+/* The placeholder is a SIBLING, not the field's own text: text inside a contenteditable would be
+   saved as the value the moment somebody clicked in and out again. */
+.ip-ph{color:#bbb;font-style:italic;pointer-events:none}
+.ip:focus + .ip-ph,.ip:hover + .ip-ph{display:none}
 tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px solid #d4ead9}
 .detail-inner{max-width:none}
 /* Eric, 2026-08-18: "some lines separating the info or some boxes... we don't need so much space
@@ -2786,8 +2801,8 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
   tr.data-row:hover td{background:transparent}
   tr.data-row.expanded{border-radius:8px 8px 0 0;border-bottom-color:transparent}
   tr.data-row td{display:block;border:none;padding:0;background:transparent !important}
-  tr.data-row td:nth-child(1){grid-column:1;grid-row:1;font-size:.72rem;color:#999}      /* Date */
-  tr.data-row td:nth-child(2){grid-column:1;grid-row:4;font-size:.78rem}                 /* Quote # */
+  tr.data-row td:nth-child(1){grid-column:1;grid-row:4;font-size:.78rem}                 /* Quote # */
+  tr.data-row td:nth-child(2){grid-column:1;grid-row:1;font-size:.72rem;color:#999}      /* Effective */
   tr.data-row td:nth-child(3){grid-column:1;grid-row:2;font-weight:600;font-size:.95rem} /* Client */
   tr.data-row td:nth-child(4){grid-column:1;grid-row:3;font-size:.8rem;color:#666}       /* Broker */
   tr.data-row td:nth-child(5){grid-column:1;grid-row:5;font-size:.78rem;color:#666}      /* Rep */
@@ -2838,18 +2853,28 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
       <!-- ⚠️ SEVEN cols for seven columns. It declared SIX against a seven-column table, so every
            width applied to the wrong column and the last was unconstrained. -->
       <colgroup>
-        <col style="width:10%">
         <col style="width:14%">
+        <col style="width:11%">
         <col style="width:17%">
         <col style="width:18%">
         <col style="width:8%">
-        <col style="width:23%">
+        <col style="width:22%">
         <col style="width:10%">
       </colgroup>
       <thead>
         <tr>
-          <th class="sortable" data-sort="date">Date <span class="arr"></span></th>
+          <!-- 🔴 THE CREATED-DATE COLUMN IS GONE, AND NOTHING WAS LOST WITH IT. The quote number
+               already carries the created date the same way it carries the state and the -C:
+               TX260805 IS 5 August 2026. Keeping both spent a column restating one fact, wrapped
+               it onto three lines in a 10% column, and left no room for the date that actually
+               decides something. Sorting by "Quote #" therefore still sorts by when it was run,
+               within a state. The full timestamp remains in the cell's tooltip. -->
           <th class="sortable" data-sort="quote">Quote # <span class="arr"></span></th>
+          <!-- Eric asked whether effective date beats the quote number here. It beats the CREATED
+               date: validity keys on it -- "we will honor original quotes if the effective date
+               hasn't passed" -- so it is the column somebody scans. A quote number is a lookup
+               key, and lookup is what the search box is for. -->
+          <th class="sortable" data-sort="effective">Effective <span class="arr"></span></th>
           <th class="sortable" data-sort="client">Client <span class="arr"></span></th>
           <!-- Eric: "Why can't we sort by agent name or agency name?" They are two facts stacked in
                one cell, so the header offers BOTH keys rather than picking one for him. -->
@@ -2910,6 +2935,91 @@ document.addEventListener('DOMContentLoaded', function(){
     else { sortKey = key; sortDir = (key === 'date') ? -1 : 1; }
     expandedId = null;
     render();
+  });
+});
+
+// EDIT IN PLACE -- one delegated set of handlers on the tbody, so rows re-rendered at any time
+// keep working without rebinding.
+// ⭐ SAVES ON BLUR, and on Enter, and reverts on Escape. There is no Save button because the unit
+// being saved is one field: a button would imply a form, and a form implies you can leave it
+// half-entered, which is how the panel's duplicate fields got out of step in the first place.
+// ⛔ THE WHITESPACE PATTERN IS BUILT FROM CODE POINTS, AND IT HAS TO BE. This page is a template
+// literal, so the backslash-s shorthand is eaten before the browser ever sees it -- the pattern
+// would match the LETTER s and collapse runs of it. Writing the class out does not help either:
+// tab and newline are backslash escapes too and go the same way. Code points cannot be eaten by
+// anything. (space, tab, newline, carriage return.) TRAPS #200 and #224.
+var WS = new RegExp('[' + String.fromCharCode(32, 9, 10, 13) + ']+', 'g');
+
+document.addEventListener('DOMContentLoaded', function () {
+  var tb = document.getElementById('tbody');
+  if (!tb) return;
+
+  // A click in an editable cell must NOT toggle the row open or shut.
+  tb.addEventListener('click', function (e) {
+    if (e.target.closest('.ip')) e.stopPropagation();
+  });
+
+  tb.addEventListener('keydown', function (e) {
+    var el = e.target.closest('.ip');
+    if (!el) return;
+    if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+    else if (e.key === 'Escape') {
+      e.preventDefault();
+      el.textContent = el.getAttribute('data-was') == null ? el.textContent : el.getAttribute('data-was');
+      el.blur();
+    }
+  });
+
+  // Remember the value on entry so blur can tell "changed" from "clicked through", and Escape has
+  // something to restore.
+  tb.addEventListener('focusin', function (e) {
+    var el = e.target.closest('.ip');
+    if (el) el.setAttribute('data-was', el.textContent);
+  });
+
+  // ⚠️ PASTE IS FORCED TO PLAIN TEXT. A contenteditable happily accepts pasted HTML -- copying a
+  // company name out of a web page would otherwise drop markup straight into the cell and into
+  // the database.
+  tb.addEventListener('paste', function (e) {
+    if (!e.target.closest('.ip')) return;
+    e.preventDefault();
+    var text = (e.clipboardData || window.clipboardData).getData('text').replace(WS, ' ').trim();
+    document.execCommand('insertText', false, text);
+  });
+
+  tb.addEventListener('focusout', async function (e) {
+    var el = e.target.closest('.ip');
+    if (!el) return;
+    var was = el.getAttribute('data-was');
+    var now = el.textContent.replace(WS, ' ').trim();
+    el.textContent = now;
+    if (was == null || now === was.replace(WS, ' ').trim()) return;   // nothing changed
+
+    var id = el.getAttribute('data-id'), col = el.getAttribute('data-edit');
+    var body = {}; body[col] = now;
+    el.className = 'ip ip-saving';
+    try {
+      var r = await fetch('/api/quotes/' + id + '/edit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      var d = await r.json().catch(function () { return {}; });
+      if (!r.ok) throw new Error(d.error || 'failed');
+      // ⭐ Show what the SERVER stored, not what was typed -- the email is lower-cased on write,
+      // and a cell still showing the typed casing would quietly disagree with the database.
+      var local = quotes.filter(function (x) { return x.id === id; })[0];
+      if (local && d.quote) Object.keys(d.quote).forEach(function (k) { local[k] = d.quote[k]; });
+      if (local && d.quote && d.quote[col] != null) el.textContent = d.quote[col];
+      el.className = 'ip ip-saved';
+      // 🔴 NO re-render here. Re-rendering the table under somebody who has just tabbed to the
+      // next cell moves the cell out from under them mid-edit.
+      setTimeout(function () { if (el.className === 'ip ip-saved') el.className = 'ip'; }, 900);
+    } catch (err) {
+      // ⛔ The typed value STAYS on screen on failure. Reverting it would look like a successful
+      // save of the old value, which is the worst of the three possible outcomes.
+      el.className = 'ip ip-failed';
+      el.title = 'Not saved: ' + (err && err.message ? err.message : 'try again');
+    }
   });
 });
 
@@ -3005,7 +3115,12 @@ function originMatches(q, want) {
   if (want === 'broker') return o !== 'ABY';
   return o === want;
 }
-const ORIGIN_LABEL = { ABY: 'ABY', dashboard: 'Dashboard', direct: 'Direct link' };
+// Eric, 2026-08-18: "What does direct link mean?" -- so it did not say what it meant. It is the
+// SHARED public link: not handed over from the BenefitLab dashboard, not run by ABY, just somebody
+// who opened the link and typed their own broker details. ⭐ Renamed to "Shared link", which is
+// the phrase the notes use for it anyway. ⛔ The stored VALUE stays 'direct' -- it is in the filter
+// dropdown, in saved URLs and in habits; this is a label change, not a data change.
+const ORIGIN_LABEL = { ABY: 'ABY', dashboard: 'Dashboard', direct: 'Shared link' };
 // Tinted, not solid. Eric: "the pill for ABY and Direct Link look weird."
 // ⭐ Kept as three DISTINCT tints rather than one neutral chip, because the whole point of the
 // three-way origin (L) is that they are different answers -- ABY ran it, a dashboard broker ran
@@ -3048,13 +3163,49 @@ function createdParts(q) {
   };
 }
 
+// 🔴 THE EFFECTIVE DATE COLUMN HOLDS TWO DIFFERENT KINDS OF VALUE and a sort has to survive both.
+// (No backticks in here: this whole page is one template literal. TRAPS #224 -- third instance.)
+// The quote
+// form stores an ISO first-of-month ("2026-09-01"); the 2026 IMPORT stored free text, because the
+// spreadsheet only knew the month -- "Sep 2026 or later". Sorting those as plain strings puts every
+// imported row in alphabetical order by month NAME (April, August, December...), which looks like
+// a broken sort rather than mixed data.
+// ⭐ Both collapse to a sortable YYYY-MM. Anything unparseable sorts last rather than first: an
+// unknown date is not "the earliest", and blanks must not lead the list.
+const MONTH_KEY = { jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06',
+                    jul:'07', aug:'08', sep:'09', oct:'10', nov:'11', dec:'12' };
+function effectiveKey(v) {
+  var s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  var iso = s.match(/^([0-9]{4})-([0-9]{2})/);
+  if (iso) return iso[1] + '-' + iso[2];
+  var named = s.match(/([A-Za-z]{3})[a-z]*[ ]+([0-9]{4})/);
+  if (named) {
+    var mm = MONTH_KEY[named[1].toLowerCase()];
+    if (mm) return named[2] + '-' + mm;
+  }
+  return 'zzzz-' + s.toLowerCase();      // unparseable: keep it stable, keep it last
+}
+// How the effective date READS in the row. An ISO value becomes "Sep 1, 2026"; free text from the
+// import passes through untouched, because "Sep 2026 or later" is what was actually agreed and
+// tidying it into a specific day would invent precision the spreadsheet never had.
+function effectiveLabel(v) {
+  var s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  var m = s.match(/^([0-9]{4})-([0-9]{2})-([0-9]{2})$/);
+  if (!m) return s;
+  var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return MON[+m[2] - 1] + ' ' + (+m[3]) + ', ' + m[1];
+}
+
 // Sorting. ⭐ The comparators read the SAME values the cells render, so what you see is what you
 // sorted -- a sort keyed on a raw field while the cell shows a formatted one is how a table comes
 // to look wrongly ordered to the person reading it.
 var sortKey = 'date', sortDir = -1;
 const SORT_VALUE = {
-  date:    function(q){ return String(q.created_at || ''); },
+  date:    function(q){ return String(q.created_at || ''); },   // the default, with no column
   quote:   function(q){ return String(q.quote_number || '').toLowerCase(); },
+  effective: function(q){ return effectiveKey(q.effective_date); },
   client:  function(q){ return String(q.client_name || '').toLowerCase(); },
   broker:  function(q){ return String(q.broker_name || '').toLowerCase(); },
   agency:  function(q){ return String(q.broker_agency || '').toLowerCase(); },
@@ -3126,25 +3277,35 @@ function render() {
     row.className = 'data-row' + (isExp ? ' expanded' : '');
     row.dataset.id = q.id;
 
-    const brokerCell = (q.broker_name ? esc(q.broker_name) : '<span class="muted">—</span>') +
-      (q.broker_agency ? '<br><span style="font-size:.8rem;color:#888">' + esc(q.broker_agency) + '</span>' : '');
+    // Eric, 2026-08-18: "I wish that instead when we need to edit we could edit in place."
+    // ⭐ contenteditable, NOT an <input>. A table of input boxes is the "boxes everywhere" look he
+    // had already objected to; this reads as plain text until you hover or click it.
+    // ⚠️ Only the three free-text identity fields are editable here. The quote number, the state
+    // and the commission basis are DERIVED and must not be typed over.
+    const inplace = function(col, val, ph, extra) {
+      return '<span class="ip" contenteditable="true" data-edit="' + col + '" data-id="' + esc(q.id) + '"' +
+        (extra || '') + '>' + esc(val || '') + '</span>' +
+        (val ? '' : '<span class="ip-ph">' + esc(ph || '—') + '</span>');
+    };
+    const brokerCell = inplace('broker_name', q.broker_name, '—') +
+      '<br><span style="font-size:.8rem;color:#888">' +
+      inplace('broker_agency', q.broker_agency, '—') + '</span>';
 
     const chipHtml = products.slice(0,3).map(function(p){
       return '<span class="chip" style="white-space:nowrap">' + esc(p) + '</span>';
     }).join('') + (products.length > 3 ? '<span style="color:#888;font-size:.78rem;white-space:nowrap">+' + (products.length-3) + ' more</span>' : '');
 
     row.innerHTML =
-      // ⭐ The time is gone from the cell and kept in the tooltip: it is real on a quote somebody
-      // ran and fabricated on the 321 imported ones, and the column cannot tell a reader which.
-      '<td><div class="date-main" title="' + esc(String(q.created_at || '')) + '">' + when.date + '</div>' +
-        (when.time ? '<div class="date-time">' + when.time + '</div>' : '') + '</td>' +
-      // 🔴 THE QUOTE NUMBER REPLACES *TWO* COLUMNS, WHICH IS WHY BOTH COULD GO. Eric: "I don't
-      // think we need a commission column since it already has NC" and "we don't really need the
-      // state if it's the beginning of the quote number." Both true -- but the number was only in
-      // the EXPANDED panel, so deleting Comm and State on their own would have deleted the facts
-      // as well. Promoting it here keeps every one of them and costs a column overall.
-      '<td><span class="qnum">' + (esc(q.quote_number) || '<span class="muted">—</span>') + '</span></td>' +
-      '<td>' + (esc(q.client_name) || '<span class="muted">—</span>') + '</td>' +
+      // 🔴 THE QUOTE NUMBER CARRIES *THREE* COLUMNS' WORTH: the state, the commission basis, and
+      // the created date. Eric: "we don't need a commission column since it already has NC",
+      // "we don't really need the state if it's the beginning of the quote number", and the
+      // created date wrapped onto three lines while restating TX260805. All three columns are gone
+      // and no fact went with them. The full timestamp stays in the tooltip.
+      '<td><span class="qnum" title="Run ' + esc(when.date) +
+        (when.time ? ' at ' + esc(when.time) : '') + '">' +
+        (esc(q.quote_number) || '—') + '</span></td>' +
+      '<td class="nowrap">' + (esc(effectiveLabel(q.effective_date)) || '<span class="muted">—</span>') + '</td>' +
+      '<td>' + inplace('client_name', q.client_name, 'not stated') + '</td>' +
       '<td>' + brokerCell + '</td>' +
       '<td>' + (q.rep_name ? esc(q.rep_name.split(' ')[0]) : '<span class="muted">—</span>') + '</td>' +
       '<td><div style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">' + chipHtml + '</div></td>' +
@@ -3216,25 +3377,19 @@ function detailHTML(q, products) {
   };
   return '<div class="detail-inner" data-qid="' + esc(q.id) + '">' +
     '<div class="detail-grid">' +
-      ed('client_name', 'Employer', q.client_name, 'not stated') +
-      ed('broker_name', 'Broker', q.broker_name, '—') +
-      ed('broker_agency', 'Agency', q.broker_agency, '—') +
+      // 🔴 EMPLOYER, BROKER AND AGENCY ARE NOT REPEATED HERE ANY MORE. Eric: "I don't like how
+      // everything shows up twice - the group name, broker name, etc." They were duplicated
+      // because the panel was the only place they could be EDITED; now that the row edits in
+      // place, the duplicate has no job. ⭐ The panel holds only what the row does not show.
       ed('broker_email', 'Broker email', q.broker_email, '—') +
-      // Phone is broker-TYPED like the four above and is blank on most imported rows, so it
-      // belongs with them rather than in the read-only block. ⚠️ It is NOT a join key -- only
-      // the email is -- which is why it needs no normalising.
+      // ⚠️ Phone is NOT a join key -- only the email is -- which is why it needs no normalising.
       ed('broker_phone', 'Broker phone', q.broker_phone, '—') +
-    '</div>' +
-    '<div class="detail-grid">' +
-      '<div class="detail-item"><label>Effective Date</label><span>' + (esc(q.effective_date) || '—') + '</span></div>' +
-      // F-347. Shown only when there IS one, because a "Source —" line on every quote that ever
-      // came in through the plain link is noise on the row a reader is trying to scan.
-      // ⚠️ The cell is still EMITTED when absent, so the four-column grid keeps its shape --
-      // an omitted cell would let Broker Email slide into the last slot and change position
-      // from row to row, which is the same class of problem as the old auto-fill grid.
+      // F-347. Emitted even when empty so the grid keeps its shape; an omitted cell would let the
+      // next field slide into its slot and move position from row to row.
       (q.source_tag
         ? '<div class="detail-item"><label>Link source</label><span>' + esc(q.source_tag) + '</span></div>'
         : '<div class="detail-item"></div>') +
+      '<div class="detail-item"></div>' +
     '</div>' +
     // Eric, 2026-08-18: somewhere to put what an agent said on the phone. Full width, because a
     // note squeezed into a detail-item column is a note nobody writes.
@@ -3574,11 +3729,16 @@ function downloadCommitment(id) {
     if (Array.isArray(p.fees) && p.fees.length) {
       feesHtml = '<table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:12px">' +
         p.fees.map(function(f) {
-          var m = f.tierNote ? f.tierNote.match(/^(\d+)\+/) : null;
+          // ⛔ CHARACTER CLASSES, NOT BACKSLASH ESCAPES -- this whole page is a template literal and it
+          // EATS them. This line used to read backslash-d-plus backslash-plus, which reached the browser
+          // as a pattern matching the LETTER d, so it never matched and the "for groups under N
+          // employees" note below has never once rendered. It parsed, it ran, it did nothing.
+          // Found 2026-08-18 by check_worker_pages.mjs; pre-existing, not from this change. TRAPS #224.
+          var m = f.tierNote ? f.tierNote.match(/^([0-9]+)[+]/) : null;
           if (f.countNote) {
             var displayRate = f.rateNote || '';
             if (m && displayRate.indexOf('minimum') !== -1) {
-              displayRate = displayRate.replace(/(\(minimum [^)]+\))/, '$1 for groups under ' + m[1] + ' employees');
+              displayRate = displayRate.replace(/([(]minimum [^)]+[)])/, '$1 for groups under ' + m[1] + ' employees');
             }
             return '<tr><td colspan="3" style="padding:5px 8px 1px 8px;font-size:13px;color:#555">' + f.label + ' — ' + f.countNote + '</td></tr>' +
               '<tr><td style="padding:1px 8px 2px 24px"></td>' +
