@@ -523,8 +523,19 @@
     try {
       var fyv = 0, heads = 0;
       results.forEach(function (r) {
-        if (r.setupFee && r.setupFee.amount)   fyv += Number(r.setupFee.amount) || 0;
+        // ⭐ A SETUP FEE COUNTS ONLY WHERE A RENEWAL FEE FOLLOWS IT. Eric, 2026-08-18: "For HSA,
+        // I would not include the setup fee in the calculation since there is no renewal fee."
+        // ⛔ Written as HIS RULE rather than as `productId === 'hsa'`: he gave the reason, not just
+        // the instance, so any future product with the same shape behaves the same way without
+        // anybody remembering to add it to a list. Today it affects HSA alone (setup 125,
+        // renewal 0); every other product with a setup has a renewal that matches it.
+        var hasRenewal = !!(r.renewalFee && Number(r.renewalFee.amount) > 0);
+        if (hasRenewal && r.setupFee && r.setupFee.amount) fyv += Number(r.setupFee.amount) || 0;
         if (r.docsFee && r.docsFee.amount)     fyv += Number(r.docsFee.amount) || 0;
+        // ⭐ `annualFee` is NOT a year-two charge -- it is the ENTIRE price of the products that
+        // have no setup at all (ERISA $425/$525, ACA $3,500-$4,750, POP docs-only $99), and Eric
+        // confirmed it RECURS: "for ERISA it should be a per-year charge, not one-time."
+        // ⛔ Excluding it would value an ACA quote at ZERO, which is the largest ticket in the book.
         if (r.annualFee && r.annualFee.amount) fyv += Number(r.annualFee.amount) || 0;
         if (r.monthlyFee && r.monthlyFee.amount) fyv += (Number(r.monthlyFee.amount) || 0) * 12;
         var c = r.count != null ? Number(r.count) : 0;
