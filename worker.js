@@ -2239,6 +2239,15 @@ const AGENCY_EXPR = "COALESCE(a.name, NULLIF(trim(q.broker_agency),''), '(no age
 async function handleAdminStats(request, env) {
   const rep = (new URL(request.url).searchParams.get('rep') || '').trim().toLowerCase();
   const repFilter = rep ? "AND lower(COALESCE(b.assigned_rep,'')) = ?" : '';
+    // Declared once so every section filters on the SAME definition of "whose quote this is",
+    // and so no query has to repeat an expression it might repeat differently.
+    const BROKER_JOIN = "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email))";
+    const STATUS_EXPR = "COALESCE(q.status,'P')";
+    const BUCKET_EXPR = "CASE " +
+      "  WHEN q.created_at >= datetime('now','-7 days')  THEN 'week' " +
+      "  WHEN q.created_at >= datetime('now','-30 days') THEN 'month' " +
+      "  WHEN q.created_at >= datetime('now','-90 days') THEN 'quarter' " +
+      "  ELSE 'older' END";
   const args = rep ? [rep] : [];
   try {
     // 🔴🔴 IT USED TO REQUIRE A BROKER EMAIL, WHICH HID MOST OF THE BOOK.
@@ -2295,10 +2304,17 @@ async function handleAdminStats(request, env) {
       "WHERE 1=1 " + repFilter +
       " GROUP BY " + AGENCY_EXPR + " ORDER BY n DESC LIMIT 200").bind(...args).all();
 
+    // 🔴 THE "SHOW: ERIC / NIELS" FILTER HAS TO REACH THIS LINE TOO.
+    // It used to count the WHOLE BOOK regardless of who was selected, while the two tables below
+    // it were filtered -- so the headline said 371 quotes over a table that added up to 46, and
+    // neither number was wrong on its own. A filter that silently covers only part of a page is
+    // worse than no filter, because the parts it misses look like corroboration.
     const totals = await env.DB.prepare(
-      "SELECT (SELECT COUNT(*) FROM quotes) AS quotes, " +
-      "       (SELECT COUNT(*) FROM brokers) AS brokers, " +
-      "       (SELECT COUNT(*) FROM agencies) AS agencies").first();
+      "SELECT (SELECT COUNT(*) FROM quotes q " + BROKER_JOIN + " WHERE 1=1 " + repFilter + ") AS quotes, " +
+      "       (SELECT COUNT(*) FROM brokers b WHERE 1=1 " + repFilter + ") AS brokers, " +
+      "       (SELECT COUNT(*) FROM agencies a WHERE 1=1 " +
+                (rep ? "AND lower(COALESCE(a.assigned_rep,'')) = ?" : '') + ") AS agencies"
+    ).bind(...args, ...args, ...args).first();
 
     // ── By status, with value (Eric, 2026-08-18) ───────────────────────────────────────────
     // ⚠️ `valued` IS REPORTED ALONGSIDE `n` ON PURPOSE. Value was only added today, so most rows
@@ -2307,21 +2323,27 @@ async function handleAdminStats(request, env) {
     let byStatus = [], aging = [];
     try {
       const r1 = await env.DB.prepare(
-        "SELECT COALESCE(status,'P') AS status, COUNT(*) AS n, " +
-        "       SUM(CASE WHEN first_year_value IS NOT NULL THEN 1 ELSE 0 END) AS valued, " +
-        "       COALESCE(SUM(first_year_value),0) AS value " +
-        "FROM quotes GROUP BY status").all();
+        // ⚠️ GROUP BY THE EXPRESSION, and qualify every column with q. -- the join below brings
+        // the brokers table into scope, and grouping by a bare alias is exactly how "Quotes by
+        // agency" collapsed into one blank row.
+        // The OUTPUT name stays `status` -- the page reads x.status, and an alias in SELECT is
+        // only a label on the result. The shadowing hazard was in GROUP BY, which now uses the
+        // expression, so the alias is safe to keep.
+        "SELECT " + STATUS_EXPR + " AS status, COUNT(*) AS n, " +
+        "       SUM(CASE WHEN q.first_year_value IS NOT NULL THEN 1 ELSE 0 END) AS valued, " +
+        "       COALESCE(SUM(q.first_year_value),0) AS value " +
+        "FROM quotes q " + BROKER_JOIN + " WHERE 1=1 " + repFilter +
+        " GROUP BY " + STATUS_EXPR).bind(...args).all();
       byStatus = r1.results || [];
 
       // How long has each open quote been sitting? Only P and I -- a Sold or Dead quote is not
       // waiting on anybody, and including them would bury the ones that are.
       const r2 = await env.DB.prepare(
-        "SELECT CASE " +
-        "  WHEN created_at >= datetime('now','-7 days')  THEN 'week' " +
-        "  WHEN created_at >= datetime('now','-30 days') THEN 'month' " +
-        "  WHEN created_at >= datetime('now','-90 days') THEN 'quarter' " +
-        "  ELSE 'older' END AS bucket, COUNT(*) AS n, COALESCE(SUM(first_year_value),0) AS value " +
-        "FROM quotes WHERE COALESCE(status,'P') IN ('P','I') GROUP BY bucket").all();
+        "SELECT " + BUCKET_EXPR + " AS bucket, COUNT(*) AS n, " +
+        "       COALESCE(SUM(q.first_year_value),0) AS value " +
+        "FROM quotes q " + BROKER_JOIN +
+        " WHERE " + STATUS_EXPR + " IN ('P','I') " + repFilter +
+        " GROUP BY " + BUCKET_EXPR).bind(...args).all();
       aging = r2.results || [];
     } catch (err) {
       // Columns may predate the migration. Report nothing rather than a wrong zero.
@@ -2338,7 +2360,7 @@ async function handleAdminStats(request, env) {
     // ⛔ And the error was returned while the screen displayed nothing, so a BROKEN page and an
     // EMPTY one looked identical. That is the undiagnosable-UI trap with the volume at zero.
     // ⭐ Now every block is retried on its own and whatever cannot run is NAMED.
-    return await statsPerBlock(env, String(err && err.message || err));
+    return await statsPerBlock(env, String(err && err.message || err), rep);
   }
 }
 
@@ -2353,9 +2375,21 @@ async function handleAdminStats(request, env) {
  * point: the join is what fails when those tables are behind a migration, and the quote table on
  * its own still answers most of the question.
  */
-async function statsPerBlock(env, firstError) {
+async function statsPerBlock(env, firstError, rep) {
   const out = { byAgent: [], byAgency: [], byStatus: [], aging: [], totals: null,
                 unavailable: {}, error: firstError };
+
+  // 🔴 THE REP FILTER HAS TO SURVIVE THE FALLBACK, OR IT LIES.
+  // This path runs when the main query has already failed, and it used not to receive `rep` at
+  // all -- so with "Show: Eric" selected it quietly returned the WHOLE BOOK while the button
+  // still read as active. Unfiltered numbers under a filter label are worse than no numbers:
+  // there is nothing on the screen to tell you they are not the ones you asked for.
+  // ⭐ So the filter is applied here too. It needs the brokers join, which is one of the things
+  // that may be broken -- and that is the right trade: a section that cannot honour the filter
+  // reports itself unavailable, section by section, rather than answering a different question.
+  const repFilter = rep ? "AND lower(COALESCE(b.assigned_rep,'')) = ?" : '';
+  const joinIf    = rep ? " LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) " : ' ';
+  const args      = rep ? [rep] : [];
   const attempt = async (name, run) => {
     try { return await run(); }
     catch (err) { out.unavailable[name] = String(err && err.message || err); return null; }
@@ -2372,7 +2406,8 @@ async function statsPerBlock(env, firstError) {
     "       MAX(NULLIF(trim(q.broker_name),'')) AS name, " +
     "       MAX(NULLIF(trim(q.broker_agency),'')) AS agency, NULL AS rep, COUNT(*) AS n, " +
     "       MAX(q.created_at) AS last_quote " +
-    "FROM quotes q GROUP BY key ORDER BY n DESC LIMIT 200").all());
+    "FROM quotes q" + joinIf + "WHERE 1=1 " + repFilter +
+    " GROUP BY key ORDER BY n DESC LIMIT 200").bind(...args).all());
   if (agent) out.byAgent = agent.results || [];
 
   const agency = await attempt('byAgency', () => env.DB.prepare(
@@ -2381,27 +2416,31 @@ async function statsPerBlock(env, firstError) {
     "       COUNT(DISTINCT COALESCE(NULLIF(lower(trim(q.broker_email)),''), " +
     "                               NULLIF(lower(trim(q.broker_name)),''))) AS agents, " +
     "       MAX(q.created_at) AS last_quote " +
-    "FROM quotes q GROUP BY COALESCE(NULLIF(trim(q.broker_agency),''), '(no agency)') " +
-    "ORDER BY n DESC LIMIT 200").all());
+    "FROM quotes q" + joinIf + "WHERE 1=1 " + repFilter +
+    " GROUP BY COALESCE(NULLIF(trim(q.broker_agency),''), '(no agency)') " +
+    "ORDER BY n DESC LIMIT 200").bind(...args).all());
   if (agency) out.byAgency = agency.results || [];
 
   const totals = await attempt('totals', () => env.DB.prepare(
-    "SELECT (SELECT COUNT(*) FROM quotes) AS quotes, NULL AS brokers, NULL AS agencies").first());
+    "SELECT (SELECT COUNT(*) FROM quotes q" + joinIf + "WHERE 1=1 " + repFilter +
+    ") AS quotes, NULL AS brokers, NULL AS agencies").bind(...args).first());
   if (totals) out.totals = totals;
 
   const st = await attempt('byStatus', () => env.DB.prepare(
-    "SELECT COALESCE(status,'P') AS status, COUNT(*) AS n, " +
-    "       SUM(CASE WHEN first_year_value IS NOT NULL THEN 1 ELSE 0 END) AS valued, " +
-    "       COALESCE(SUM(first_year_value),0) AS value FROM quotes GROUP BY status").all());
+    "SELECT COALESCE(q.status,'P') AS status, COUNT(*) AS n, " +
+    "       SUM(CASE WHEN q.first_year_value IS NOT NULL THEN 1 ELSE 0 END) AS valued, " +
+    "       COALESCE(SUM(q.first_year_value),0) AS value FROM quotes q" + joinIf +
+    "WHERE 1=1 " + repFilter + " GROUP BY COALESCE(q.status,'P')").bind(...args).all());
   if (st) out.byStatus = st.results || [];
 
   const ag = await attempt('aging', () => env.DB.prepare(
     "SELECT CASE " +
-    "  WHEN created_at >= datetime('now','-7 days')  THEN 'week' " +
-    "  WHEN created_at >= datetime('now','-30 days') THEN 'month' " +
-    "  WHEN created_at >= datetime('now','-90 days') THEN 'quarter' " +
-    "  ELSE 'older' END AS bucket, COUNT(*) AS n, COALESCE(SUM(first_year_value),0) AS value " +
-    "FROM quotes WHERE COALESCE(status,'P') IN ('P','I') GROUP BY bucket").all());
+    "  WHEN q.created_at >= datetime('now','-7 days')  THEN 'week' " +
+    "  WHEN q.created_at >= datetime('now','-30 days') THEN 'month' " +
+    "  WHEN q.created_at >= datetime('now','-90 days') THEN 'quarter' " +
+    "  ELSE 'older' END AS bucket, COUNT(*) AS n, COALESCE(SUM(q.first_year_value),0) AS value " +
+    "FROM quotes q" + joinIf + "WHERE COALESCE(q.status,'P') IN ('P','I') " + repFilter +
+    " GROUP BY bucket").bind(...args).all());
   if (ag) out.aging = ag.results || [];
 
   return jsonResp(out);
