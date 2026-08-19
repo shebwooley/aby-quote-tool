@@ -4,6 +4,30 @@ A fast, deterministic, browser-based quoting tool for ABY Benefits LLC.
 No server, no install, no WordPress. Open `index.html` in any modern browser
 (Chrome, Edge, Firefox, Safari) and you're working.
 
+## Working on `worker.js`? Turn the hook on first
+
+```
+git config core.hooksPath .githooks
+```
+
+**Do this once per clone.** Every admin page the worker serves is built from a
+**template literal**, and two ordinary edits destroy one *silently*:
+
+* a **backtick** anywhere inside it — **including in a `//` comment** — ends the literal early;
+* a **lone backslash** is eaten, so `\d` and `\s` reach the browser as the bare letters `d` and `s`.
+
+Both leave `worker.js` as perfectly valid JavaScript, so `node --check` passes and the
+page is broken. This trap landed six times in a single day. The hook runs
+`node --check` **and** `scripts/check_worker_pages.mjs` whenever `worker.js` is staged,
+and refuses the commit if either fails.
+
+Run it by hand any time:
+
+```
+node scripts/check_worker_pages.mjs             # check every page
+node scripts/check_worker_pages.mjs --self-test # prove the checker can still fail
+```
+
 ## Quick start
 
 Double-click `index.html`. Fill in the form. Click **Generate Quote**.
