@@ -1330,6 +1330,7 @@ function adminPipelineHTML() {
 </style></head><body>
 <header><b>ABY admin</b><a href="/aby" class="act" title="Run a quote as ABY, with the internal overrides">Run a quote</a><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline" class="here">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates">Rates</a></header>
 <main>
+  <div id="warn" style="display:none;background:#fdecec;color:#a12622;border:1px solid #f3c2c2;border-radius:8px;padding:10px 13px;margin:0 0 16px;font-size:13.5px"></div>
   <div class="card">
     <h2>Add prospects</h2>
     <p class="sub">One per line, as <strong>agency, name, email</strong>. Nobody is emailed and no account is created &mdash; this is your list, not an invitation.</p>
@@ -1541,18 +1542,34 @@ function adminPipelineHTML() {
    });
    Array.prototype.forEach.call(document.querySelectorAll('select.pri'),function(sel){
      sel.onchange=async function(){
-       await fetch('/api/admin/rate',{method:'POST',headers:{'Content-Type':'application/json'},
+       var r=await fetch('/api/admin/rate',{method:'POST',headers:{'Content-Type':'application/json'},
          body:JSON.stringify({kind:sel.getAttribute('data-k'),id:sel.getAttribute('data-id'),priority:sel.value})});
-       load();
+       if(r.ok) load(); else await failed(r,'Could not save that priority.');
      };
    });
    Array.prototype.forEach.call(document.querySelectorAll('input.note'),function(inp){
      inp.onchange=async function(){
-       await fetch('/api/admin/rate',{method:'POST',headers:{'Content-Type':'application/json'},
+       // ⚠️ THIS ONE HAD NO RELOAD EITHER, so a failed save left the typed note sitting on screen
+       // looking saved, with nothing anywhere that disagreed.
+       var r=await fetch('/api/admin/rate',{method:'POST',headers:{'Content-Type':'application/json'},
          body:JSON.stringify({kind:'broker',id:inp.getAttribute('data-id'),notes:inp.value})});
+       if(!r.ok) await failed(r,'Could not save that note.');
      };
    });
  }
+
+ // ⛔⛔ A WRITE THAT FAILS MUST SAY SO. These handlers used to be "await fetch(...); load();" with
+ // the result thrown away, so a 500 was indistinguishable from a save: the control either snapped
+ // back for no stated reason, or -- worse, where there was no reload -- kept showing what you typed
+ // while the database still held the old value.
+ // ⭐ Reload FIRST so the screen matches the server, then say why.
+ async function failed(r, fallback){
+   var d=await r.json().catch(function(){return{}});
+   try { await load(); } catch(e) {}
+   var w=document.getElementById('warn');
+   if(w){ w.style.display='block'; w.textContent=(d.error||fallback); }
+ }
+
  load();
 </script></body></html>`;
 }
@@ -1604,6 +1621,7 @@ function adminBrokersHTML() {
 </style></head><body>
 <header><b>ABY admin</b><a href="/aby" class="act" title="Run a quote as ABY, with the internal overrides">Run a quote</a><a href="/admin">Quote log</a><a href="/admin/brokers" class="here">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates">Rates</a></header>
 <main>
+  <div id="warn" style="display:none;background:#fdecec;color:#a12622;border:1px solid #f3c2c2;border-radius:8px;padding:10px 13px;margin:0 0 16px;font-size:13.5px"></div>
   <div class="filters">
     <span class="muted" style="font-size:13px">Show:</span>
     <button data-rep="" class="on">Everyone</button>
@@ -1650,9 +1668,9 @@ function adminBrokersHTML() {
  function wireSelects(){
    Array.prototype.forEach.call(document.querySelectorAll('select[data-id]'),function(sel){
      sel.onchange=async function(){
-       await fetch('/api/admin/assign',{method:'POST',headers:{'Content-Type':'application/json'},
+       var r=await fetch('/api/admin/assign',{method:'POST',headers:{'Content-Type':'application/json'},
          body:JSON.stringify({kind:sel.getAttribute('data-kind'),id:sel.getAttribute('data-id'),rep:sel.value})});
-       load();
+       if(r.ok) load(); else await failed(r,'Could not save that owner.');
      };
    });
  }
@@ -1833,6 +1851,19 @@ function adminBrokersHTML() {
      };
    });
  }
+
+ // ⛔⛔ A WRITE THAT FAILS MUST SAY SO. These handlers used to be "await fetch(...); load();" with
+ // the result thrown away, so a 500 was indistinguishable from a save: the control either snapped
+ // back for no stated reason, or -- worse, where there was no reload -- kept showing what you typed
+ // while the database still held the old value.
+ // ⭐ Reload FIRST so the screen matches the server, then say why.
+ async function failed(r, fallback){
+   var d=await r.json().catch(function(){return{}});
+   try { await load(); } catch(e) {}
+   var w=document.getElementById('warn');
+   if(w){ w.style.display='block'; w.textContent=(d.error||fallback); }
+ }
+
  load();
 </script></body></html>`;
 }
@@ -2026,7 +2057,23 @@ function adminReferralsHTML() {
    if(!name) return;
    var r=await fetch('/api/admin/referral-contact',{method:'POST',headers:{'Content-Type':'application/json'},
      body:JSON.stringify({partnerId:pid,name:name,email:email})});
-   if(r.ok) load();
+   if(r.ok) load(); else await failed(r,'Could not add that rep.');
+ }
+
+ // ⛔⛔ A FAILED SAVE MUST NOT LEAVE THE SCREEN SHOWING THE VALUE THAT DID NOT SAVE.
+ // Both writes below used to read "if (r.ok) load();" with no else, so a 500 was completely
+ // silent: the dropdown kept the rep you had just chosen while the database still held the old
+ // one, and nothing on the page disagreed with you. On a page whose whole job is knowing which
+ // rep to thank, a wrong answer that looks saved is the worst thing it can do.
+ // ⭐ So it reloads FIRST -- putting the screen back to what the server actually has, which
+ // reverts the control on its own -- and only then says why. The order matters: load() owns the
+ // warning banner and would wipe a message written before it.
+ async function failed(r, fallback){
+   var d=await r.json().catch(function(){return{}});
+   await load();
+   var w=document.getElementById('warn');
+   w.style.display='block';
+   w.textContent=(d.error||fallback);
  }
 
  // ⚠️ The value carries WHICH KIND of assignment it is -- a rep or a partner-only -- so the server
@@ -2037,7 +2084,7 @@ function adminReferralsHTML() {
    else if(v.indexOf('p:')===0) body.partnerId=v.slice(2);
    var r=await fetch('/api/admin/broker-referral',{method:'POST',headers:{'Content-Type':'application/json'},
      body:JSON.stringify(body)});
-   if(r.ok) load();
+   if(r.ok) load(); else await failed(r,'Could not save that referral.');
  }
 
  load();
