@@ -1173,7 +1173,7 @@ function adminPipelineHTML() {
  .note{width:100%;border:1px solid transparent;background:transparent;border-radius:5px;padding:4px 6px;font-size:13px}
  .note:focus{border-color:#c8d2de;background:#fff;outline:none}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/pipeline" class="here">Pipeline</a><a href="/admin/rates">Rates</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline" class="here">Pipeline</a><a href="/admin/rates">Rates</a></header>
 <main>
   <div class="card">
     <h2>Add prospects</h2>
@@ -1408,7 +1408,7 @@ function adminPipelineHTML() {
 // works, and it is long. New capability goes beside it so a mistake here cannot take the log down.
 function adminBrokersHTML() {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Brokers &amp; agencies — ABY admin</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Brokers &amp; Agencies — ABY admin</title>
 <style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
  header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
  header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85;padding:4px 8px;border-radius:5px} header a:hover{opacity:1;background:rgba(255,255,255,.14)}
@@ -1420,6 +1420,8 @@ function adminBrokersHTML() {
  h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
  table{width:100%;border-collapse:collapse;font-size:14px}
  th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
+ th.srt{cursor:pointer;user-select:none}
+ th.srt:hover{color:#143c73;background:#eef2f7}
  td{padding:8px 6px;border-bottom:1px solid #eef2f6} .muted{color:#8a97a8}
  .n{text-align:right;font-variant-numeric:tabular-nums}
  .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
@@ -1428,7 +1430,7 @@ function adminBrokersHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers" class="here">Brokers &amp; agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers" class="here">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a></header>
 <main>
   <div class="filters">
     <span class="muted" style="font-size:13px">Show:</span>
@@ -1437,6 +1439,10 @@ function adminBrokersHTML() {
     <button data-rep="niels">Niels</button>
     <span class="muted" id="totals" style="margin-left:auto;font-size:13px"></span>
   </div>
+  <!-- Shown only when a section could not be read. See the note beside statsPerBlock: a page that
+       renders blank on a database error is indistinguishable from one with no data. -->
+  <div id="statsWarn" style="display:none;margin:0 0 14px;padding:10px 14px;border-radius:7px;
+       background:#fdf1e0;border:1px solid #f0d9ae;color:#7a5410;font-size:13px"></div>
   <div class="card"><h2>Quotes by status</h2>
     <p class="sub">Value is the first year of a quote: setup, plan documents, annual fees and twelve months of any monthly fee.</p>
     <div id="byStatus"><p class="muted">Loading...</p></div></div>
@@ -1478,30 +1484,113 @@ function adminBrokersHTML() {
      };
    });
  }
+ // Sorting for the three list tables on this page (Eric, 2026-08-19).
+ // ⭐ ONE HELPER SHARED BY ALL THREE rather than three copies. Three hand-written sorts is three
+ // places for the blank-handling rule to drift, and that rule is the one that matters.
+ // ⭐ The rows are CACHED so re-sorting does not re-query. Reordering what is already on screen
+ // must not be able to return a different set than the one being looked at.
+ var CACHE={brokers:[],byAgency:[],byAgent:[]}, SORTS={}, paint=function(){};
+ // ⚠️ THE DEFAULT DIRECTION FOLLOWS THE DEFAULT KEY. Initialising every table ascending put
+ // '(no agency)' with 12 quotes above MMA with 36 on first paint -- technically sorted, and the
+ // wrong way round for the only question that table is opened to answer.
+ function isDesc(k){ return k==='n'||k==='quotes'||k==='agents'||k==='last'; }
+ function sorted(tbl,rows,getters,defKey){
+   var s=SORTS[tbl]||(SORTS[tbl]={k:defKey,d:isDesc(defKey)?-1:1});
+   var g=getters[s.k]||getters[defKey];
+   return rows.slice().sort(function(a,b){
+     var x=g(a), y=g(b);
+     // ⚠️ BLANKS SINK IN BOTH DIRECTIONS -- an unknown agency is not "first alphabetically".
+     var xe=(x===''||x===null||x===undefined), ye=(y===''||y===null||y===undefined);
+     if(xe&&!ye) return 1;
+     if(!xe&&ye) return -1;
+     if(x<y) return -1*s.d;
+     if(x>y) return 1*s.d;
+     return 0;
+   });
+ }
+ function hc(tbl,k,label,cls){
+   var s=SORTS[tbl]||{};
+   var mark = s.k===k ? (s.d===1?' ▲':' ▼') : '';
+   return '<th class="srt'+(cls?' '+cls:'')+'" data-t="'+tbl+'" data-k="'+k+'">'+label+mark+'</th>';
+ }
+ function wireSort(){
+   Array.prototype.forEach.call(document.querySelectorAll('th.srt'),function(h){
+     h.onclick=function(){
+       var tbl=h.getAttribute('data-t'), k=h.getAttribute('data-k');
+       var s=SORTS[tbl]||(SORTS[tbl]={k:k,d:1});
+       if(s.k===k) s.d=-s.d;
+       // A count or a date opens biggest/newest first; a name opens A-Z.
+       else { s.k=k; s.d=isDesc(k)?-1:1; }
+       paint();
+     };
+   });
+ }
+
  async function load(){
    var q=rep?('?rep='+encodeURIComponent(rep)):'';
    var b=await (await fetch('/api/admin/brokers'+q)).json().catch(function(){return{}});
    var list=b.brokers||[];
+   CACHE.brokers=list;
+   paintBrokers();
+   function paintBrokers(){
+   var list=sorted('brokers',CACHE.brokers,{
+     name:function(x){return String(x.name||'').toLowerCase()},
+     email:function(x){return String(x.email||'').toLowerCase()},
+     agency:function(x){return String(x.agency_name||'').toLowerCase()},
+     role:function(x){return String(x.role||'member')},
+     quotes:function(x){return Number(x.quote_count||0)},
+     last:function(x){return String(x.last_login_at||'')}
+   },'name');
    document.getElementById('brokers').innerHTML = list.length
-     ? '<table><thead><tr><th>Name</th><th>Email</th><th>Agency</th><th>Role</th><th class="n">Quotes</th><th>Last sign-in</th><th>Status</th><th>Owner</th></tr></thead><tbody>'
+     ? '<table><thead><tr>'+hc('brokers','name','Name')+hc('brokers','email','Email')
+       +hc('brokers','agency','Agency')+hc('brokers','role','Role')
+       +hc('brokers','quotes','Quotes','n')+hc('brokers','last','Last sign-in')
+       +'<th>Status</th><th>Owner</th></tr></thead><tbody>'
        + list.map(function(x){
            return '<tr><td>'+esc(x.name||'\u2014')+'</td><td>'+esc(x.email)+'</td><td>'+esc(x.agency_name||'\u2014')+'</td><td>'+esc(x.role||'member')+'</td>'
              +'<td class="n">'+x.quote_count+'</td><td>'+day(x.last_login_at)+'</td>'
              +'<td>'+(x.pending?'<span class="muted">invited</span>':'active')+'</td><td>'+repSelect('broker',x.id,x.assigned_rep)+'</td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">No broker accounts yet.</p>';
+   }
 
    var st=await (await fetch('/api/admin/stats'+q)).json().catch(function(){return{}});
    if(st.totals) document.getElementById('totals').textContent=
-     st.totals.quotes+' quotes \u00b7 '+st.totals.brokers+' brokers \u00b7 '+st.totals.agencies+' agencies';
-   var ag=st.byAgency||[];
+     st.totals.quotes+' quotes'
+     +(st.totals.brokers==null?'':' \u00b7 '+st.totals.brokers+' brokers')
+     +(st.totals.agencies==null?'':' \u00b7 '+st.totals.agencies+' agencies');
+   // \ud83d\udd34 SAY SO WHEN A SECTION COULD NOT BE READ. An empty table and an unreadable one look
+   // identical, and this whole page rendered blank when a single query failed -- with the reason
+   // sitting unread in the response. A screen that cannot explain itself sends somebody hunting.
+   var warn=document.getElementById('statsWarn');
+   var bad=st.unavailable?Object.keys(st.unavailable):[];
+   if(warn){
+     if(bad.length||st.error){
+       warn.style.display='block';
+       warn.textContent=(bad.length?('Some sections could not be read: '+bad.join(', ')+'. '):'Something did not load. ')
+         +'This usually means the database is behind the code \u2014 open /api/migrate while signed in. Details: '
+         +(st.error||st.unavailable[bad[0]]||'unknown');
+     } else { warn.style.display='none'; }
+   }
+   CACHE.byAgency=st.byAgency||[];
+   paintByAgency();
+   function paintByAgency(){
+   var ag=sorted('byAgency',CACHE.byAgency,{
+     agency:function(x){return String(x.agency||'').toLowerCase()},
+     n:function(x){return Number(x.n||0)},
+     agents:function(x){return Number(x.agents||0)},
+     last:function(x){return String(x.last_quote||'')}
+   },'n');
    document.getElementById('byAgency').innerHTML = ag.length
-     ? '<table><thead><tr><th>Agency</th><th class="n">Quotes</th><th class="n">Agents</th><th>Last quote</th><th>Owner</th></tr></thead><tbody>'
+     ? '<table><thead><tr>'+hc('byAgency','agency','Agency')+hc('byAgency','n','Quotes','n')
+       +hc('byAgency','agents','Agents','n')+hc('byAgency','last','Last quote')
+       +'<th>Owner</th></tr></thead><tbody>'
        + ag.map(function(x){
            return '<tr><td>'+esc(x.agency)+'</td><td class="n">'+x.n+'</td><td class="n">'+x.agents+'</td><td>'+day(x.last_quote)+'</td>'
              +'<td>'+(x.agency_id?repSelect('agency',x.agency_id,x.rep):'<span class="muted">\u2014</span>')+'</td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
+   }
    var SL={P:'Pending',I:'In process',S:'Sold',D:'Dead'};
    function money(v){return v?('$'+Number(v).toLocaleString('en-US',{maximumFractionDigits:0})):'\u2014'}
    var bs=st.byStatus||[];
@@ -1522,14 +1611,29 @@ function adminBrokersHTML() {
            return '<tr><td>'+AL[k]+'</td><td class="n">'+x.n+'</td><td class="n">'+money(x.value)+'</td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">No open quotes.</p>';
-   var agt=st.byAgent||[];
+   CACHE.byAgent=st.byAgent||[];
+   paintByAgent();
+   function paintByAgent(){
+   var agt=sorted('byAgent',CACHE.byAgent,{
+     name:function(x){return String(x.name||'').toLowerCase()},
+     email:function(x){return String(x.email||'').toLowerCase()},
+     agency:function(x){return String(x.agency||'').toLowerCase()},
+     n:function(x){return Number(x.n||0)},
+     last:function(x){return String(x.last_quote||'')}
+   },'n');
    document.getElementById('byAgent').innerHTML = agt.length
-     ? '<table><thead><tr><th>Agent</th><th>Email</th><th>Agency</th><th class="n">Quotes</th><th>Last quote</th></tr></thead><tbody>'
+     ? '<table><thead><tr>'+hc('byAgent','name','Agent')+hc('byAgent','email','Email')
+       +hc('byAgent','agency','Agency')+hc('byAgent','n','Quotes','n')
+       +hc('byAgent','last','Last quote')+'</tr></thead><tbody>'
        + agt.map(function(x){
            return '<tr><td>'+esc(x.name||'\u2014')+'</td><td>'+esc(x.email)+'</td><td>'+esc(x.agency||'\u2014')+'</td><td class="n">'+x.n+'</td><td>'+day(x.last_quote)+'</td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
+   }
    wireSelects();
+   wireSort();
+   // Re-render the three lists from the cache when a header is clicked.
+   paint=function(){ paintBrokers(); paintByAgency(); paintByAgent(); wireSelects(); wireSort(); };
  }
  load();
 </script></body></html>`;
@@ -1549,9 +1653,17 @@ function adminRatesHTML() {
  main{max-width:1180px;margin:22px auto;padding:0 18px}
  .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
  h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
- table{width:100%;border-collapse:collapse;font-size:14px}
- th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
- td{padding:8px 6px;border-bottom:1px solid #eef2f6} .muted{color:#8a97a8}
+ table{width:100%;border-collapse:collapse;font-size:14px;border:1px solid #dfe5ec}
+ /* Eric, 2026-08-19: "can we add grid lines - will be easier to read." Ten columns of numbers
+    with only horizontal rules makes the eye lose its place between Amount, Min, Max, Setup,
+    Renewal and Annual -- the six that matter and all look alike. Vertical rules plus a zebra
+    stripe give both axes something to track. */
+ th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:2px solid #cfd8e3;border-right:1px solid #dfe5ec;padding:8px 6px;background:#f4f7fa;position:sticky;top:0}
+ th:last-child,td:last-child{border-right:none}
+ td{padding:8px 6px;border-bottom:1px solid #eef2f6;border-right:1px solid #eef2f6}
+ tbody tr:nth-child(even){background:#fafcfe}
+ tbody tr:hover{background:#eef4fa}
+ .muted{color:#8a97a8}
  .n{text-align:right;font-variant-numeric:tabular-nums}
  .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
  .filters button{background:#fff;border:1px solid #c8d2de;border-radius:6px;padding:7px 13px;cursor:pointer;font-size:14px}
@@ -1559,7 +1671,7 @@ function adminRatesHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates" class="here">Rates</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates" class="here">Rates</a></header>
 <main>
   <div class="filters">
     <span class="muted" style="font-size:13px">State:</span>
@@ -1751,8 +1863,72 @@ async function handleAdminStats(request, env) {
 
     return jsonResp({ byAgent: byAgent.results || [], byAgency: byAgency.results || [], totals, byStatus, aging });
   } catch (err) {
-    return jsonResp({ byAgent: [], byAgency: [], error: String(err && err.message || err) });
+    // 🔴🔴 ONE FAILING QUERY USED TO BLANK THE WHOLE PAGE, AND SAY NOTHING ABOUT IT.
+    // Eric, 2026-08-19: "nothing is filled in on the Brokers & agencies page." The three queries
+    // above share one try, so a single missing column -- b.assigned_rep, added by a migration that
+    // has not been run since -- threw, and this returned empty arrays for EVERYTHING. byStatus and
+    // aging read only the quotes table and would have worked perfectly; they never got the chance.
+    // ⛔ And the error was returned while the screen displayed nothing, so a BROKEN page and an
+    // EMPTY one looked identical. That is the undiagnosable-UI trap with the volume at zero.
+    // ⭐ Now every block is retried on its own and whatever cannot run is NAMED.
+    return await statsPerBlock(env, String(err && err.message || err));
   }
+}
+
+/**
+ * Re-run the stats one block at a time, so a query that cannot run costs only its own section.
+ *
+ * ⭐ IT REPORTS `unavailable` PER SECTION RATHER THAN RETURNING ZERO. A zero is a claim -- "this
+ * agency has no quotes" -- and a missing column is not evidence for it. The screen can then say
+ * which section could not be read and why, which is the difference between a bug somebody can act
+ * on and a page that merely looks empty.
+ * ⚠️ These fallbacks read ONLY `quotes`, with no join to `brokers` or `agencies`. That is the
+ * point: the join is what fails when those tables are behind a migration, and the quote table on
+ * its own still answers most of the question.
+ */
+async function statsPerBlock(env, firstError) {
+  const out = { byAgent: [], byAgency: [], byStatus: [], aging: [], totals: null,
+                unavailable: {}, error: firstError };
+  const attempt = async (name, run) => {
+    try { return await run(); }
+    catch (err) { out.unavailable[name] = String(err && err.message || err); return null; }
+  };
+
+  const agent = await attempt('byAgent', () => env.DB.prepare(
+    "SELECT lower(trim(q.broker_email)) AS email, MAX(q.broker_name) AS name, " +
+    "       MAX(q.broker_agency) AS agency, NULL AS rep, COUNT(*) AS n, " +
+    "       MAX(q.created_at) AS last_quote " +
+    "FROM quotes q WHERE trim(COALESCE(q.broker_email,'')) <> '' " +
+    " GROUP BY email ORDER BY n DESC LIMIT 200").all());
+  if (agent) out.byAgent = agent.results || [];
+
+  const agency = await attempt('byAgency', () => env.DB.prepare(
+    "SELECT COALESCE(q.broker_agency,'(no agency)') AS agency, NULL AS agency_id, NULL AS rep, " +
+    "       COUNT(*) AS n, COUNT(DISTINCT lower(trim(q.broker_email))) AS agents, " +
+    "       MAX(q.created_at) AS last_quote " +
+    "FROM quotes q GROUP BY agency ORDER BY n DESC LIMIT 200").all());
+  if (agency) out.byAgency = agency.results || [];
+
+  const totals = await attempt('totals', () => env.DB.prepare(
+    "SELECT (SELECT COUNT(*) FROM quotes) AS quotes, NULL AS brokers, NULL AS agencies").first());
+  if (totals) out.totals = totals;
+
+  const st = await attempt('byStatus', () => env.DB.prepare(
+    "SELECT COALESCE(status,'P') AS status, COUNT(*) AS n, " +
+    "       SUM(CASE WHEN first_year_value IS NOT NULL THEN 1 ELSE 0 END) AS valued, " +
+    "       COALESCE(SUM(first_year_value),0) AS value FROM quotes GROUP BY status").all());
+  if (st) out.byStatus = st.results || [];
+
+  const ag = await attempt('aging', () => env.DB.prepare(
+    "SELECT CASE " +
+    "  WHEN created_at >= datetime('now','-7 days')  THEN 'week' " +
+    "  WHEN created_at >= datetime('now','-30 days') THEN 'month' " +
+    "  WHEN created_at >= datetime('now','-90 days') THEN 'quarter' " +
+    "  ELSE 'older' END AS bucket, COUNT(*) AS n, COALESCE(SUM(first_year_value),0) AS value " +
+    "FROM quotes WHERE COALESCE(status,'P') IN ('P','I') GROUP BY bucket").all());
+  if (ag) out.aging = ag.results || [];
+
+  return jsonResp(out);
 }
 
 // ─── The broker dashboard page (F-6) ───────────────────────────────────────────
@@ -2946,7 +3122,7 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
   <h1>ABY admin</h1>
   <nav>
     <a href="/admin" class="here">Quote log</a>
-    <a href="/admin/brokers">Brokers &amp; agencies</a>
+    <a href="/admin/brokers">Brokers &amp; Agencies</a>
     <a href="/admin/pipeline">Pipeline</a>
     <a href="/admin/rates">Rates</a>
   </nav>
