@@ -1324,7 +1324,7 @@ function adminPipelineHTML() {
  .note{width:100%;border:1px solid transparent;background:transparent;border-radius:5px;padding:4px 6px;font-size:13px}
  .note:focus{border-color:#c8d2de;background:#fff;outline:none}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline" class="here">Pipeline</a><a href="/admin/rates">Rates</a><a href="/admin/referrals">Referrals</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline" class="here">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates">Rates</a></header>
 <main>
   <div class="card">
     <h2>Add prospects</h2>
@@ -1581,7 +1581,7 @@ function adminBrokersHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers" class="here">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a><a href="/admin/referrals">Referrals</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers" class="here">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates">Rates</a></header>
 <main>
   <div class="filters">
     <span class="muted" style="font-size:13px">Show:</span>
@@ -1825,7 +1825,7 @@ function adminReferralsHTML() {
  .pbody{padding:12px 16px}
  .warn{margin:0 0 14px;padding:10px 14px;border-radius:7px;background:#fdf1e0;border:1px solid #f0d9ae;color:#7a5410;font-size:13px}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a><a href="/admin/referrals" class="here">Referrals</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/referrals" class="here">Referrals</a><a href="/admin/rates">Rates</a></header>
 <main>
   <div id="warn" class="warn" style="display:none"></div>
 
@@ -2019,7 +2019,7 @@ function adminRatesHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates" class="here">Rates</a><a href="/admin/referrals">Referrals</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates" class="here">Rates</a></header>
 <main>
   <div class="filters">
     <span class="muted" style="font-size:13px">State:</span>
@@ -3525,8 +3525,8 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
     <a href="/admin" class="here">Quote log</a>
     <a href="/admin/brokers">Brokers &amp; Agencies</a>
     <a href="/admin/pipeline">Pipeline</a>
-    <a href="/admin/rates">Rates</a>
     <a href="/admin/referrals">Referrals</a>
+    <a href="/admin/rates">Rates</a>
   </nav>
   <button class="logout" onclick="logout()">Log out</button>
 </header>
