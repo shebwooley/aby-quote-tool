@@ -1156,6 +1156,10 @@ function adminPipelineHTML() {
  h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
  table{width:100%;border-collapse:collapse;font-size:14px}
  th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
+ /* Sortable headers. The arrow sits in the label rather than a fixed slot because this table's
+    headers are short and a reserved gap on nine of them reads as a rendering fault. */
+ th.srt{cursor:pointer;user-select:none}
+ th.srt:hover{color:#143c73;background:#eef2f7}
  td{padding:7px 6px;border-bottom:1px solid #eef2f6} .muted{color:#8a97a8}
  .n{text-align:right;font-variant-numeric:tabular-nums}
  .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
@@ -1291,6 +1295,43 @@ function adminPipelineHTML() {
    if(r.ok){['qEmployer','qAgency','qProducts','qValue','qHeads'].forEach(function(i){document.getElementById(i).value=''}); load();}
  };
  ['fRep','fStatus','fPri'].forEach(function(id){document.getElementById(id).onchange=load});
+
+ // Sorting for "Everyone we track". Eric asked for it on the quote log -- "Why can't we sort by
+ // agent name or agency name?" -- and this is the page that IS the list of agents and agencies,
+ // so the same want applies with more force.
+ // ⭐ The rows are HELD rather than re-fetched on each sort. Re-querying the server to reorder rows
+ // already on screen is slow, and it can quietly return a DIFFERENT set if anything changed in
+ // between -- so the list would appear to sort and also silently gain or lose a row.
+ var PEOPLE=[], sortKey='agency', sortDir=1;
+ var SORTV={
+   agency:function(x){return String(x.agency_name||'').toLowerCase()},
+   agent:function(x){return String(x.name||'').toLowerCase()},
+   email:function(x){return String(x.email||'').toLowerCase()},
+   status:function(x){return String(x.status||'')},
+   quotes:function(x){return Number(x.quote_count||0)},
+   last:function(x){return String(x.last_quote||'')},
+   priority:function(x){return String(x.priority||'')}
+ };
+ function sortPeople(list){
+   var g=SORTV[sortKey]||SORTV.agency;
+   return list.slice().sort(function(a,b){
+     var x=g(a), y=g(b);
+     // ⚠️ BLANKS SINK IN BOTH DIRECTIONS. A prospect with no agency name is not "first
+     // alphabetically", it is unknown -- and floating the unnamed to the top of every ascending
+     // sort buries the rows somebody is actually looking for. Same rule as the quote log.
+     var xe=(x===''||x===null||x===undefined), ye=(y===''||y===null||y===undefined);
+     if(xe&&!ye) return 1;
+     if(!xe&&ye) return -1;
+     if(x<y) return -1*sortDir;
+     if(x>y) return 1*sortDir;
+     return 0;
+   });
+ }
+ function arrow(k){ return sortKey===k ? (sortDir===1?' ▲':' ▼') : ''; }
+ function hcell(k,label,cls){
+   return '<th class="srt'+(cls?' '+cls:'')+'" data-k="'+k+'">'+label+arrow(k)+'</th>';
+ }
+
  async function load(){
    var q=[];
    if(document.getElementById('fRep').value) q.push('rep='+document.getElementById('fRep').value);
@@ -1308,8 +1349,21 @@ function adminPipelineHTML() {
        ' \u26a0 BenefitLab could not be reached, so "Can quote" shows unknown rather than guessing.';
    document.getElementById('counts').textContent=
      c.producing+' producing \u00b7 '+c.quoting+' quoting \u00b7 '+c.dormant+' dormant \u00b7 '+c.prospect+' prospect';
+   PEOPLE = rows;
+   renderList();
+ }
+
+ function renderList(){
+   var rows = sortPeople(PEOPLE);
    document.getElementById('list').innerHTML = rows.length
-     ? '<table><thead><tr><th>Agency</th><th>Agent</th><th>Email</th><th>Status</th><th class="n">Quotes</th><th>Last quote</th><th>Can quote</th><th>Priority</th><th>Note</th></tr></thead><tbody>'
+     ? '<table><thead><tr>'
+       + hcell('agency','Agency') + hcell('agent','Agent') + hcell('email','Email')
+       + hcell('status','Status') + hcell('quotes','Quotes','n') + hcell('last','Last quote')
+       // ⛔ "Can quote" and "Note" are NOT sortable, deliberately. Can-quote is a live lookup
+       // against BenefitLab that can read "unknown" when it could not be reached, so an order built
+       // on it would change meaning between refreshes; Note is free text nobody scans in order.
+       + '<th>Can quote</th>' + hcell('priority','Priority') + '<th>Note</th>'
+       + '</tr></thead><tbody>'
        + rows.map(function(x){
            return '<tr><td>'+esc(x.agency_name||'\u2014')+'</td><td>'+esc(x.name||'\u2014')+'</td><td>'+esc(x.email)+'</td>'
              +'<td><span class="pill '+x.status+'">'+LBL[x.status]+'</span></td>'
@@ -1319,6 +1373,17 @@ function adminPipelineHTML() {
              +'<td><input class="note" data-id="'+esc(x.id)+'" value="'+esc(x.notes||'')+'" placeholder="\u2026"></td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">Nobody on the list yet. Paste some above.</p>';
+   // ⭐ Clicking the SAME column flips direction; a NEW column starts at its natural direction --
+   // A-Z for a name, and biggest-first for a count or a date, because "who has quoted most" and
+   // "who quoted most recently" are the questions those columns get opened for.
+   Array.prototype.forEach.call(document.querySelectorAll('th.srt'),function(h){
+     h.onclick=function(){
+       var k=h.getAttribute('data-k');
+       if(k===sortKey) sortDir=-sortDir;
+       else { sortKey=k; sortDir=(k==='quotes'||k==='last')?-1:1; }
+       renderList();
+     };
+   });
    Array.prototype.forEach.call(document.querySelectorAll('select.pri'),function(sel){
      sel.onchange=async function(){
        await fetch('/api/admin/rate',{method:'POST',headers:{'Content-Type':'application/json'},
