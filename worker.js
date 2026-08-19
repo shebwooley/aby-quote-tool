@@ -3792,9 +3792,16 @@ document.addEventListener('DOMContentLoaded', function () {
   if (!tb) return;
 
   // A click in an editable cell must NOT toggle the row open or shut.
+  // 🔴 THE THIRD ARGUMENT, TRUE, IS THE WHOLE POINT -- CAPTURE PHASE. This guard sits on the TBODY, but the
+  // handler it is defending against sits on the ROW, which is a DESCENDANT. Bubbling visits the
+  // descendant FIRST, so as a bubble listener this ran only after the row had already toggled and
+  // stopPropagation had nothing left to stop. It read as correct and did nothing for as long as
+  // edit-in-place has existed. Capture visits the tbody before the row, so the event never
+  // reaches the toggle. (Caret placement and focus come from mousedown, not click, so stopping
+  // the click here does not stop you editing.)
   tb.addEventListener('click', function (e) {
     if (e.target.closest('.ip')) e.stopPropagation();
-  });
+  }, true);
 
   tb.addEventListener('keydown', function (e) {
     var el = e.target.closest('.ip');
@@ -4182,7 +4189,13 @@ function render() {
         (q.adjustment ? '<br><span style="font-size:.72rem;color:#b8860b" title="' + esc(q.adjustment_note || "") + '">rate override</span>' : '') +
       '</td>';
 
-    row.addEventListener('click', function(){ toggleDetail(q.id); });
+    row.addEventListener('click', function(e){
+      // Belt and braces: an edit-in-place cell handles its own clicks. The tbody guard
+      // above should already have stopped this, but that guard was silently ineffective
+      // for a long time, so the row declines rather than trusting it.
+      if (e.target.closest('.ip')) return;
+      toggleDetail(q.id);
+    });
     tbody.appendChild(row);
 
     if (isExp) {
