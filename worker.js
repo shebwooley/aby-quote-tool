@@ -2696,7 +2696,16 @@ header .logout:hover{background:rgba(255,255,255,.15);color:white}
 .toolbar input:focus{outline:none;border-color:#1a5c3a}
 .count{color:#888;font-size:.85rem;margin-left:auto;white-space:nowrap}
 main{padding:20px 24px}
-.table-wrap{background:white;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden}
+/* 🔴 overflow-x IS auto, NOT hidden, AND THAT IS THE BUG ERIC REPORTED: "Ran By is off the page -
+   you just see the first letter." With hidden, a table wider than its box is CLIPPED -- silently,
+   with no scrollbar to say so, so the last column simply ceases to exist. Measured: at 820px wide
+   104px of the Ran by column was gone, at 760px 164px.
+   ⭐ THE RULE: a container that can be narrower than its content must SCROLL or REFLOW. Hiding
+   the overflow is only safe when you can prove the content never exceeds the box, and a table
+   sized by broker-typed names can never prove that.
+   (No backticks in this file's page templates -- they end the literal. TRAPS #224.) */
+.table-wrap{background:white;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.08);
+            overflow-x:auto;overflow-y:hidden}
 table{width:100%;border-collapse:collapse}
 thead{background:#f7f9f7}
 th{padding:10px 14px;text-align:left;font-size:.75rem;font-weight:700;color:#555;
@@ -2779,7 +2788,13 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
    answer to "which block am I looking at" is a LINE, and a line costs no vertical room. */
 .detail-actions{margin:0;padding:10px 16px;border-top:1px solid #e4eee8;
                 display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-@media(max-width:680px){
+/* 🔴 RAISED FROM 680px TO 900px, 2026-08-18. Between the old breakpoint and roughly 950px the
+   seven-column table could not fit and was being CLIPPED -- that is where "Ran By is off the page"
+   was happening, and it is not a phone width, it is an ordinary half-screen desktop window.
+   ⭐ The card layout is not a phone concession: below ~900px it is simply the readable one, and it
+   shows every field instead of hiding the last. Above it the table fits; between 900 and the true
+   minimum, overflow-x:auto scrolls rather than clips. Three defences, in that order. */
+@media(max-width:900px){
   header{padding:12px 16px}
   .toolbar{padding:10px 12px}
   .tabs{padding:0 12px}
@@ -3291,9 +3306,13 @@ function render() {
       '<br><span style="font-size:.8rem;color:#888">' +
       inplace('broker_agency', q.broker_agency, '—') + '</span>';
 
-    const chipHtml = products.slice(0,3).map(function(p){
+    // ⭐ TWO chips, not three. Measured 2026-08-18: Products had a 223px floor -- by far the widest
+    // in the table and the reason the whole row could not shrink -- because each chip is nowrap and
+    // "FSA / DCAP / LFSA" is a long one. Dropping to two takes the floor down without losing the
+    // count, since anything beyond is summarised. The full list is in the quote itself.
+    const chipHtml = products.slice(0,2).map(function(p){
       return '<span class="chip" style="white-space:nowrap">' + esc(p) + '</span>';
-    }).join('') + (products.length > 3 ? '<span style="color:#888;font-size:.78rem;white-space:nowrap">+' + (products.length-3) + ' more</span>' : '');
+    }).join('') + (products.length > 2 ? '<span style="color:#888;font-size:.78rem;white-space:nowrap" title="' + esc(products.join(', ')) + '">+' + (products.length-2) + ' more</span>' : '');
 
     row.innerHTML =
       // 🔴 THE QUOTE NUMBER CARRIES *THREE* COLUMNS' WORTH: the state, the commission basis, and
