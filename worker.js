@@ -2568,7 +2568,7 @@ function brokerPageHTML() {
 
     <div class="card" id="inviteCard" style="display:none">
       <h2>Add people</h2>
-      <p class="sub">One per line, as <strong>name, email</strong>. Each person gets an email inviting them to choose a password. People who already have an account are skipped.</p>
+      <p class="sub">One per line, as <strong>name, email</strong> — or just an email address on its own. Each person gets an email inviting them to choose a password. People who already have an account are skipped.</p>
       <textarea id="inviteBox" rows="6" style="width:100%;padding:9px 11px;border:1px solid #c8d2de;border-radius:6px;font:14px monospace" placeholder="Jane Smith, jane@agency.com&#10;Raj Patel, raj@agency.com"></textarea>
       <button class="primary" id="inviteGo">Send invitations</button>
       <div class="msg" id="inviteMsg"></div>
@@ -2629,11 +2629,38 @@ function brokerPageHTML() {
    show($('aMsg'),r.ok?'Saved.':(d.error||'Could not save.'),r.ok?'ok':'err');
  };
  $('inviteGo').onclick=async function(){
-   var people=$('inviteBox').value.split(/\\r?\\n/).map(function(l){
-     var parts=l.split(','); if(parts.length<2) return null;
-     return {name:parts[0].trim(), email:parts[parts.length-1].trim()};
-   }).filter(function(x){return x&&x.email});
-   if(!people.length){show($('inviteMsg'),'Add at least one line as: name, email','err');return}
+   // 🔴🔴 A LINE THAT DID NOT PARSE USED TO VANISH WITHOUT A WORD, AND THE BOX WAS THEN CLEARED.
+   // The old rule was "no comma, no person": a bare email address -- the single most likely thing
+   // to be pasted out of a spreadsheet -- was dropped on the floor. Paste five people with two
+   // bare emails among them and only three were invited, the confirmation counted only those
+   // three without mentioning the other two, and the textarea was wiped, so the evidence went too.
+   // ⭐ THE SERVER ONLY EVER REQUIRED AN EMAIL -- the name is optional there -- so a bare address
+   // is now a perfectly good line, and that person simply arrives without a name.
+   // ⭐ Anything with no at-sign at all BLOCKS THE SEND and is named back. Blocking beats sending
+   // the good ones, because a partial send is the silent failure wearing a friendlier face, and
+   // the box is left untouched so the typo can be fixed in place.
+   // ⚠️ String.fromCharCode rather than a backslash-n regex: this page is a template literal and
+   // it EATS lone backslashes (TRAPS #224).
+   var people=[], unusable=[];
+   $('inviteBox').value.split(String.fromCharCode(10)).forEach(function(raw){
+     var l=raw.split(String.fromCharCode(13)).join('').trim();
+     if(!l) return;
+     var parts=l.split(',');
+     var email=parts[parts.length-1].trim();
+     // Trim each part BEFORE joining, or "Smith, Jane, x@y.com" arrives as "Smith  Jane"
+     // with a double space -- the join happens between already-spaced fragments.
+     var name=(parts.length>1)
+       ? parts.slice(0,-1).map(function(s){return s.trim()}).filter(Boolean).join(' ')
+       : '';
+     if(email.indexOf('@')<0){ unusable.push(l); return; }
+     people.push({name:name, email:email});
+   });
+   if(unusable.length){
+     show($('inviteMsg'),'Nothing was sent. These lines have no email address in them: '
+       +unusable.join(' · ')+'. Fix or remove them and try again.','err');
+     return;
+   }
+   if(!people.length){show($('inviteMsg'),'Add at least one line. A name and email, or just an email.','err');return}
    $('inviteGo').disabled=true;$('inviteGo').textContent='Sending...';
    var r=await fetch('/api/agency/invite',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({people:people})});
    var d=await r.json().catch(function(){return{}});
