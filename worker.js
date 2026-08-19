@@ -53,6 +53,11 @@ export default {
     if (path === '/api/admin/pipeline' && method === 'GET')  return withAuth(request, env, () => handleAdminPipeline(request, env));
     if (path === '/api/admin/prospects' && method === 'POST') return withAuth(request, env, () => handleAdminAddProspects(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
+    // Referral partners (F-referrals, Eric 2026-08-19)
+    if (path === '/api/admin/referrals' && method === 'GET')  return withAuth(request, env, () => handleAdminReferrals(request, env));
+    if (path === '/api/admin/referral-partner' && method === 'POST') return withAuth(request, env, () => handleReferralPartner(request, env));
+    if (path === '/api/admin/referral-contact' && method === 'POST') return withAuth(request, env, () => handleReferralContact(request, env));
+    if (path === '/api/admin/broker-referral'  && method === 'POST') return withAuth(request, env, () => handleBrokerReferral(request, env));
     if (path === '/api/admin/quote'    && method === 'POST') return withAuth(request, env, () => handleAdminAddQuote(request, env));
     if (/^\/api\/quotes\/[^/]+\/note$/.test(path) && method === 'POST') {
       return withAuth(request, env, () => handleQuoteNote(request, path.split('/')[3], env));
@@ -118,6 +123,10 @@ export default {
     }
     if (path === '/admin/brokers') {
       return withAuth(request, env, () => new Response(adminBrokersHTML(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
+    }
+    if (path === '/admin/referrals') {
+      return withAuth(request, env, () => new Response(adminReferralsHTML(), {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
     }
     if (path === '/admin/rates') {
@@ -1123,6 +1132,148 @@ async function handleAdminAddProspects(request, env) {
 }
 
 /** Set a priority or a note on one person or agency. */
+/**
+ * Referral partners, their reps, and what each has actually produced (Eric, 2026-08-19).
+ *
+ * ⭐⭐ IT RETURNS A SCOREBOARD, NOT A LIST. "Show me everyone they referred" is answerable with a
+ * list of names, but the question behind it -- is this relationship worth the effort -- is not.
+ * So each partner and rep carries: referred, how many have QUOTED, how many are PRODUCING, and the
+ * first-year value behind it.
+ * ⭐ The producing/quoting definitions are lifted from the pipeline page rather than reinvented:
+ * producing means a SOLD quote in the last 365 days, quoting means any quote in that window. Two
+ * screens disagreeing about what "producing" means is worse than neither having it.
+ */
+async function handleAdminReferrals(request, env) {
+  const win = "datetime('now','-365 days')";
+  // ⚠️ LEFT JOINs throughout, and the counts come from `quotes` by EMAIL, which is the only link
+  // between a person and their work that exists on every row ever saved.
+  const roll =
+    "SELECT b.id, b.name, b.email, b.agency, b.referred_by_partner AS partner_id, " +
+    "       b.referred_by_contact AS contact_id, b.referred_at, b.referral_kind, " +
+    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email))) AS quotes, " +
+    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) " +
+    "          AND q.created_at >= " + win + ") AS recent, " +
+    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) " +
+    "          AND q.status = 'S' AND q.created_at >= " + win + ") AS sold_recent, " +
+    "       (SELECT COALESCE(SUM(q.first_year_value),0) FROM quotes q " +
+    "          WHERE lower(trim(q.broker_email)) = lower(trim(b.email))) AS value " +
+    "FROM brokers b";
+
+  const out = { partners: [], contacts: [], brokers: [], unavailable: {} };
+  const attempt = async (name, run) => {
+    try { return await run(); }
+    catch (err) { out.unavailable[name] = String(err && err.message || err); return null; }
+  };
+
+  const p = await attempt('partners', () => env.DB.prepare(
+    "SELECT id, name, kind, notes, created_at FROM referral_partners ORDER BY name").all());
+  if (p) out.partners = p.results || [];
+
+  const c = await attempt('contacts', () => env.DB.prepare(
+    "SELECT id, partner_id, name, email, phone, COALESCE(active,1) AS active " +
+    "FROM referral_contacts ORDER BY name").all());
+  if (c) out.contacts = c.results || [];
+
+  const b = await attempt('brokers', () => env.DB.prepare(roll).all());
+  if (b) out.brokers = b.results || [];
+
+  return jsonResp(out);
+}
+
+/** Add or rename a referral partner. */
+async function handleReferralPartner(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const name = String(body.name || '').trim().slice(0, 120);
+  if (!name) return jsonResp({ error: 'A partner needs a name.' }, 400);
+  const kind = String(body.kind || '').trim().slice(0, 60);
+  try {
+    if (body.id) {
+      await env.DB.prepare("UPDATE referral_partners SET name = ?, kind = ?, notes = ? WHERE id = ?")
+        .bind(name, kind || null, String(body.notes || '').slice(0, 4000), String(body.id)).run();
+      return jsonResp({ ok: true, id: String(body.id) });
+    }
+    // ⚠️ A DUPLICATE NAME IS REFUSED RATHER THAN CREATED. The entire reason this is a table and not
+    // a text box is that two spellings of one partner cannot be added up; letting the picker offer
+    // "Emerson Rogers" twice would reintroduce exactly that by the back door.
+    const dupe = await env.DB.prepare(
+      "SELECT id FROM referral_partners WHERE lower(trim(name)) = ?").bind(name.toLowerCase()).first();
+    if (dupe) return jsonResp({ error: 'There is already a partner with that name.' }, 409);
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      "INSERT INTO referral_partners (id, name, kind, notes, created_at) VALUES (?,?,?,?,?)")
+      .bind(id, name, kind || null, String(body.notes || '').slice(0, 4000), new Date().toISOString()).run();
+    return jsonResp({ ok: true, id });
+  } catch (err) {
+    return jsonResp({ error: String(err && err.message || err) }, 500);
+  }
+}
+
+/** Add, edit or retire a rep at a partner. */
+async function handleReferralContact(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const name = String(body.name || '').trim().slice(0, 120);
+  const partnerId = String(body.partnerId || '').trim();
+  try {
+    if (body.id) {
+      // ⭐ RETIRING A REP DEACTIVATES, NEVER DELETES. Brokers they referred still point at them, and
+      // the history of who sent what has to survive somebody changing jobs.
+      await env.DB.prepare(
+        "UPDATE referral_contacts SET name = ?, email = ?, phone = ?, active = ? WHERE id = ?")
+        .bind(name, String(body.email || '').trim().toLowerCase() || null,
+              String(body.phone || '').trim() || null,
+              body.active === false ? 0 : 1, String(body.id)).run();
+      return jsonResp({ ok: true, id: String(body.id) });
+    }
+    if (!name || !partnerId) return jsonResp({ error: 'A rep needs a name and a partner.' }, 400);
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      "INSERT INTO referral_contacts (id, partner_id, name, email, phone, active, created_at) " +
+      "VALUES (?,?,?,?,?,1,?)")
+      .bind(id, partnerId, name, String(body.email || '').trim().toLowerCase() || null,
+            String(body.phone || '').trim() || null, new Date().toISOString()).run();
+    return jsonResp({ ok: true, id });
+  } catch (err) {
+    return jsonResp({ error: String(err && err.message || err) }, 500);
+  }
+}
+
+/**
+ * Record who referred one broker.
+ *
+ * 🔴 THE PARTNER IS DERIVED FROM THE REP, NEVER TAKEN FROM THE CALLER. Accepting both would let a
+ * row claim a rep at one partner and a partner they do not work for -- and that row would look
+ * perfectly fine on every screen while making both totals wrong.
+ */
+async function handleBrokerReferral(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const brokerId = String(body.brokerId || '').trim();
+  if (!brokerId) return jsonResp({ error: 'Which broker?' }, 400);
+  const contactId = String(body.contactId || '').trim();
+  let partnerId = String(body.partnerId || '').trim();
+  try {
+    if (contactId) {
+      const row = await env.DB.prepare(
+        "SELECT partner_id FROM referral_contacts WHERE id = ?").bind(contactId).first();
+      if (!row) return jsonResp({ error: 'That rep no longer exists.' }, 404);
+      partnerId = String(row.partner_id || '');
+    }
+    // ⚠️ `referred_at` is only stamped when it is not already set, so editing a rep years later
+    // does not silently restate WHEN the referral happened.
+    const existing = await env.DB.prepare(
+      "SELECT referred_at FROM brokers WHERE id = ?").bind(brokerId).first();
+    if (!existing) return jsonResp({ error: 'That broker no longer exists.' }, 404);
+    const when = existing.referred_at || (partnerId ? new Date().toISOString() : null);
+    await env.DB.prepare(
+      "UPDATE brokers SET referred_by_partner = ?, referred_by_contact = ?, referral_kind = ?, " +
+      "referred_at = ? WHERE id = ?")
+      .bind(partnerId || null, contactId || null,
+            String(body.kind || (partnerId ? 'referral' : '')).trim() || null, when, brokerId).run();
+    return jsonResp({ ok: true, partnerId: partnerId || null, contactId: contactId || null, referredAt: when });
+  } catch (err) {
+    return jsonResp({ error: String(err && err.message || err) }, 500);
+  }
+}
+
 async function handleAdminRate(request, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
   const table = body.kind === 'agency' ? 'agencies' : 'brokers';
@@ -1173,7 +1324,7 @@ function adminPipelineHTML() {
  .note{width:100%;border:1px solid transparent;background:transparent;border-radius:5px;padding:4px 6px;font-size:13px}
  .note:focus{border-color:#c8d2de;background:#fff;outline:none}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline" class="here">Pipeline</a><a href="/admin/rates">Rates</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline" class="here">Pipeline</a><a href="/admin/rates">Rates</a><a href="/admin/referrals">Referrals</a></header>
 <main>
   <div class="card">
     <h2>Add prospects</h2>
@@ -1430,7 +1581,7 @@ function adminBrokersHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers" class="here">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers" class="here">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a><a href="/admin/referrals">Referrals</a></header>
 <main>
   <div class="filters">
     <span class="muted" style="font-size:13px">Show:</span>
@@ -1641,6 +1792,203 @@ function adminBrokersHTML() {
 
 // The rate viewer. Reads the SAME `pricing.js` the quote tool uses, loaded as a script, so there is
 // no second copy of the rates to drift out of step.
+// The referral partners page (Eric, 2026-08-19).
+//
+// ⭐⭐ IT IS A SCOREBOARD, NOT A DIRECTORY. "Show me everyone they referred" is a list; "is this
+// relationship worth the effort" is the question behind it, and only the second justifies the
+// screen. So every partner and rep carries referred / quoting / producing / first-year value.
+// ⚠️ Producing and quoting mean exactly what they mean on the pipeline page -- a SOLD quote in the
+// last 365 days, and any quote in that window. Two screens disagreeing about "producing" is worse
+// than one of them not having it.
+function adminReferralsHTML() {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Referrals — ABY admin</title>
+<style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
+ header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
+ header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85;padding:4px 8px;border-radius:5px} header a:hover{opacity:1;background:rgba(255,255,255,.14)}
+ header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
+ main{max-width:1100px;margin:0 auto;padding:20px}
+ .card{background:#fff;border:1px solid #e3e9f0;border-radius:9px;padding:16px 18px;margin-bottom:16px}
+ h2{margin:0 0 4px;font-size:15px} .sub{margin:0 0 12px;color:#5b6b7f;font-size:13px}
+ table{width:100%;border-collapse:collapse;font-size:14px}
+ th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
+ td{padding:8px 6px;border-bottom:1px solid #eef2f6}
+ .n{text-align:right} .muted{color:#8a97a8}
+ input,select{padding:6px 8px;border:1px solid #c8d2de;border-radius:6px;font-size:13px}
+ button{padding:6px 12px;border:1px solid #143c73;background:#143c73;color:#fff;border-radius:6px;font-size:13px;cursor:pointer}
+ button.ghost{background:#fff;color:#143c73}
+ .partner{border:1px solid #e3e9f0;border-radius:9px;margin-bottom:14px;background:#fff}
+ .phead{display:flex;align-items:center;gap:14px;padding:12px 16px;border-bottom:1px solid #eef2f6;flex-wrap:wrap}
+ .pname{font-weight:600;font-size:15px}
+ .score{display:flex;gap:14px;margin-left:auto;flex-wrap:wrap;font-size:13px;color:#5b6b7f}
+ .score b{color:#12263f}
+ .pbody{padding:12px 16px}
+ .warn{margin:0 0 14px;padding:10px 14px;border-radius:7px;background:#fdf1e0;border:1px solid #f0d9ae;color:#7a5410;font-size:13px}
+</style></head><body>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a><a href="/admin/referrals" class="here">Referrals</a></header>
+<main>
+  <div id="warn" class="warn" style="display:none"></div>
+
+  <div class="card">
+    <h2>Referral partners</h2>
+    <p class="sub">Who sends brokers to ABY. A general agency, an association, anyone.
+      Add the partner first, then the reps there who actually send the business.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input id="pName" placeholder="Partner name, e.g. Emerson Rogers" style="min-width:260px">
+      <input id="pKind" placeholder="Kind, e.g. general agency" style="min-width:180px">
+      <button onclick="addPartner()">Add partner</button>
+      <span id="pMsg" class="muted" style="align-self:center"></span>
+    </div>
+  </div>
+
+  <div id="partners"></div>
+
+  <div class="card">
+    <h2>Brokers with no referral recorded</h2>
+    <p class="sub">Everyone who came to ABY some other way, or whose referrer has not been set yet.
+      Assign one and they move up into that partner.</p>
+    <div id="unattributed"></div>
+  </div>
+</main>
+<script>
+ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+ function money(v){return v?('$'+Number(v).toLocaleString('en-US',{maximumFractionDigits:0})):'—'}
+ function day(s){return s?String(s).slice(0,10):'—'}
+ var DATA={partners:[],contacts:[],brokers:[]};
+
+ async function load(){
+   var d=await (await fetch('/api/admin/referrals')).json().catch(function(){return{}});
+   DATA=d;
+   var bad=d.unavailable?Object.keys(d.unavailable):[];
+   var w=document.getElementById('warn');
+   if(bad.length){
+     w.style.display='block';
+     w.textContent='Some of this could not be read: '+bad.join(', ')
+       +'. If this is the first time, open /api/migrate while signed in. Details: '+d.unavailable[bad[0]];
+   } else { w.style.display='none'; }
+   paint();
+ }
+
+ // ⭐ The scoreboard is computed from the brokers list rather than asked for separately, so the
+ // totals can never disagree with the rows printed underneath them.
+ function score(rows){
+   return { referred: rows.length,
+            quoting: rows.filter(function(b){return b.recent>0}).length,
+            producing: rows.filter(function(b){return b.sold_recent>0}).length,
+            value: rows.reduce(function(a,b){return a+Number(b.value||0)},0) };
+ }
+
+ function brokerTable(rows){
+   if(!rows.length) return '<p class="muted">Nobody yet.</p>';
+   return '<table><thead><tr><th>Broker</th><th>Agency</th><th>Referred</th>'
+     +'<th class="n">Quotes</th><th class="n">Value</th><th>Rep</th></tr></thead><tbody>'
+     + rows.map(function(b){
+         var reps=DATA.contacts.filter(function(c){return c.partner_id===b.partner_id});
+         var sel='<select onchange="setRef(this)" data-b="'+esc(b.id)+'">'
+           +'<option value="">— rep not known —</option>'
+           + reps.map(function(c){
+               return '<option value="'+esc(c.id)+'"'+(c.id===b.contact_id?' selected':'')+'>'
+                 +esc(c.name)+(c.active?'':' (retired)')+'</option>';
+             }).join('')+'</select>';
+         return '<tr><td>'+esc(b.name||b.email)+'</td><td>'+esc(b.agency||'—')+'</td>'
+           +'<td>'+day(b.referred_at)+'</td><td class="n">'+b.quotes+'</td>'
+           +'<td class="n">'+money(b.value)+'</td><td>'+sel+'</td></tr>';
+       }).join('')+'</tbody></table>';
+ }
+
+ function paint(){
+   var host=document.getElementById('partners');
+   host.innerHTML = DATA.partners.map(function(p){
+     var mine=DATA.brokers.filter(function(b){return b.partner_id===p.id});
+     var s=score(mine);
+     var reps=DATA.contacts.filter(function(c){return c.partner_id===p.id});
+     // Per rep, the same four numbers -- because "thank the reps" is a per-person act.
+     var repRows=reps.map(function(c){
+       var r=DATA.brokers.filter(function(b){return b.contact_id===c.id});
+       var rs=score(r);
+       return '<tr><td>'+esc(c.name)+(c.active?'':' <span class="muted">(retired)</span>')+'</td>'
+         +'<td>'+esc(c.email||'—')+'</td><td class="n">'+rs.referred+'</td>'
+         +'<td class="n">'+rs.quoting+'</td><td class="n">'+rs.producing+'</td>'
+         +'<td class="n">'+money(rs.value)+'</td></tr>';
+     }).join('');
+     return '<div class="partner"><div class="phead">'
+       +'<span class="pname">'+esc(p.name)+'</span>'
+       +(p.kind?'<span class="muted">'+esc(p.kind)+'</span>':'')
+       +'<span class="score"><span>referred <b>'+s.referred+'</b></span>'
+       +'<span>quoting <b>'+s.quoting+'</b></span>'
+       +'<span>producing <b>'+s.producing+'</b></span>'
+       +'<span>value <b>'+money(s.value)+'</b></span></span></div>'
+       +'<div class="pbody">'
+       +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">'
+       +'<input placeholder="Rep name" data-p="'+esc(p.id)+'" class="rn" style="min-width:180px">'
+       +'<input placeholder="Email" data-p="'+esc(p.id)+'" class="re" style="min-width:200px">'
+       +'<button class="ghost" onclick="addContact(this)" data-p="'+esc(p.id)+'">Add rep</button></div>'
+       +(reps.length
+          ? '<table><thead><tr><th>Rep</th><th>Email</th><th class="n">Referred</th>'
+            +'<th class="n">Quoting</th><th class="n">Producing</th><th class="n">Value</th></tr></thead><tbody>'
+            +repRows+'</tbody></table>'
+          : '<p class="muted">No reps yet.</p>')
+       +'<h2 style="margin-top:14px">Brokers referred</h2>'+brokerTable(mine)
+       +'</div></div>';
+   }).join('') || '<div class="card"><p class="muted">No partners yet. Add one above.</p></div>';
+
+   var none=DATA.brokers.filter(function(b){return !b.partner_id});
+   document.getElementById('unattributed').innerHTML = none.length
+     ? '<table><thead><tr><th>Broker</th><th>Agency</th><th class="n">Quotes</th><th>Assign to</th></tr></thead><tbody>'
+       + none.map(function(b){
+           var opts=DATA.partners.map(function(p){
+             var reps=DATA.contacts.filter(function(c){return c.partner_id===p.id});
+             return reps.length
+               ? reps.map(function(c){return '<option value="c:'+esc(c.id)+'">'+esc(p.name)+' — '+esc(c.name)+'</option>'}).join('')
+                 +'<option value="p:'+esc(p.id)+'">'+esc(p.name)+' — rep not known</option>'
+               : '<option value="p:'+esc(p.id)+'">'+esc(p.name)+' — rep not known</option>';
+           }).join('');
+           return '<tr><td>'+esc(b.name||b.email)+'</td><td>'+esc(b.agency||'—')+'</td>'
+             +'<td class="n">'+b.quotes+'</td>'
+             +'<td><select onchange="setRef(this)" data-b="'+esc(b.id)+'">'
+             +'<option value="">— not referred —</option>'+opts+'</select></td></tr>';
+         }).join('')+'</tbody></table>'
+     : '<p class="muted">Everyone has a referrer recorded.</p>';
+ }
+
+ async function addPartner(){
+   var name=document.getElementById('pName').value.trim();
+   var kind=document.getElementById('pKind').value.trim();
+   var m=document.getElementById('pMsg');
+   if(!name){ m.textContent='Name it first.'; return; }
+   m.textContent='Saving…';
+   var r=await fetch('/api/admin/referral-partner',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({name:name,kind:kind})});
+   var d=await r.json().catch(function(){return{}});
+   m.textContent = r.ok ? 'Added' : (d.error||'Could not add it');
+   if(r.ok){ document.getElementById('pName').value=''; document.getElementById('pKind').value=''; load(); }
+ }
+
+ async function addContact(btn){
+   var pid=btn.getAttribute('data-p');
+   var name=document.querySelector('input.rn[data-p="'+pid+'"]').value.trim();
+   var email=document.querySelector('input.re[data-p="'+pid+'"]').value.trim();
+   if(!name) return;
+   var r=await fetch('/api/admin/referral-contact',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({partnerId:pid,name:name,email:email})});
+   if(r.ok) load();
+ }
+
+ // ⚠️ The value carries WHICH KIND of assignment it is -- a rep or a partner-only -- so the server
+ // is never asked to guess, and a partner is always derived from the rep when there is one.
+ async function setRef(sel){
+   var v=sel.value, body={brokerId:sel.getAttribute('data-b')};
+   if(v.indexOf('c:')===0) body.contactId=v.slice(2);
+   else if(v.indexOf('p:')===0) body.partnerId=v.slice(2);
+   var r=await fetch('/api/admin/broker-referral',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify(body)});
+   if(r.ok) load();
+ }
+
+ load();
+</script></body></html>`;
+}
+
 function adminRatesHTML() {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Rates — ABY admin</title>
@@ -1671,7 +2019,7 @@ function adminRatesHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates" class="here">Rates</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates" class="here">Rates</a><a href="/admin/referrals">Referrals</a></header>
 <main>
   <div class="filters">
     <span class="muted" style="font-size:13px">State:</span>
@@ -2810,6 +3158,59 @@ const MIGRATIONS = [
   // -- what they asked for, what they objected to, when to chase. An agency-level note would blur
   // six conversations into one box.
   { sql: "ALTER TABLE quotes ADD COLUMN notes TEXT", table: "quotes", column: "notes" },
+
+  // ── Referral partners (Eric, 2026-08-19) ────────────────────────────────────────────────────
+  //
+  // Eric: "Currently Emerson Rogers refers brokers to us. Different reps there refer to us. I'd
+  // like to track that so we can take care of those brokers and thank the reps." And: "Emerson
+  // Rogers is a general agency. They don't write anything direct. There will be others like that."
+  //
+  // ⭐⭐ TWO TABLES, NOT A `source` TEXT BOX, AND THAT IS THE WHOLE DESIGN. A partner and the REP at
+  // that partner are two facts. One free-text field would hold "Emerson Rogers", "Emerson",
+  // "emerson rogers" and "Emerson Rogers - Dana" within a month, and then neither a partner total
+  // nor a rep thank-you is possible. This project has paid for that lesson three times: "Baldwin
+  // Grouup" in the 2026 import, 118 carrier strings for ~97 real companies, and broker emails that
+  // split one person's book until they were normalised.
+  //
+  // ⭐ PARTNERS ARE THEIR OWN TABLE, NOT ROWS IN `agencies` -- and Eric's answer is why, rather than
+  // my preference: a general agency writes nothing direct, so it can never be an agency that quotes
+  // here. A referral relationship and a quoting relationship are different things that merely share
+  // the word "agency".
+  { sql: "CREATE TABLE IF NOT EXISTS referral_partners (" +
+         "  id TEXT PRIMARY KEY," +
+         "  name TEXT NOT NULL," +
+         "  kind TEXT," +
+         "  notes TEXT," +
+         "  created_at TEXT)",
+    table: "referral_partners", column: "name" },
+
+  // The people at a partner who actually send business. ⭐ THE REP IS THE POINT: a general agency's
+  // reps each hold their own book of retail brokers and choose where to place them, so "thank the
+  // reps" is the relationship being maintained, and a partner-level total cannot express it.
+  { sql: "CREATE TABLE IF NOT EXISTS referral_contacts (" +
+         "  id TEXT PRIMARY KEY," +
+         "  partner_id TEXT NOT NULL," +
+         "  name TEXT NOT NULL," +
+         "  email TEXT, phone TEXT," +
+         "  active INTEGER DEFAULT 1," +
+         "  created_at TEXT)",
+    table: "referral_contacts", column: "partner_id" },
+
+  // ⭐ THE BROKER POINTS AT THE CONTACT, WHICH IMPLIES THE PARTNER -- one link, so a row can never
+  // claim a partner and a rep who works somewhere else. The partner is stored alongside for the
+  // case where the partner is known and the rep is not.
+  // ⚠️ ATTRIBUTION IS PERMANENT, NOT A LIVE POINTER. Dana referred that broker in March; that stays
+  // true after Dana leaves, which is why a rep is deactivated rather than deleted.
+  { sql: "ALTER TABLE brokers ADD COLUMN referred_by_partner TEXT", table: "brokers", column: "referred_by_partner" },
+  { sql: "ALTER TABLE brokers ADD COLUMN referred_by_contact TEXT", table: "brokers", column: "referred_by_contact" },
+  // ⚠️ NOT CALLED `source`. `source_tag` already exists on `quotes` and means "which shared link did
+  // this quote arrive on" -- a different question, and two things called source would be confused
+  // in every future conversation.
+  { sql: "ALTER TABLE brokers ADD COLUMN referral_kind TEXT", table: "brokers", column: "referral_kind" },
+  // ⏳ The date is what makes the two real questions answerable: "thank the reps" is time-sensitive,
+  // and "is this partner worth the effort" is a quarterly question. Without it the only available
+  // answer is "ever".
+  { sql: "ALTER TABLE brokers ADD COLUMN referred_at TEXT", table: "brokers", column: "referred_at" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column
@@ -3125,6 +3526,7 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
     <a href="/admin/brokers">Brokers &amp; Agencies</a>
     <a href="/admin/pipeline">Pipeline</a>
     <a href="/admin/rates">Rates</a>
+    <a href="/admin/referrals">Referrals</a>
   </nav>
   <button class="logout" onclick="logout()">Log out</button>
 </header>
