@@ -927,7 +927,12 @@ async function handleAdminAddQuote(request, env) {
   // Legible and unique. `MAN` marks the origin in the number itself, so it is obvious in a list
   // even before anybody looks at a column.
   const key = employer.replace(/[^A-Za-z0-9]/g, '').slice(0, 14).toUpperCase() || 'UNKNOWN';
-  const quoteNumber = `MAN-${key}-${when.replace(/-/g, '').slice(2)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  // ⭐ THE SAME SHAPE AS A REAL QUOTE NUMBER -- STATE + YYMMDD - block - C/NC. Eric on the imported
+  // format: "I absolutely hate the quote number format... Can we not follow the same format as new
+  // quotes? Maybe add something to represent Manual." The block carries M instead of four digits,
+  // so origin is visible in the number without breaking the shape everything else reads.
+  const seq = String(Math.floor(Math.random() * 900) + 100);
+  const quoteNumber = `TX${when.replace(/-/g, '').slice(2)}-M${seq}-${body.commissionIncluded ? 'C' : 'NC'}`;
 
   try {
     await env.DB.prepare(
@@ -2972,7 +2977,7 @@ function detailHTML(q, products) {
       // Eric, 2026-08-18: somewhere to put what an agent said on the phone. Full width, because a
       // note squeezed into a detail-item column is a note nobody writes.
       '<div class="detail-item" style="grid-column:1/-1"><label>Notes</label>' +
-        '<textarea id="qnote-' + esc(q.id) + '" rows="2" placeholder="What did they say? What do we owe them?" ' +
+        '<textarea id="qnote-' + esc(q.id) + '" rows="2" ' +
           'style="width:100%;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px;font:13px inherit;resize:vertical">' +
           esc(q.notes || '') + '</textarea>' +
         '<div style="margin-top:6px;display:flex;align-items:center;gap:10px">' +
