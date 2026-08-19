@@ -1,0 +1,33 @@
+#!/bin/sh
+# Refuse a commit that breaks a page the worker emits.
+#
+# 🔴 WHY THIS EXISTS: every admin page in worker.js is built from a TEMPLATE LITERAL, and two
+# ordinary-looking edits silently destroy one:
+#   * a BACKTICK anywhere inside it -- including in a // comment -- ends the literal early;
+#   * a lone BACKSLASH is eaten, so \d and \s reach the browser as the bare letters d and s.
+# Both leave worker.js as VALID JavaScript, so `node --check` passes and the page is broken. That
+# trap landed six times in a single day on 2026-08-19, every time because the page check was a
+# separate command somebody had to remember.
+#
+# ⭐ A rule with no checker is a preference; a checker you have to remember to run is a preference
+# with extra steps. This makes it automatic.
+#
+# Enable it once per clone:   git config core.hooksPath .githooks
+# Bypass in a genuine emergency:   git commit --no-verify
+
+if git diff --cached --name-only | grep -q '^worker\.js$'; then
+  echo "worker.js changed - checking every page it emits..."
+
+  if ! node --check worker.js; then
+    echo "worker.js is not valid JavaScript. Commit refused."
+    exit 1
+  fi
+
+  if ! node scripts/check_worker_pages.mjs; then
+    echo ""
+    echo "A page the worker emits is broken. Commit refused."
+    echo "Almost always a backtick inside a template literal, or a lone backslash in a regex."
+    echo "Run: node scripts/check_worker_pages.mjs"
+    exit 1
+  fi
+fi
