@@ -57,6 +57,10 @@ export default {
     if (/^\/api\/quotes\/[^/]+\/note$/.test(path) && method === 'POST') {
       return withAuth(request, env, () => handleQuoteNote(request, path.split('/')[3], env));
     }
+    // Correcting the employer / broker details on a saved quote. Admin only, same as the note.
+    if (/^\/api\/quotes\/[^/]+\/edit$/.test(path) && method === 'POST') {
+      return withAuth(request, env, () => handleQuoteEdit(request, path.split('/')[3], env));
+    }
     // The broker's own page. Public by design -- it IS the sign-in screen; everything behind it
     // is gated per request by the `aby_broker` cookie, not by hiding this route.
     if (path === '/broker/set-password') {
@@ -870,6 +874,58 @@ async function sendCommitmentEmail(env, c) {
     });
     if (!res.ok) console.error('commitment email failed:', res.status, await res.text());
   } catch (err) { console.error('commitment email threw:', err); }
+}
+
+/**
+ * Correct the identity fields on one quote. Admin only.
+ *
+ * Eric, 2026-08-18: "I thought you told me we would be able to edit the rows in the ABY admin
+ * (like add a broker name or correct an employer name). That doesn't appear to be the case."
+ * ⛔ HE WAS RIGHT -- only status and notes were writable. Everything else on a quote row was
+ * whatever was typed when it was saved, permanently.
+ *
+ * 🔴 IT IS NEEDED MOST EXACTLY WHERE THE DATA IS WORST: the 2026 import brought in 321 rows, of
+ * which 41 have NO employer name ("(not stated)") and one agency is spelled "Baldwin Grouup".
+ * Those were imported as-is on purpose -- but "imported as-is" is only defensible if there is a
+ * way to fix them afterwards, and there was not.
+ *
+ * ⭐ THE FIELD LIST IS A WHITELIST, NOT A LOOP OVER THE BODY. A generic "update whatever was
+ * sent" would let this endpoint write `status`, `first_year_value`, `source_tag` or `client_id`
+ * -- fields that other code DERIVES and that a person editing a name must not be able to reach.
+ */
+const QUOTE_EDITABLE = ['client_name', 'broker_name', 'broker_agency', 'broker_email', 'broker_phone'];
+
+async function handleQuoteEdit(request, id, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+
+  const sets = [], vals = [];
+  for (const col of QUOTE_EDITABLE) {
+    if (!(col in body)) continue;                       // absent means "leave it", never "clear it"
+    let v = String(body[col] == null ? '' : body[col]).trim().slice(0, 200);
+    // 🔴 EMAIL IS THE JOIN KEY, so it is normalised here the same way every other write, lookup
+    // and join in this file normalises it. A broker's book is assembled by
+    // lower(trim(broker_email)); one row saved as "Jane@Agency.com " and the next as
+    // "jane@agency.com" splits one person in half with nothing in any log.
+    if (col === 'broker_email') v = v.toLowerCase();
+    sets.push(col + ' = ?');
+    vals.push(v);
+  }
+  if (!sets.length) return jsonResp({ error: 'Nothing to change.' }, 400);
+
+  try {
+    vals.push(id);
+    await env.DB.prepare('UPDATE quotes SET ' + sets.join(', ') + ' WHERE id = ?').bind(...vals).run();
+    // ⚠️ Read it BACK and return it. An UPDATE that matched nothing reports success (TRAPS #95),
+    // and the screen re-renders from what this returns, so a silent no-op would leave the edited
+    // value sitting on screen looking saved.
+    const back = await env.DB.prepare(
+      'SELECT client_name, broker_name, broker_agency, broker_email FROM quotes WHERE id = ?'
+    ).bind(id).first();
+    if (!back) return jsonResp({ error: 'That quote no longer exists.' }, 404);
+    return jsonResp({ ok: true, quote: back });
+  } catch (err) {
+    return jsonResp({ error: String(err && err.message || err) }, 500);
+  }
 }
 
 /** Save a note against one quote. Admin only, like everything else on that screen. */
@@ -2645,6 +2701,19 @@ table{width:100%;border-collapse:collapse}
 thead{background:#f7f9f7}
 th{padding:10px 14px;text-align:left;font-size:.75rem;font-weight:700;color:#555;
    text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;border-bottom:1px solid #e8e8e8}
+/* Sortable headers. ⭐ The arrow is rendered in a fixed-width slot that is ALWAYS present, so the
+   header row does not reflow by a few pixels when the sort column changes -- a wobble on click
+   reads as the table having jumped to different data. */
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{background:#eef4ef;color:#1a5c3a}
+th .arr{display:inline-block;width:.85em;text-align:center;color:#b6c4bb;font-size:.7rem}
+th.sorted{color:#1a5c3a}
+th.sorted .arr{color:#1a5c3a}
+/* Eric: "the pill for ABY and Direct Link look weird." They were solid saturated blocks with white
+   text, which reads as a STATUS badge -- the loudest thing in a row whose subject is the client.
+   Tinted background, dark text, and no shouting. */
+.origin{display:inline-block;padding:2px 8px;border-radius:5px;font-size:.72rem;font-weight:600;
+        letter-spacing:.01em;white-space:nowrap;border:1px solid transparent}
 td{padding:11px 14px;font-size:.875rem;border-top:1px solid #f0f0f0;vertical-align:middle}
 tbody tr.data-row{cursor:pointer;transition:background .1s}
 tbody tr.data-row:hover td{background:#f6fbf7}
@@ -2656,12 +2725,27 @@ tbody tr.data-row.expanded td{background:#f0f8f2;border-top-color:#d4ead9}
 .date-main{font-size:.875rem}
 .date-time{font-size:.78rem;color:#999}
 .muted{color:#aaa;font-style:italic}
-tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;border-bottom:2px solid #d4ead9}
-.detail-inner{max-width:700px}
-.detail-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:16px}
-.detail-item label{display:block;font-size:.72rem;font-weight:700;color:#888;
-                    text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px}
-.detail-item span{font-size:.875rem;color:#1a1a1a}
+tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px solid #d4ead9}
+.detail-inner{max-width:none}
+/* Eric, 2026-08-18: "some lines separating the info or some boxes... we don't need so much space
+   between the sections. In fact, I think link could be on the same line too."
+   ⭐ A FIXED 4-UP GRID, NOT auto-fill. The old repeat(auto-fill,minmax(180px,1fr)) inside a 700px
+   box resolved to THREE tracks -- which is the entire reason Broker Email sat on the line BELOW
+   Broker Phone. Nobody chose that; the track count did. Four fixed columns put quote number,
+   effective date, phone and email on one row, with link source beside them on the next. */
+.detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;
+             border-bottom:1px solid #dfeae2}
+.detail-item{padding:9px 16px;border-left:1px solid #e4eee8;min-width:0}
+.detail-item:first-child{border-left:none}
+/* The placeholder cell that keeps the grid four wide when there is no link source: it holds the
+   shape without drawing a divider against empty space. */
+.detail-item:empty{border-left-color:transparent}
+.detail-item label{display:block;font-size:.68rem;font-weight:700;color:#8a9a90;
+                    text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px}
+.detail-item span{font-size:.875rem;color:#1a1a1a;word-break:break-word}
+.detail-notes{padding:10px 16px}
+.detail-notes label{display:block;font-size:.68rem;font-weight:700;color:#8a9a90;
+                    text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
 .chip{background:#e8f5ee;color:#1a6640;border-radius:4px;padding:2px 8px;font-size:.8rem;font-weight:600}
 .empty-row td{text-align:center;padding:60px;color:#aaa;font-style:italic}
 .c-row:hover td{background:#f9fafb}
@@ -2676,7 +2760,10 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 .tab-count{font-size:.75rem;background:#e8f5ee;color:#1a6640;border-radius:99px;
            padding:1px 7px;margin-left:5px;font-weight:700;display:inline-block}
 .tab.active .tab-count{background:#1a5c3a;color:white}
-.detail-actions{margin-top:.85rem;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+/* A separator instead of a gap. Eric: "we don't need so much space between the sections" -- the
+   answer to "which block am I looking at" is a LINE, and a line costs no vertical room. */
+.detail-actions{margin:0;padding:10px 16px;border-top:1px solid #e4eee8;
+                display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 @media(max-width:680px){
   header{padding:12px 16px}
   .toolbar{padding:10px 12px}
@@ -2686,26 +2773,35 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
   .table-wrap{background:transparent;box-shadow:none;overflow:visible}
   table,tbody{display:block;width:100%}
   thead,colgroup{display:none}
+  /* ⚠️ REMAPPED for the new column order (Date · Quote # · Client · Broker · Rep · Products ·
+     Ran by). These rules address cells by POSITION, so adding the quote-number column silently
+     moved every one of them by one -- Client would have rendered with the Broker row's styling
+     and Ran by, which had no rule at all, would have landed wherever the grid put it.
+     ⭐ A position-addressed stylesheet is a CONSUMER of the column order. */
   tr.data-row{display:grid;grid-template-columns:1fr auto;
-              grid-template-rows:auto auto auto auto;
+              grid-template-rows:auto auto auto auto auto auto;
               background:white;border-radius:8px;margin-bottom:8px;
               padding:12px 14px;box-shadow:0 1px 3px rgba(0,0,0,.08);
               cursor:pointer;gap:1px 8px;border:1px solid #eaeaea}
   tr.data-row:hover td{background:transparent}
   tr.data-row.expanded{border-radius:8px 8px 0 0;border-bottom-color:transparent}
   tr.data-row td{display:block;border:none;padding:0;background:transparent !important}
-  tr.data-row td:nth-child(1){grid-column:1;grid-row:1;font-size:.72rem;color:#999}
-  tr.data-row td:nth-child(2){grid-column:1;grid-row:2;font-weight:600;font-size:.95rem}
-  tr.data-row td:nth-child(3){grid-column:1;grid-row:3;font-size:.8rem;color:#666}
-  tr.data-row td:nth-child(4){grid-column:1;grid-row:4;font-size:.78rem;color:#666}
-  tr.data-row td:nth-child(5){grid-column:1/-1;grid-row:5;margin-top:6px}
-  tr.data-row td:nth-child(6){grid-column:2;grid-row:1/-1;display:flex;align-items:center;justify-content:center}
+  tr.data-row td:nth-child(1){grid-column:1;grid-row:1;font-size:.72rem;color:#999}      /* Date */
+  tr.data-row td:nth-child(2){grid-column:1;grid-row:4;font-size:.78rem}                 /* Quote # */
+  tr.data-row td:nth-child(3){grid-column:1;grid-row:2;font-weight:600;font-size:.95rem} /* Client */
+  tr.data-row td:nth-child(4){grid-column:1;grid-row:3;font-size:.8rem;color:#666}       /* Broker */
+  tr.data-row td:nth-child(5){grid-column:1;grid-row:5;font-size:.78rem;color:#666}      /* Rep */
+  tr.data-row td:nth-child(6){grid-column:1/-1;grid-row:6;margin-top:6px}                /* Products */
+  tr.data-row td:nth-child(7){grid-column:2;grid-row:1;display:flex;align-items:center;justify-content:flex-end}
   tr.detail-row{display:block;margin-bottom:12px}
   tr.detail-row td{display:block;border-radius:0 0 8px 8px;padding:14px}
   tr:not(.data-row):not(.detail-row){display:block}
   tr:not(.data-row):not(.detail-row) td{display:block}
   .detail-inner{max-width:100%}
   .detail-grid{grid-template-columns:1fr 1fr}
+  /* On two columns the third cell starts a new row, so its left border would draw a stray
+     vertical line against nothing. */
+  .detail-item:nth-child(odd){border-left:none}
   .detail-actions{flex-direction:column;align-items:stretch}
   .detail-actions a,.detail-actions button{margin-left:0 !important;justify-content:center;text-align:center}
 }
@@ -2719,7 +2815,10 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 <div class="toolbar">
   <input type="text" id="search" placeholder="Search by client, broker, agency, or quote number…">
   <span class="count" id="count"></span>
-  <select id="ranByFilter" style="margin-left:auto;padding:.4rem .5rem;border:1px solid #ddd;border-radius:6px;font-size:.85rem">
+  <select id="repFilter" style="margin-left:auto;padding:.4rem .5rem;border:1px solid #ddd;border-radius:6px;font-size:.85rem">
+    <option value="">All reps</option>
+  </select>
+  <select id="ranByFilter" style="padding:.4rem .5rem;border:1px solid #ddd;border-radius:6px;font-size:.85rem">
     <option value="">All sources</option>
     <option value="ABY">ABY-run</option>
     <option value="dashboard">Broker - dashboard</option>
@@ -2736,18 +2835,29 @@ tr.detail-row td{background:#f5fbf6;padding:16px 20px 20px;border-top:none;borde
 <main>
   <div class="table-wrap">
     <table>
+      <!-- ⚠️ SEVEN cols for seven columns. It declared SIX against a seven-column table, so every
+           width applied to the wrong column and the last was unconstrained. -->
       <colgroup>
-        <col style="width:11%">
+        <col style="width:10%">
+        <col style="width:14%">
         <col style="width:17%">
-        <col style="width:20%">
-        <col style="width:12%">
-        <col style="width:35%">
-        <col style="width:5%">
+        <col style="width:18%">
+        <col style="width:8%">
+        <col style="width:23%">
+        <col style="width:10%">
       </colgroup>
       <thead>
         <tr>
-          <th>Date / Time</th><th>Client</th>
-          <th>Broker / Agency</th><th>Rep</th><th>Products</th><th>Comm</th><th>Ran by</th>
+          <th class="sortable" data-sort="date">Date <span class="arr"></span></th>
+          <th class="sortable" data-sort="quote">Quote # <span class="arr"></span></th>
+          <th class="sortable" data-sort="client">Client <span class="arr"></span></th>
+          <!-- Eric: "Why can't we sort by agent name or agency name?" They are two facts stacked in
+               one cell, so the header offers BOTH keys rather than picking one for him. -->
+          <th class="sortable" data-sort="broker">Broker <span class="arr"></span>
+            <span style="color:#c3ccc6">/</span>
+            <span class="sortable-sub" data-sort="agency" style="cursor:pointer">Agency <span class="arr"></span></span></th>
+          <th class="sortable" data-sort="rep">Rep <span class="arr"></span></th>
+          <th>Products</th><th>Ran by</th>
         </tr>
       </thead>
       <tbody id="tbody">
@@ -2779,10 +2889,58 @@ let quotes = [];
 let expandedId = null;
 let activeTab = 'P';
 let ranByFilter = '';
+let repFilter = '';
 document.addEventListener('DOMContentLoaded', function(){
   var sel = document.getElementById('ranByFilter');
-  if (sel) sel.addEventListener('change', function(){ ranByFilter = sel.value; render(); });
+  if (sel) sel.addEventListener('change', function(){ ranByFilter = sel.value; expandedId = null; render(); });
+  var rep = document.getElementById('repFilter');
+  if (rep) rep.addEventListener('change', function(){ repFilter = rep.value; expandedId = null; render(); });
+
+  // Sorting. Bound on the THEAD once rather than per header, so the two keys that live inside the
+  // Broker / Agency cell work the same way as the plain ones.
+  var head = document.querySelector('thead');
+  if (head) head.addEventListener('click', function(e){
+    var el = e.target.closest('[data-sort]');
+    if (!el) return;
+    var key = el.getAttribute('data-sort');
+    // ⭐ Clicking the SAME key flips direction; a NEW key starts at its natural direction --
+    // newest-first for a date, A-Z for a name. Starting every column descending makes an
+    // alphabetical sort open at Z and read as broken.
+    if (key === sortKey) sortDir = -sortDir;
+    else { sortKey = key; sortDir = (key === 'date') ? -1 : 1; }
+    expandedId = null;
+    render();
+  });
 });
+
+// Fills the rep dropdown from the quotes actually loaded, so it can never offer a rep with no
+// rows -- and never hide one who has some. ⚠️ Keyed on the FULL name; the Rep column shows only
+// the first word, which is display, not identity.
+function syncRepFilter() {
+  var sel = document.getElementById('repFilter');
+  if (!sel) return;
+  var names = [];
+  quotes.forEach(function(q){
+    var n = String(q.rep_name || '').trim();
+    if (n && names.indexOf(n) === -1) names.push(n);
+  });
+  names.sort();
+  if (repFilter && names.indexOf(repFilter) === -1) names.push(repFilter);
+  sel.innerHTML = '<option value="">All reps</option>' + names.map(function(n){
+    return '<option value="' + esc(n) + '"' + (n === repFilter ? ' selected' : '') + '>' + esc(n) + '</option>';
+  }).join('');
+}
+
+// The arrow, and WHICH header carries it. Only the active key is marked, so two sortable keys in
+// one cell cannot both look active.
+function syncSortIndicators() {
+  document.querySelectorAll('[data-sort]').forEach(function(el){
+    var on = el.getAttribute('data-sort') === sortKey;
+    el.classList.toggle('sorted', on);
+    var arr = el.querySelector('.arr');
+    if (arr) arr.textContent = on ? (sortDir === 1 ? '▲' : '▼') : '';
+  });
+}
 
 async function load(q) {
   q = q || '';
@@ -2848,15 +3006,88 @@ function originMatches(q, want) {
   return o === want;
 }
 const ORIGIN_LABEL = { ABY: 'ABY', dashboard: 'Dashboard', direct: 'Direct link' };
-const ORIGIN_COLOR = { ABY: '#205aa6', dashboard: '#1a5c3a', direct: '#777' };
+// Tinted, not solid. Eric: "the pill for ABY and Direct Link look weird."
+// ⭐ Kept as three DISTINCT tints rather than one neutral chip, because the whole point of the
+// three-way origin (L) is that they are different answers -- ABY ran it, a dashboard broker ran
+// it, or somebody came in off the shared link. A single grey chip would throw that away to look tidy.
+const ORIGIN_STYLE = {
+  ABY:       'background:#eaf1fa;color:#1d4f8f;border-color:#cfe0f2',
+  dashboard: 'background:#e9f5ee;color:#1a5c3a;border-color:#cde6d7',
+  direct:    'background:#f1f2f3;color:#5c6469;border-color:#e0e3e5'
+};
+
+// 🔴🔴 THE DATE WAS A DAY OUT ON EVERY IMPORTED AND MANUAL QUOTE, AND THE SCREEN SAID SO IF YOU
+// READ BOTH HALVES: a row showed "Jul 26, 2026  7:00 PM" while its own quote number said TX260727.
+// The import stored a DATE with no time, which becomes midnight UTC, and toLocaleDateString then
+// renders it in Central time -- i.e. 7pm the PREVIOUS DAY. 321 of the rows in this table are that
+// import, so the column disagreed with the quote number on most of the book.
+// ⭐ THE 7:00 PM WAS THE TELL AND IT IS WHY THE TIME GOES: a fabricated timestamp printed to the
+// minute asserts a precision nobody has. Eric: "I don't know why we need the time of the quote."
+// ▶️ THE RULE: a timestamp of exactly midnight UTC is a DATE, so read its parts straight off the
+// string with no timezone conversion. Anything else is a real moment and keeps its local time.
+function createdParts(q) {
+  var raw = String(q.created_at || '');
+  // ⛔⛔ CHARACTER CLASSES, NOT THE BACKSLASH-d SHORTHAND. This page is built inside a template
+  // literal, which EATS the backslash: the shorthand arrives in the browser as a bare letter d,
+  // the pattern matches nothing, every date falls through to local-time conversion, and the bug
+  // this function exists to fix comes straight back. It parses either way, so
+  // check_worker_pages.mjs stays green -- it proves the script PARSES, not that it WORKS.
+  // 🔴 That is exactly what happened on the first draft, and only rendering the page caught it.
+  // TRAPS #220.
+  var m = raw.match(/^([0-9]{4})-([0-9]{2})-([0-9]{2})(?:[T ]([0-9]{2}):([0-9]{2}))?/);
+  var dateOnly = !m || !m[4] || (m[4] === '00' && m[5] === '00');
+  if (m && dateOnly) {
+    var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return { date: MON[+m[2] - 1] + ' ' + (+m[3]) + ', ' + m[1], time: '' };
+  }
+  var dt = new Date(raw);
+  if (isNaN(dt.getTime())) return { date: raw.slice(0, 10) || '—', time: '' };
+  return {
+    date: dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+    time: dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  };
+}
+
+// Sorting. ⭐ The comparators read the SAME values the cells render, so what you see is what you
+// sorted -- a sort keyed on a raw field while the cell shows a formatted one is how a table comes
+// to look wrongly ordered to the person reading it.
+var sortKey = 'date', sortDir = -1;
+const SORT_VALUE = {
+  date:    function(q){ return String(q.created_at || ''); },
+  quote:   function(q){ return String(q.quote_number || '').toLowerCase(); },
+  client:  function(q){ return String(q.client_name || '').toLowerCase(); },
+  broker:  function(q){ return String(q.broker_name || '').toLowerCase(); },
+  agency:  function(q){ return String(q.broker_agency || '').toLowerCase(); },
+  rep:     function(q){ return String(q.rep_name || '').toLowerCase(); }
+};
+function sortQuotes(list) {
+  var get = SORT_VALUE[sortKey] || SORT_VALUE.date;
+  return list.slice().sort(function(a, b) {
+    var x = get(a), y = get(b);
+    // ⚠️ BLANKS SINK, in BOTH directions. A quote with no agency is not "first alphabetically";
+    // it is unknown, and floating 41 unnamed employers to the top of every ascending sort would
+    // bury the rows somebody is actually looking for.
+    if (!x && y) return 1;
+    if (x && !y) return -1;
+    if (x < y) return -1 * sortDir;
+    if (x > y) return 1 * sortDir;
+    return 0;
+  });
+}
 
 function render() {
   const tbody = document.getElementById('tbody');
-  const filtered = quotes.filter(function(q){
+  syncRepFilter();
+  syncSortIndicators();
+  const filtered = sortQuotes(quotes.filter(function(q){
     if ((q.status || 'P') !== activeTab) return false;
     if (ranByFilter && !originMatches(q, ranByFilter)) return false;
+    // Eric, 2026-08-18: "Or filter based on rep." Matched on the WHOLE stored name, never the
+    // first word the Rep column happens to display -- two reps called Chris would otherwise
+    // silently share a filter.
+    if (repFilter && String(q.rep_name || '') !== repFilter) return false;
     return true;
-  });
+  }));
 
   ['P','S','D'].forEach(function(s) {
     var btn = document.querySelector('.tab[data-status="' + s + '"]');
@@ -2887,11 +3118,8 @@ function render() {
   }
   tbody.innerHTML = '';
   for (const q of filtered) {
-    const isC      = !(q.quote_number || '').endsWith('-NC');
     const products = parseProducts(q.products);
-    const dt       = new Date(q.created_at);
-    const dateStr  = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    const timeStr  = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const when     = createdParts(q);
     const isExp    = expandedId === q.id;
 
     const row = document.createElement('tr');
@@ -2906,20 +3134,27 @@ function render() {
     }).join('') + (products.length > 3 ? '<span style="color:#888;font-size:.78rem;white-space:nowrap">+' + (products.length-3) + ' more</span>' : '');
 
     row.innerHTML =
-      '<td><div class="date-main">' + dateStr + '</div><div class="date-time">' + timeStr + '</div></td>' +
+      // ⭐ The time is gone from the cell and kept in the tooltip: it is real on a quote somebody
+      // ran and fabricated on the 321 imported ones, and the column cannot tell a reader which.
+      '<td><div class="date-main" title="' + esc(String(q.created_at || '')) + '">' + when.date + '</div>' +
+        (when.time ? '<div class="date-time">' + when.time + '</div>' : '') + '</td>' +
+      // 🔴 THE QUOTE NUMBER REPLACES *TWO* COLUMNS, WHICH IS WHY BOTH COULD GO. Eric: "I don't
+      // think we need a commission column since it already has NC" and "we don't really need the
+      // state if it's the beginning of the quote number." Both true -- but the number was only in
+      // the EXPANDED panel, so deleting Comm and State on their own would have deleted the facts
+      // as well. Promoting it here keeps every one of them and costs a column overall.
+      '<td><span class="qnum">' + (esc(q.quote_number) || '<span class="muted">—</span>') + '</span></td>' +
       '<td>' + (esc(q.client_name) || '<span class="muted">—</span>') + '</td>' +
       '<td>' + brokerCell + '</td>' +
       '<td>' + (q.rep_name ? esc(q.rep_name.split(' ')[0]) : '<span class="muted">—</span>') + '</td>' +
       '<td><div style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">' + chipHtml + '</div></td>' +
-      '<td><span class="badge ' + (isC ? 'badge-c' : 'badge-nc') + '">' + (isC ? 'C' : 'NC') + '</span></td>' +
       '<td>' +
         // Three-way origin in the column that already existed, rather than a new column --
         // a new one would need every colspan widened, which is the defect H nearly shipped.
-        '<span class="badge" style="background:' + ORIGIN_COLOR[originOf(q)] + ';color:#fff" title="' +
+        '<span class="origin" style="' + ORIGIN_STYLE[originOf(q)] + '" title="' +
           (originOf(q) === 'dashboard' ? 'Handed over from the BenefitLab dashboard (carries a client id)'
            : originOf(q) === 'direct' ? 'Run on the shared link - broker typed their own details'
-           : 'Run by ABY from the admin') + '">' + ORIGIN_LABEL[originOf(q)] + '</span> ' +
-        '<span style="font-size:.78rem;color:#888">' + esc(q.state || "TX") + '</span>' +
+           : 'Run by ABY from the admin') + '">' + ORIGIN_LABEL[originOf(q)] + '</span>' +
         (q.adjustment ? '<br><span style="font-size:.72rem;color:#b8860b" title="' + esc(q.adjustment_note || "") + '">rate override</span>' : '') +
       '</td>';
 
@@ -2963,27 +3198,56 @@ function detailHTML(q, products) {
   var moveButtons = moveTargets.map(function(s){
     return '<button onclick="event.stopPropagation();moveQuote(this.dataset.id,this.dataset.status)" data-id="' + q.id + '" data-status="' + s + '" style="display:inline-flex;align-items:center;gap:.25rem;padding:.35rem .8rem;background:white;color:#555;border-radius:6px;font-size:.82rem;font-weight:600;border:1px solid #ddd;cursor:pointer">Move to ' + moveLabels[s] + '</button>';
   }).join('');
-  return '<div class="detail-inner">' +
+  // ⭐ The quote number is NOT repeated here any more -- it is now a column in the row directly
+  // above, and a panel that opens by restating the line you clicked wastes its first field.
+  // Effective date, phone, email and link source sit on ONE row of four, which is what Eric asked
+  // for ("link could be on the same line too").
+  // Eric, 2026-08-18: "add a broker name or correct an employer name."
+  // ⭐ ONE editable block, saved by one button, rather than a pencil per field. The rows that need
+  // this most are the imported ones, where the employer name is blank AND the broker name is
+  // whatever the spreadsheet said -- so the realistic action is fixing two or three fields in one
+  // sitting, and three separate save clicks would be three chances to leave it half done.
+  const ed = function(col, label, val, ph) {
+    return '<div class="detail-item"><label>' + label + '</label>' +
+      '<input data-edit="' + col + '" value="' + esc(val || '') + '" placeholder="' + esc(ph || '') + '" ' +
+        'onclick="event.stopPropagation()" ' +
+        'style="width:100%;padding:4px 6px;border:1px solid #d7e3da;border-radius:5px;' +
+        'font:inherit;font-size:.875rem;background:#fff"></div>';
+  };
+  return '<div class="detail-inner" data-qid="' + esc(q.id) + '">' +
     '<div class="detail-grid">' +
-      '<div class="detail-item"><label>Quote #</label><span class="qnum">' + esc(q.quote_number) + '</span></div>' +
+      ed('client_name', 'Employer', q.client_name, 'not stated') +
+      ed('broker_name', 'Broker', q.broker_name, '—') +
+      ed('broker_agency', 'Agency', q.broker_agency, '—') +
+      ed('broker_email', 'Broker email', q.broker_email, '—') +
+      // Phone is broker-TYPED like the four above and is blank on most imported rows, so it
+      // belongs with them rather than in the read-only block. ⚠️ It is NOT a join key -- only
+      // the email is -- which is why it needs no normalising.
+      ed('broker_phone', 'Broker phone', q.broker_phone, '—') +
+    '</div>' +
+    '<div class="detail-grid">' +
       '<div class="detail-item"><label>Effective Date</label><span>' + (esc(q.effective_date) || '—') + '</span></div>' +
-      '<div class="detail-item"><label>Broker Phone</label><span>' + (esc(q.broker_phone) || '—') + '</span></div>' +
-      '<div class="detail-item"><label>Broker Email</label><span>' + (esc(q.broker_email) || '—') + '</span></div>' +
       // F-347. Shown only when there IS one, because a "Source —" line on every quote that ever
       // came in through the plain link is noise on the row a reader is trying to scan.
+      // ⚠️ The cell is still EMITTED when absent, so the four-column grid keeps its shape --
+      // an omitted cell would let Broker Email slide into the last slot and change position
+      // from row to row, which is the same class of problem as the old auto-fill grid.
       (q.source_tag
         ? '<div class="detail-item"><label>Link source</label><span>' + esc(q.source_tag) + '</span></div>'
-        : '') +
-      // Eric, 2026-08-18: somewhere to put what an agent said on the phone. Full width, because a
-      // note squeezed into a detail-item column is a note nobody writes.
-      '<div class="detail-item" style="grid-column:1/-1"><label>Notes</label>' +
-        '<textarea id="qnote-' + esc(q.id) + '" rows="2" ' +
-          'style="width:100%;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px;font:13px inherit;resize:vertical">' +
-          esc(q.notes || '') + '</textarea>' +
-        '<div style="margin-top:6px;display:flex;align-items:center;gap:10px">' +
-          '<button type="button" onclick="event.stopPropagation();saveQuoteNote(this.dataset.id)" data-id="' + esc(q.id) + '" style="padding:.3rem .8rem;border:1px solid #c8d2de;background:#fff;border-radius:6px;cursor:pointer;font-size:.82rem">Save note</button>' +
-          '<span data-note-msg="' + esc(q.id) + '" style="font-size:.8rem;color:#5b6b7f"></span>' +
-        '</div>' +
+        : '<div class="detail-item"></div>') +
+    '</div>' +
+    // Eric, 2026-08-18: somewhere to put what an agent said on the phone. Full width, because a
+    // note squeezed into a detail-item column is a note nobody writes.
+    '<div class="detail-notes"><label>Notes</label>' +
+      '<textarea id="qnote-' + esc(q.id) + '" rows="2" onclick="event.stopPropagation()" ' +
+        'style="width:100%;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px;font:13px inherit;resize:vertical">' +
+        esc(q.notes || '') + '</textarea>' +
+      // ⭐ ONE button for the whole panel, not one per block. There were two saves the moment the
+      // fields became editable, and two saves on one form is how somebody edits a name, saves the
+      // note, and loses the name.
+      '<div style="margin-top:6px;display:flex;align-items:center;gap:10px">' +
+        '<button type="button" onclick="event.stopPropagation();saveQuoteEdits(this.dataset.id)" data-id="' + esc(q.id) + '" style="padding:.3rem .9rem;border:1px solid #b8d9c4;background:#e8f4ec;color:#1a5c3a;font-weight:600;border-radius:6px;cursor:pointer;font-size:.82rem">Save changes</button>' +
+        '<span data-note-msg="' + esc(q.id) + '" style="font-size:.8rem;color:#5b6b7f"></span>' +
       '</div>' +
     '</div>' +
     '<div class="detail-actions">' +
@@ -3059,8 +3323,19 @@ function parseProducts(raw) {
   } catch(e) { return []; }
 }
 
+// ⚠️ THE DOUBLE-QUOTE CHARACTER WAS MISSING AND THIS FUNCTION IS USED INSIDE ATTRIBUTES.
+// The title attribute on the rate-override marker, and the rep dropdown's option value, both
+// put broker-typed text into an attribute, so one double-quote ended the attribute early.
+// Nothing has broken because those values happen to be internal today -- luck, not a guard.
+// ⛔ AND NOTE WHAT THIS COMMENT MAY NOT CONTAIN: A BACKTICK. The whole admin page is built
+// inside a template literal, so a backtick here TERMINATES it -- the emitted page breaks while
+// worker.js itself still passes node --check, because the file stays valid overall.
+// 🔴 Not hypothetical: the first draft of this very comment quoted the attribute using
+// backticks and did exactly that. TRAPS #220, caught by check_worker_pages.mjs on its first
+// run against this page.
 function esc(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 async function logout() {
@@ -3091,6 +3366,73 @@ async function moveQuote(id, status) {
  * throw away anything typed in another open row, and a note is exactly the thing somebody is
  * halfway through writing. It confirms in place instead.
  */
+// Saves the editable identity fields AND the note, in that order.
+// 🔴 THE ORDER IS DELIBERATE AND THE MESSAGE IS HONEST ABOUT A PARTIAL FAILURE. Two requests
+// cannot be made atomic from here, so if the fields save and the note does not, the panel says
+// exactly that rather than "Saved" -- a green confirmation covering a write that did not happen
+// is the failure this whole screen keeps re-learning (save-hook.js swallowing errors, an UPDATE
+// matching no rows). ⭐ The local row is patched from what the SERVER returned, never from what
+// was typed, so a value the database normalised (email is lower-cased) shows as stored.
+async function saveQuoteEdits(id) {
+  var msg  = document.querySelector('[data-note-msg="' + id + '"]');
+  var host = document.querySelector('.detail-inner[data-qid="' + id + '"]');
+  var box  = document.getElementById('qnote-' + id);
+  if (msg) { msg.style.color = '#5b6b7f'; msg.textContent = 'Saving...'; }
+
+  var payload = {};
+  if (host) Array.prototype.forEach.call(host.querySelectorAll('[data-edit]'), function (inp) {
+    payload[inp.getAttribute('data-edit')] = inp.value;
+  });
+
+  var fieldsOk = true, fieldErr = '';
+  if (Object.keys(payload).length) {
+    try {
+      var r = await fetch('/api/quotes/' + id + '/edit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      var dd = await r.json().catch(function () { return {}; });
+      fieldsOk = r.ok;
+      fieldErr = dd.error || 'Could not save the details';
+      if (r.ok && dd.quote) {
+        var local = quotes.filter(function (x) { return x.id === id; })[0];
+        if (local) Object.keys(dd.quote).forEach(function (k) { local[k] = dd.quote[k]; });
+      }
+    } catch (e) { fieldsOk = false; fieldErr = 'Could not save the details'; }
+  }
+
+  var noteOk = true;
+  if (box) {
+    try {
+      var r2 = await fetch('/api/quotes/' + id + '/note', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: box.value })
+      });
+      noteOk = r2.ok;
+      if (r2.ok) {
+        var l2 = quotes.filter(function (x) { return x.id === id; })[0];
+        if (l2) l2.notes = box.value;
+      }
+    } catch (e) { noteOk = false; }
+  }
+
+  var text, colour = '#c0392b';
+  if (fieldsOk && noteOk)       { text = 'Saved'; colour = '#1a5c3a'; }
+  else if (!fieldsOk && noteOk) { text = fieldErr + ' (the note saved)'; }
+  else if (fieldsOk && !noteOk) { text = 'The details saved, the note did not'; }
+  else                          { text = 'Could not save'; }
+
+  // ⚠️ Re-render only on full success. Re-rendering after a partial failure would wipe whatever
+  // is still typed, on the one screen where the user has just been told to try again.
+  // 🔴 AND THE MESSAGE IS WRITTEN *AFTER* THE RE-RENDER, ONTO THE NEW ELEMENT. Setting it first
+  // looked right and showed nothing at all: render() rebuilds the panel, so the confirmation was
+  // being written to a node that was thrown away microseconds later. A save that works but says
+  // nothing reads as a save that failed -- caught by driving the screen, not by reading it.
+  if (fieldsOk && noteOk) render();
+  var live = document.querySelector('[data-note-msg="' + id + '"]');
+  if (live) { live.style.color = colour; live.textContent = text; }
+}
+
 async function saveQuoteNote(id) {
   var box = document.getElementById('qnote-' + id);
   var msg = document.querySelector('[data-note-msg="' + id + '"]');
