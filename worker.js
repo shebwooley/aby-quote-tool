@@ -3458,7 +3458,7 @@ function adminHTML() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ABY Quote Admin</title>
+<title>Quote log — ABY admin</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#f0f4f0;color:#1a1a1a;min-height:100vh}
@@ -4528,6 +4528,17 @@ document.querySelectorAll('.tab').forEach(function(btn) {
 
 var commitmentData = {};
 let commitmentsLoaded = false;
+
+// ⭐ DELEGATED ONCE, ON THE STATIC TBODY -- NOT inside loadCommitments, and NOT with { once: true }.
+// It used to be both, which meant the first click ANYWHERE in this table (a date cell counted)
+// removed the handler and killed every Download and Delete button until the page was reloaded.
+// Re-opening the tab could not repair it, because commitmentsLoaded short-circuits the reload.
+document.getElementById('ctbody').addEventListener('click', function(e) {
+  var dlBtn = e.target.closest('.dl-btn');
+  if (dlBtn) { downloadCommitment(dlBtn.dataset.cid); return; }
+  var delBtn = e.target.closest('.del-cmt-btn');
+  if (delBtn) deleteCommitment(delBtn.dataset.cid);
+});
 async function loadCommitments() {
   if (commitmentsLoaded) return;
   const ctbody = document.getElementById('ctbody');
@@ -4580,12 +4591,6 @@ async function loadCommitments() {
         '</tr>';
     }).join('');
     commitmentsLoaded = true;
-    ctbody.addEventListener('click', function(e) {
-      var dlBtn = e.target.closest('.dl-btn');
-      if (dlBtn) { downloadCommitment(dlBtn.dataset.cid); return; }
-      var delBtn = e.target.closest('.del-cmt-btn');
-      if (delBtn) deleteCommitment(delBtn.dataset.cid);
-    }, { once: true });
   } catch(err) {
     ctbody.innerHTML = '<tr><td colspan="9" style="padding:16px;color:#c00;text-align:center">Network error.</td></tr>';
   }
@@ -4635,7 +4640,7 @@ function downloadCommitment(id) {
   var submittedDate = new Date(c.submitted_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 
   var html = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">' +
-    '<title>Commitment to Proceed - ' + (c.quote_number || '') + '</title>' +
+    '<title>Commitment to Proceed — ' + (c.quote_number || '') + '</title>' +
     '<link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600&display=swap" rel="stylesheet">' +
     '<style>' +
     '*{box-sizing:border-box}' +
