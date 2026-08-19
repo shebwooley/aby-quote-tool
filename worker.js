@@ -5005,13 +5005,28 @@ const ABY_INTERNAL_JS = `
     // 'set' is not driven by #abyAmt, so it must be handled BEFORE the isNaN(amt)
     // guard below -- otherwise an empty Amount box would silently clear a typed price.
     if (mode === 'set') {
-      var prices = {};
-      SET_FIELDS.forEach(function (f) {
-        var v = parseFloat(panel.querySelector('#' + f.input).value);
-        if (!isNaN(v)) prices[f.key] = v;
-      });
-      var mv = parseFloat(panel.querySelector('#abySetMonthly').value);
-      if (!isNaN(mv)) prices.monthlyFee = mv;
+      // 🔴🔴 A SET PRICE IS A PRICE, AND A PRICE CANNOT BE NEGATIVE.
+      // ⛔ THIS PANEL USES TWO OPPOSITE SIGN CONVENTIONS IN ADJACENT FIELDS: in Percent and Flat a
+      // NEGATIVE amount is a DISCOUNT (-25 takes $25 off), so somebody who has learned that here
+      // will type -500 in Set price meaning "take 500 off" -- and used to get a setup fee of
+      // MINUS $500, applied silently, with no warning anywhere, straight onto a client proposal.
+      // ⭐ It REFUSES rather than clamping to 0: silently turning -500 into 0 would be a second
+      // wrong price, and just as quiet. The message names the mode that does what they meant.
+      var prices = {}, negatives = [];
+      var readPrice = function (inputId, label, key) {
+        var v = parseFloat(panel.querySelector('#' + inputId).value);
+        if (isNaN(v)) return;
+        if (v < 0) { negatives.push(label); return; }
+        prices[key] = v;
+      };
+      SET_FIELDS.forEach(function (f) { readPrice(f.input, f.label, f.key); });
+      readPrice('abySetMonthly', 'Monthly admin', 'monthlyFee');
+      if (negatives.length) {
+        window.ABY_ADJUSTMENT = null;
+        summary.textContent = 'Not applied — a set price cannot be negative (' + negatives.join(', ') +
+          '). To take money OFF the standard price, use Percent or Flat, where a negative amount is a discount.';
+        return;
+      }
       if (!Object.keys(prices).length) {
         window.ABY_ADJUSTMENT = null;
         summary.textContent = 'Set price selected, but no price typed yet. State: ' + window.ABY_STATE + '.';
