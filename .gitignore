@@ -4,3 +4,7 @@
 !.dev.vars.example
 .env*
 !.env.example
+
+# Import working files: generated SQL, previews and a pre-import backup of the live table.
+# Data dumps, not code -- they must not enter the repo.
+scripts/_import_out/
