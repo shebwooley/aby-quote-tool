@@ -54,6 +54,9 @@ export default {
     if (path === '/api/admin/prospects' && method === 'POST') return withAuth(request, env, () => handleAdminAddProspects(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
     if (path === '/api/admin/quote'    && method === 'POST') return withAuth(request, env, () => handleAdminAddQuote(request, env));
+    if (/^\/api\/quotes\/[^/]+\/note$/.test(path) && method === 'POST') {
+      return withAuth(request, env, () => handleQuoteNote(request, path.split('/')[3], env));
+    }
     // The broker's own page. Public by design -- it IS the sign-in screen; everything behind it
     // is gated per request by the `aby_broker` cookie, not by hiding this route.
     if (path === '/broker/set-password') {
@@ -376,7 +379,7 @@ async function handleListQuotes(request, env) {
 
   const ranByFilter = (url.searchParams.get('ran_by') || '').trim();   // '', 'ABY', or 'broker'
   const stateFilter  = (url.searchParams.get('state')  || '').trim().toUpperCase();
-  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, COALESCE(state, 'TX') AS state, adjustment, adjustment_note, client_id, source_tag";
+  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, COALESCE(state, 'TX') AS state, adjustment, adjustment_note, client_id, source_tag, notes";
 
   try {
     const where = [];
@@ -867,6 +870,22 @@ async function sendCommitmentEmail(env, c) {
     });
     if (!res.ok) console.error('commitment email failed:', res.status, await res.text());
   } catch (err) { console.error('commitment email threw:', err); }
+}
+
+/** Save a note against one quote. Admin only, like everything else on that screen. */
+async function handleQuoteNote(request, id, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const notes = String(body.notes == null ? '' : body.notes).slice(0, 4000);
+  try {
+    await env.DB.prepare('UPDATE quotes SET notes = ? WHERE id = ?').bind(notes, id).run();
+    // ⚠️ Assert the row was actually there. An UPDATE that matched nothing reports success, and a
+    // note the user watched save but which went nowhere is worse than a visible failure.
+    const back = await env.DB.prepare('SELECT notes FROM quotes WHERE id = ?').bind(id).first();
+    if (!back) return jsonResp({ error: 'That quote no longer exists.' }, 404);
+    return jsonResp({ ok: true, notes: back.notes || '' });
+  } catch (err) {
+    return jsonResp({ error: String(err && err.message || err) }, 500);
+  }
 }
 
 /**
@@ -2473,6 +2492,13 @@ const MIGRATIONS = [
   // broker has already typed it.
   { sql: "ALTER TABLE quotes ADD COLUMN first_year_value REAL", table: "quotes", column: "first_year_value" },
   { sql: "ALTER TABLE quotes ADD COLUMN employee_count INTEGER", table: "quotes", column: "employee_count" },
+
+  // ── Notes on a quote (Eric, 2026-08-18) ─────────────────────────────────────────────────────
+  // "so we can add some notes based on what an agent tells us on the phone or by email"
+  // ⭐ ON THE QUOTE, not on the agency, because the useful note is usually about THIS opportunity
+  // -- what they asked for, what they objected to, when to chase. An agency-level note would blur
+  // six conversations into one box.
+  { sql: "ALTER TABLE quotes ADD COLUMN notes TEXT", table: "quotes", column: "notes" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column
@@ -2943,6 +2969,17 @@ function detailHTML(q, products) {
       (q.source_tag
         ? '<div class="detail-item"><label>Link source</label><span>' + esc(q.source_tag) + '</span></div>'
         : '') +
+      // Eric, 2026-08-18: somewhere to put what an agent said on the phone. Full width, because a
+      // note squeezed into a detail-item column is a note nobody writes.
+      '<div class="detail-item" style="grid-column:1/-1"><label>Notes</label>' +
+        '<textarea id="qnote-' + esc(q.id) + '" rows="2" placeholder="What did they say? What do we owe them?" ' +
+          'style="width:100%;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px;font:13px inherit;resize:vertical">' +
+          esc(q.notes || '') + '</textarea>' +
+        '<div style="margin-top:6px;display:flex;align-items:center;gap:10px">' +
+          '<button type="button" onclick="event.stopPropagation();saveQuoteNote(this.dataset.id)" data-id="' + esc(q.id) + '" style="padding:.3rem .8rem;border:1px solid #c8d2de;background:#fff;border-radius:6px;cursor:pointer;font-size:.82rem">Save note</button>' +
+          '<span data-note-msg="' + esc(q.id) + '" style="font-size:.8rem;color:#5b6b7f"></span>' +
+        '</div>' +
+      '</div>' +
     '</div>' +
     '<div class="detail-actions">' +
       '<a href="' + rerunUrl + '&readonly=1" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:#e8f4ec;color:#1a5c3a;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4">View Quote ↗</a>' +
@@ -3039,6 +3076,33 @@ async function moveQuote(id, status) {
     render();
   } else {
     alert('Could not update status — please try again.');
+  }
+}
+
+/**
+ * Save the note on one quote (Eric, 2026-08-18).
+ *
+ * ⚠️ THE TEXTAREA IS NOT CLEARED AND THE PANEL IS NOT RE-RENDERED ON SUCCESS. Re-rendering would
+ * throw away anything typed in another open row, and a note is exactly the thing somebody is
+ * halfway through writing. It confirms in place instead.
+ */
+async function saveQuoteNote(id) {
+  var box = document.getElementById('qnote-' + id);
+  var msg = document.querySelector('[data-note-msg="' + id + '"]');
+  if (!box) return;
+  if (msg) { msg.style.color = '#5b6b7f'; msg.textContent = 'Saving...'; }
+  try {
+    var res = await fetch('/api/quotes/' + id + '/note', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes: box.value }),
+    });
+    var d = await res.json().catch(function () { return {}; });
+    if (msg) {
+      msg.style.color = res.ok ? '#1a5c3a' : '#c0392b';
+      msg.textContent = res.ok ? 'Saved' : (d.error || 'Could not save');
+    }
+  } catch (e) {
+    if (msg) { msg.style.color = '#c0392b'; msg.textContent = 'Could not save'; }
   }
 }
 
