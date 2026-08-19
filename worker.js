@@ -3153,7 +3153,14 @@ function originMatches(q, want) {
 // who opened the link and typed their own broker details. ⭐ Renamed to "Shared link", which is
 // the phrase the notes use for it anyway. ⛔ The stored VALUE stays 'direct' -- it is in the filter
 // dropdown, in saved URLs and in habits; this is a label change, not a data change.
-const ORIGIN_LABEL = { ABY: 'ABY', dashboard: 'Dashboard', direct: 'Shared link' };
+// Eric, 2026-08-18: "instead of Shared link we should say Broker. Would you agree?"
+// ⭐ AGREED FOR THIS ONE, WITH ONE WRINKLE WORTH KNOWING: a DASHBOARD quote was run by a broker
+// too. So the three labels are no longer parallel -- "ABY / Dashboard / Broker" answers WHO for
+// two of them and HOW for the third, which could read as "Dashboard is not a broker".
+// ⚠️ Left as he asked because it is his screen and the tooltips carry the full answer, but if it
+// ever reads oddly the fix is to make the pair explicit (Broker, Broker via dashboard) rather than
+// to go back to naming the route. ⛔ The stored VALUE stays 'direct' -- filters, saved URLs, habits.
+const ORIGIN_LABEL = { ABY: 'ABY', dashboard: 'Dashboard', direct: 'Broker' };
 // Tinted, not solid. Eric: "the pill for ABY and Direct Link look weird."
 // ⭐ Kept as three DISTINCT tints rather than one neutral chip, because the whole point of the
 // three-way origin (L) is that they are different answers -- ABY ran it, a dashboard broker ran
@@ -3461,7 +3468,17 @@ function detailHTML(q, products) {
       '<a href="' + rerunUrl + '&readonly=1" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:#e8f4ec;color:#1a5c3a;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4">View Quote ↗</a>' +
       '<a href="' + rerunUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#555;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #ddd">Re-run Quote ↗</a>' +
       moveButtons +
-      '<button onclick="event.stopPropagation();deleteQuote(this.dataset.id)" data-id="' + q.id + '" style="margin-left:auto;display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#c0392b;border-radius:6px;font-size:.85rem;font-weight:600;border:1px solid #f5b8b8;cursor:pointer">Delete ✕</button>' +
+      // 🔴 DELETE IS NO LONGER HERE. Eric, 2026-08-18: "Yes delete should move it out of the quote
+      // panel." It sat as a peer of View, Re-run and Move to Sold -- four routine buttons and one
+      // irreversible one, all the same size, in the row your hand is already in.
+      // ⭐ AND ITS JOB LARGELY WENT AWAY THIS SESSION: the reason to delete a quote was usually a
+      // wrong name, and names are editable in the row now. What is left is genuinely junk rows,
+      // which are rare and not urgent.
+      '</div>' +
+    // Out of the action row, into its own quiet footer: still reachable, no longer adjacent to
+    // anything routine, and behind the same confirm as before.
+    '<div style="padding:8px 16px;border-top:1px solid #eef2ef;text-align:right">' +
+      '<button onclick="event.stopPropagation();deleteQuote(this.dataset.id)" data-id="' + q.id + '" style="background:none;border:none;color:#a0574f;font-size:.78rem;text-decoration:underline;cursor:pointer;padding:2px 4px">Delete this quote</button>' +
     '</div>' +
     '</div>';
 }
