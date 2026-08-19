@@ -53,6 +53,7 @@ export default {
     if (path === '/api/admin/pipeline' && method === 'GET')  return withAuth(request, env, () => handleAdminPipeline(request, env));
     if (path === '/api/admin/prospects' && method === 'POST') return withAuth(request, env, () => handleAdminAddProspects(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
+    if (path === '/api/admin/quote'    && method === 'POST') return withAuth(request, env, () => handleAdminAddQuote(request, env));
     // The broker's own page. Public by design -- it IS the sign-in screen; everything behind it
     // is gated per request by the `aby_broker` cookie, not by hiding this route.
     if (path === '/broker/set-password') {
@@ -868,6 +869,67 @@ async function sendCommitmentEmail(env, c) {
   } catch (err) { console.error('commitment email threw:', err); }
 }
 
+/**
+ * Log a quote that never went through the tool.
+ *
+ * ⭐ ERIC, 2026-08-18: "groups that agents reach out to us about and we just put the rates in an
+ * email rather than running an official quote. We will likely want to track these opportunities so
+ * we know to circle back on them."
+ *
+ * ⭐⭐ THERE ARE NOW THREE ORIGINS AND `source_tag` KEEPS THEM APART:
+ *   (blank)       -- produced by the tool
+ *   import-2026   -- history loaded from the spreadsheet
+ *   manual        -- rates emailed, logged here
+ * 🔴 THAT SEPARATION IS THE POINT. The moment anybody asks "how much is the quoting tool actually
+ * being used?", the answer must not be inflated by history and hand-entered rows. A count that
+ * cannot tell them apart quietly overstates adoption forever.
+ *
+ * ⚠️ VALUE IS OPTIONAL AND STAYS NULL WHEN UNKNOWN. Eric was clear that a minimum-billing figure
+ * would be worse than a blank, because a floor stops looking like a guess the moment it is stored.
+ */
+async function handleAdminAddQuote(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const employer = String(body.employer || '').trim().slice(0, 160);
+  if (!employer) return jsonResp({ error: 'Which employer?' }, 400);
+
+  const agency = String(body.agency || '').trim().slice(0, 160);
+  const when = String(body.quotedOn || '').trim() || new Date().toISOString().slice(0, 10);
+  const rep = String(body.rep || '').trim().toLowerCase();
+  const status = ['P', 'I', 'S', 'D'].includes(String(body.status || 'P')) ? String(body.status || 'P') : 'P';
+
+  // Product ids arrive as the tool's own vocabulary, so a manual row filters and reports exactly
+  // like a generated one.
+  const ids = Array.isArray(body.products) ? body.products.slice(0, 20) : [];
+  const products = JSON.stringify(ids.map((id) => ({ id: String(id), name: String(id).replace(/^product-/, ''), inputs: {} })));
+
+  const value = Number(body.firstYearValue);
+  const heads = Number(body.employeeCount);
+
+  // Legible and unique. `MAN` marks the origin in the number itself, so it is obvious in a list
+  // even before anybody looks at a column.
+  const key = employer.replace(/[^A-Za-z0-9]/g, '').slice(0, 14).toUpperCase() || 'UNKNOWN';
+  const quoteNumber = `MAN-${key}-${when.replace(/-/g, '').slice(2)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+
+  try {
+    await env.DB.prepare(
+      'INSERT INTO quotes (id, quote_number, created_at, client_name, effective_date, broker_name, ' +
+      'broker_agency, broker_email, rep_name, commission_included, products, status, ran_by, state, ' +
+      'source_tag, first_year_value, employee_count) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+    ).bind(
+      crypto.randomUUID(), quoteNumber, new Date(when).toISOString(), employer,
+      String(body.effectiveDate || '').trim().slice(0, 40),
+      String(body.agentName || '').trim().slice(0, 120), agency,
+      String(body.agentEmail || '').trim().toLowerCase().slice(0, 160),
+      rep, body.commissionIncluded ? 1 : 0, products, status, 'ABY', 'TX', 'manual',
+      Number.isFinite(value) && value > 0 ? value : null,
+      Number.isFinite(heads) && heads > 0 ? Math.round(heads) : null,
+    ).run();
+  } catch (err) {
+    return jsonResp({ error: String(err && err.message || err) }, 500);
+  }
+  return jsonResp({ ok: true, quoteNumber });
+}
+
 // ─── The sales pipeline (Eric, 2026-08-18) ─────────────────────────────────────
 
 /**
@@ -1040,6 +1102,30 @@ function adminPipelineHTML() {
     <div class="msg" id="addMsg" style="display:none;margin-top:10px;padding:10px 12px;border-radius:6px;font-size:13px"></div>
   </div>
 
+  <div class="card">
+    <h2>Log a quote</h2>
+    <p class="sub">For rates sent by email rather than run through the tool &mdash; so the opportunity is tracked and you know to circle back.</p>
+    <div class="filters">
+      <input type="text" id="qEmployer" placeholder="Employer" style="flex:2;min-width:180px;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px">
+      <input type="text" id="qAgency" placeholder="Agency" style="flex:2;min-width:160px;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px">
+      <input type="date" id="qWhen" style="padding:6px 8px;border:1px solid #c8d2de;border-radius:6px">
+    </div>
+    <div class="filters">
+      <input type="text" id="qProducts" placeholder="Products, e.g. COBRA, FSA, ERISA Wrap" style="flex:3;min-width:240px;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px">
+      <input type="number" id="qValue" placeholder="First-year value (optional)" style="flex:1;min-width:170px;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px">
+      <input type="number" id="qHeads" placeholder="Employees (optional)" style="flex:1;min-width:150px;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px">
+    </div>
+    <div class="filters">
+      <span class="muted" style="font-size:13px">Rep:</span>
+      <select id="qRep"><option value="">—</option><option value="eric">Eric</option><option value="niels">Niels</option></select>
+      <span class="muted" style="font-size:13px">Status:</span>
+      <select id="qStatus"><option value="P">Pending</option><option value="I">In process</option><option value="S">Sold</option><option value="D">Dead</option></select>
+      <label style="font-size:13px"><input type="checkbox" id="qComm" checked style="margin-right:6px">Commission</label>
+      <button id="qAdd" style="background:#143c73;color:#fff;border:0;font-weight:600">Log it</button>
+    </div>
+    <div class="msg" id="qMsg" style="display:none;margin-top:10px;padding:10px 12px;border-radius:6px;font-size:13px"></div>
+  </div>
+
   <div class="filters">
     <span class="muted" style="font-size:13px">Owner:</span>
     <select id="fRep"><option value="">Everyone</option><option value="eric">Eric</option><option value="niels">Niels</option></select>
@@ -1090,6 +1176,36 @@ function adminPipelineHTML() {
    if(d.failed.length) bits.push(d.failed.length+' rejected ('+d.failed.map(function(x){return x.email}).join(', ')+')');
    msg(document.getElementById('addMsg'),bits.join('. '),!d.failed.length);
    document.getElementById('box').value=''; load();
+ };
+ // The spreadsheet's own spellings, mapped to the tool's product ids -- the same table the 2026
+ // import used, so a manually logged quote filters and reports exactly like a generated one.
+ var PMAP={'cobra':'cobra','erisa wrap':'erisa','erisa':'erisa','fsa':'fsa','dcap':'fsa','lfsa':'fsa',
+   'hsa':'hsa','pop':'pop','pop / section 125':'pop','section 125':'pop','aca':'aca',
+   'aca 1094/1095 reporting':'aca','hra':'hra','tx state continuation':'stateContinuation',
+   'state continuation':'stateContinuation','qtb':'section132','medicare hra':'mpra','ichra':'ichra'};
+ document.getElementById('qAdd').onclick=async function(){
+   var raw=document.getElementById('qProducts').value.split(',').map(function(x){return x.trim()}).filter(Boolean);
+   var ids=[], unknown=[];
+   raw.forEach(function(x){ var id=PMAP[x.toLowerCase()]; if(id) ids.push('product-'+id); else unknown.push(x); });
+   // ⛔ An unrecognised product is REPORTED, never dropped. A silently missing product is an
+   // understated count that nobody can see.
+   if(unknown.length){
+     var m=document.getElementById('qMsg');
+     m.textContent='Not recognised: '+unknown.join(', ')+'. Use names like COBRA, FSA, HSA, POP, ERISA Wrap, ACA, HRA, QTB.';
+     m.style.display='block'; m.style.background='#fdecec'; m.style.color='#a12622'; return;
+   }
+   var r=await fetch('/api/admin/quote',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({employer:document.getElementById('qEmployer').value,
+       agency:document.getElementById('qAgency').value, quotedOn:document.getElementById('qWhen').value,
+       products:ids, rep:document.getElementById('qRep').value, status:document.getElementById('qStatus').value,
+       commissionIncluded:document.getElementById('qComm').checked,
+       firstYearValue:document.getElementById('qValue').value, employeeCount:document.getElementById('qHeads').value})});
+   var d=await r.json().catch(function(){return{}});
+   var m=document.getElementById('qMsg');
+   m.style.display='block';
+   m.style.background=r.ok?'#e8f4ec':'#fdecec'; m.style.color=r.ok?'#1a5c3a':'#a12622';
+   m.textContent=r.ok?('Logged as '+d.quoteNumber):(d.error||'Could not log it.');
+   if(r.ok){['qEmployer','qAgency','qProducts','qValue','qHeads'].forEach(function(i){document.getElementById(i).value=''}); load();}
  };
  ['fRep','fStatus','fPri'].forEach(function(id){document.getElementById(id).onchange=load});
  async function load(){
