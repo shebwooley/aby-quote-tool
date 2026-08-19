@@ -2706,7 +2706,18 @@ main{padding:20px 24px}
    (No backticks in this file's page templates -- they end the literal. TRAPS #224.) */
 .table-wrap{background:white;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.08);
             overflow-x:auto;overflow-y:hidden}
-table{width:100%;border-collapse:collapse}
+/* 🔴🔴 table-layout:fixed IS WHAT ACTUALLY BINDS THE COLUMN WIDTHS, AND IT IS THE REAL FIX FOR
+   "Ran By is off the page". Under the default auto layout the colgroup percentages are only
+   HINTS: the browser measures content first and any cell that cannot shrink wins. So the table
+   grew past 100% of its container and the last column was pushed off the right -- while every
+   declared width still summed to exactly 100%, which is why nothing looked wrong in the source.
+   🔬 The content doing the pushing was the PRODUCT CHIPS, and only real data showed it: the labels
+   carry counts, so a single nowrap chip reads "FSA / DCAP / LFSA (25 participants)" or
+   "COBRA (87 eligible employees)" -- ~250-300px each. My test fixtures used bare product names and
+   were far too kind. ⚠️ Fixtures that are tidier than production hide exactly this class of bug.
+   ⭐ With fixed, the widths are obeyed, the table can never exceed its box, and there is nothing to
+   push off. Scrolling and the card reflow become the safety net rather than the mechanism. */
+table{width:100%;border-collapse:collapse;table-layout:fixed}
 thead{background:#f7f9f7}
 th{padding:10px 14px;text-align:left;font-size:.75rem;font-weight:700;color:#555;
    text-transform:uppercase;letter-spacing:.05em;white-space:nowrap;border-bottom:1px solid #e8e8e8}
@@ -2770,7 +2781,11 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
 .detail-notes{padding:10px 16px}
 .detail-notes label{display:block;font-size:.68rem;font-weight:700;color:#8a9a90;
                     text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
-.chip{background:#e8f5ee;color:#1a6640;border-radius:4px;padding:2px 8px;font-size:.8rem;font-weight:600}
+/* ⚠️ Chips WRAP now. They were nowrap, which is what let one of them set a floor the whole table
+   had to obey. A product label with its count is long enough that no sensible column width fits it
+   on one line, so the choice was "wrap" or "push a column off the screen". */
+.chip{background:#e8f5ee;color:#1a6640;border-radius:4px;padding:2px 8px;font-size:.8rem;
+      font-weight:600;white-space:normal;overflow-wrap:anywhere}
 .empty-row td{text-align:center;padding:60px;color:#aaa;font-style:italic}
 .c-row:hover td{background:#f9fafb}
 .loading{text-align:center;padding:60px;color:#aaa}
@@ -2868,12 +2883,15 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
       <!-- ⚠️ SEVEN cols for seven columns. It declared SIX against a seven-column table, so every
            width applied to the wrong column and the last was unconstrained. -->
       <colgroup>
-        <col style="width:14%">
-        <col style="width:11%">
+        <!-- ⭐ These are BINDING now, because the table is table-layout:fixed. Quote # gets enough
+             for the longest form of the number (TX260818-M135-NC in monospace) since it is the one
+             value that must not wrap; Products takes the slack because its chips can. -->
+        <col style="width:15%">
+        <col style="width:12%">
         <col style="width:17%">
         <col style="width:18%">
-        <col style="width:8%">
-        <col style="width:22%">
+        <col style="width:7%">
+        <col style="width:21%">
         <col style="width:10%">
       </colgroup>
       <thead>
@@ -3310,8 +3328,23 @@ function render() {
     // in the table and the reason the whole row could not shrink -- because each chip is nowrap and
     // "FSA / DCAP / LFSA" is a long one. Dropping to two takes the floor down without losing the
     // count, since anything beyond is summarised. The full list is in the quote itself.
+    // ⭐ THE COUNT COMES OFF THE CHIP AND GOES INTO THE TOOLTIP. The labels read
+    // "FSA / DCAP / LFSA (25 participants)" and "COBRA (87 eligible employees)" -- long enough that
+    // two of them wrapped a row to 107px. The PRODUCT is what you scan a list for; the headcount is
+    // what you open the quote for. ⚠️ Only a parenthetical STARTING WITH A DIGIT is stripped, so
+    // "POP + NDT (POP & HSA)" keeps its qualifier -- that is part of the product's name, not a count.
+    const shortLabel = function(p) {
+      var i = p.lastIndexOf('(');
+      if (i > 0 && p.charAt(p.length - 1) === ')') {
+        var inside = p.slice(i + 1);
+        if (inside.length && inside.charAt(0) >= '0' && inside.charAt(0) <= '9') {
+          return p.slice(0, i).trim();
+        }
+      }
+      return p;
+    };
     const chipHtml = products.slice(0,2).map(function(p){
-      return '<span class="chip" style="white-space:nowrap">' + esc(p) + '</span>';
+      return '<span class="chip" title="' + esc(p) + '">' + esc(shortLabel(p)) + '</span>';
     }).join('') + (products.length > 2 ? '<span style="color:#888;font-size:.78rem;white-space:nowrap" title="' + esc(products.join(', ')) + '">+' + (products.length-2) + ' more</span>' : '');
 
     row.innerHTML =
