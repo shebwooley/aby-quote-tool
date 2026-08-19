@@ -414,7 +414,16 @@ async function handleListQuotes(request, env) {
     const result = await env.DB.prepare(
       `SELECT ${cols} FROM quotes ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`
     ).bind(...args, limit, offset).all();
-    return jsonResp({ quotes: result.results || [] });
+    // 🔴🔴 THE TOTAL TRAVELS WITH THE PAGE, because the page used to count what it RECEIVED and
+    // print that as the answer. At 372 quotes the cap of 300 was invisible; at 1,795 the screen
+    // said "300 quotes" about a book more than five times that size -- a wrong number, stated
+    // plainly, of exactly the kind that gets repeated. The count is now the count of what MATCHES,
+    // and the page says how many of them it is showing.
+    const totalRow = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM quotes ${whereSql}`
+    ).bind(...args).first();
+    return jsonResp({ quotes: result.results || [], total: (totalRow && totalRow.n) || 0,
+                      limit: limit, offset: offset });
   } catch (err) {
     console.error('handleListQuotes failed:', err);
     return jsonResp({ error: String(err) }, 500);
@@ -2323,7 +2332,7 @@ async function handleAdminStats(request, env) {
       "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) " +
       "LEFT JOIN agencies a ON a.id = b.agency_id " +
       "WHERE 1=1 " + repFilter +
-      " GROUP BY key ORDER BY n DESC LIMIT 200").bind(...args).all();
+      " GROUP BY key ORDER BY n DESC LIMIT 1000").bind(...args).all();
 
     const byAgency = await env.DB.prepare(
       // 🔴🔴 IT GROUPED ALL 371 QUOTES INTO ONE BLANK ROW, AND THE CAUSE IS A SHADOWED ALIAS.
@@ -2349,7 +2358,7 @@ async function handleAdminStats(request, env) {
       "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) " +
       "LEFT JOIN agencies a ON a.id = b.agency_id " +
       "WHERE 1=1 " + repFilter +
-      " GROUP BY " + AGENCY_EXPR + " ORDER BY n DESC LIMIT 200").bind(...args).all();
+      " GROUP BY " + AGENCY_EXPR + " ORDER BY n DESC LIMIT 1000").bind(...args).all();
 
     // 🔴 THE "SHOW: ERIC / NIELS" FILTER HAS TO REACH THIS LINE TOO.
     // It used to count the WHOLE BOOK regardless of who was selected, while the two tables below
@@ -2454,7 +2463,7 @@ async function statsPerBlock(env, firstError, rep) {
     "       MAX(NULLIF(trim(q.broker_agency),'')) AS agency, NULL AS rep, COUNT(*) AS n, " +
     "       MAX(q.created_at) AS last_quote " +
     "FROM quotes q" + joinIf + "WHERE 1=1 " + repFilter +
-    " GROUP BY key ORDER BY n DESC LIMIT 200").bind(...args).all());
+    " GROUP BY key ORDER BY n DESC LIMIT 1000").bind(...args).all());
   if (agent) out.byAgent = agent.results || [];
 
   const agency = await attempt('byAgency', () => env.DB.prepare(
@@ -2465,7 +2474,7 @@ async function statsPerBlock(env, firstError, rep) {
     "       MAX(q.created_at) AS last_quote " +
     "FROM quotes q" + joinIf + "WHERE 1=1 " + repFilter +
     " GROUP BY COALESCE(NULLIF(trim(q.broker_agency),''), '(no agency)') " +
-    "ORDER BY n DESC LIMIT 200").bind(...args).all());
+    "ORDER BY n DESC LIMIT 1000").bind(...args).all());
   if (agency) out.byAgency = agency.results || [];
 
   const totals = await attempt('totals', () => env.DB.prepare(
@@ -4009,6 +4018,11 @@ function syncSortIndicators() {
   });
 }
 
+// 🔴 HOW MANY QUOTES MATCH, which is NOT how many are on screen. The server sends the most
+// recent 300; this page used to print the length of what it received and call that the count,
+// so a book of 1,795 read as "300 quotes".
+var serverTotal = 0;
+
 async function load(q) {
   q = q || '';
   const url = '/api/quotes' + (q ? ('?q=' + encodeURIComponent(q)) : '');
@@ -4043,6 +4057,8 @@ async function load(q) {
   }
 
   quotes = data.quotes || [];
+  // How many MATCHED on the server, versus how many it sent. render() needs both to tell the truth.
+  serverTotal = (typeof data.total === 'number') ? data.total : quotes.length;
   render();
 }
 
@@ -4222,10 +4238,15 @@ function render() {
   var parts = ['ABY', 'dashboard', 'direct']
     .filter(function (k) { return byOrigin[k]; })
     .map(function (k) { return ORIGIN_LABEL[k] + ' ' + byOrigin[k]; });
+  // ⭐ WHEN THE SERVER HAS MORE THAN IT SENT, SAY SO ON THE SCREEN. A cap nobody is told about
+  // is indistinguishable from the whole book, and this one hid 83% of it.
+  var truncated = serverTotal > quotes.length;
   document.getElementById('count').textContent =
     filtered.length
       ? (filtered.length + ' quote' + (filtered.length !== 1 ? 's' : '') +
-         (parts.length > 1 ? '  (' + parts.join(' · ') + ')' : ''))
+         (parts.length > 1 ? '  (' + parts.join(' · ') + ')' : '') +
+         (truncated ? '  · most recent ' + quotes.length + ' of ' + serverTotal +
+                      ' loaded — search to reach the rest' : ''))
       : '';
   if (!filtered.length) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No quotes found.</td></tr>';
