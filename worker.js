@@ -1147,7 +1147,10 @@ function adminPipelineHTML() {
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Pipeline — ABY admin</title>
 <style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
  header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
- header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85} header a:hover{opacity:1}
+ header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85;padding:4px 8px;border-radius:5px} header a:hover{opacity:1;background:rgba(255,255,255,.14)}
+ /* The page you are on. Without this the class added to the nav renders identically to the
+    other three links -- markup that changes nothing, which is its own small trap. */
+ header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
  main{max-width:1240px;margin:22px auto;padding:0 18px}
  .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
  h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
@@ -1166,7 +1169,7 @@ function adminPipelineHTML() {
  .note{width:100%;border:1px solid transparent;background:transparent;border-radius:5px;padding:4px 6px;font-size:13px}
  .note:focus{border-color:#c8d2de;background:#fff;outline:none}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/pipeline" class="here">Pipeline</a><a href="/admin/rates">Rates</a></header>
 <main>
   <div class="card">
     <h2>Add prospects</h2>
@@ -1343,7 +1346,10 @@ function adminBrokersHTML() {
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Brokers &amp; agencies — ABY admin</title>
 <style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
  header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
- header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85} header a:hover{opacity:1}
+ header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85;padding:4px 8px;border-radius:5px} header a:hover{opacity:1;background:rgba(255,255,255,.14)}
+ /* The page you are on. Without this the class added to the nav renders identically to the
+    other three links -- markup that changes nothing, which is its own small trap. */
+ header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
  main{max-width:1180px;margin:22px auto;padding:0 18px}
  .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
  h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
@@ -1357,7 +1363,7 @@ function adminBrokersHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers" class="here">Brokers &amp; agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a></header>
 <main>
   <div class="filters">
     <span class="muted" style="font-size:13px">Show:</span>
@@ -1471,7 +1477,10 @@ function adminRatesHTML() {
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Rates — ABY admin</title>
 <style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
  header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
- header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85} header a:hover{opacity:1}
+ header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85;padding:4px 8px;border-radius:5px} header a:hover{opacity:1;background:rgba(255,255,255,.14)}
+ /* The page you are on. Without this the class added to the nav renders identically to the
+    other three links -- markup that changes nothing, which is its own small trap. */
+ header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
  main{max-width:1180px;margin:22px auto;padding:0 18px}
  .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
  h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
@@ -1485,7 +1494,7 @@ function adminRatesHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates">Rates</a></header>
+<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/rates" class="here">Rates</a></header>
 <main>
   <div class="filters">
     <span class="muted" style="font-size:13px">State:</span>
@@ -2685,7 +2694,22 @@ function adminHTML() {
 body{font-family:system-ui,sans-serif;background:#f0f4f0;color:#1a1a1a;min-height:100vh}
 header{background:#1a5c3a;color:white;padding:14px 24px;display:flex;align-items:center;gap:12px;
        position:sticky;top:0;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.2)}
-header h1{font-size:1.05rem;font-weight:700;flex:1}
+header h1{font-size:1.05rem;font-weight:700;flex:0 0 auto}
+/* 🔴 THE QUOTE LOG HAD NO NAVIGATION AT ALL, AND IT IS THE LANDING PAGE.
+   Eric, 2026-08-19: "Where is the full list of agents/agencies, Prospects (when we add), etc? Why
+   is there no link from /admin?" The three other admin screens -- brokers and agencies, the
+   pipeline, the rate viewer -- each carried a nav bar linking to all four. This one did not, so
+   the front door was the only page with no way out, and everything else was reachable only by
+   typing the URL. Built, deployed, and effectively invisible.
+   ⚠️ I told him yesterday the nav was "in the header of every admin page". I had read it on the
+   pipeline page and generalised. The one page it was missing from is the one everybody starts on. */
+header nav{flex:1;display:flex;flex-wrap:wrap;gap:2px;margin-left:6px}
+header nav a{color:rgba(255,255,255,.78);text-decoration:none;font-size:.85rem;font-weight:600;
+             padding:5px 10px;border-radius:5px;white-space:nowrap}
+header nav a:hover{background:rgba(255,255,255,.15);color:white}
+/* ⭐ The current page is marked. A four-link bar with nothing showing where you are makes every
+   page look the same, which is its own small way of being lost. */
+header nav a.here{background:rgba(255,255,255,.2);color:white}
 header .logout{color:rgba(255,255,255,.75);font-size:.875rem;cursor:pointer;background:none;
                border:none;padding:4px 8px;border-radius:4px}
 header .logout:hover{background:rgba(255,255,255,.15);color:white}
@@ -2854,7 +2878,13 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
 </head>
 <body>
 <header>
-  <h1>ABY Quote Admin</h1>
+  <h1>ABY admin</h1>
+  <nav>
+    <a href="/admin" class="here">Quote log</a>
+    <a href="/admin/brokers">Brokers &amp; agencies</a>
+    <a href="/admin/pipeline">Pipeline</a>
+    <a href="/admin/rates">Rates</a>
+  </nav>
   <button class="logout" onclick="logout()">Log out</button>
 </header>
 <div class="toolbar">
