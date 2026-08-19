@@ -1072,8 +1072,8 @@ async function handleAdminPipeline(request, env) {
     "       a.id AS agency_id, COALESCE(a.name, b.agency) AS agency_name, " +
     "       a.priority AS agency_priority, a.assigned_rep AS agency_rep, " +
     `       ${st} AS status, ` +
-    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email))) AS quote_count, " +
-    "       (SELECT MAX(q.created_at) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email))) AS last_quote " +
+    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '') AS quote_count, " +
+    "       (SELECT MAX(q.created_at) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '') AS last_quote " +
     "FROM brokers b LEFT JOIN agencies a ON a.id = b.agency_id " +
     (where.length ? ('WHERE ' + where.join(' AND ') + ' ') : '') +
     "ORDER BY b.name LIMIT 1000";
@@ -1159,13 +1159,13 @@ async function handleAdminReferrals(request, env) {
   const roll =
     "SELECT b.id, b.name, b.email, b.agency, b.referred_by_partner AS partner_id, " +
     "       b.referred_by_contact AS contact_id, b.referred_at, b.referral_kind, " +
-    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email))) AS quotes, " +
-    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) " +
+    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '') AS quotes, " +
+    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '' " +
     "          AND q.created_at >= " + win + ") AS recent, " +
-    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) " +
+    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '' " +
     "          AND q.status = 'S' AND q.created_at >= " + win + ") AS sold_recent, " +
     "       (SELECT COALESCE(SUM(q.first_year_value),0) FROM quotes q " +
-    "          WHERE lower(trim(q.broker_email)) = lower(trim(b.email))) AS value " +
+    "          WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '') AS value " +
     "FROM brokers b";
 
   const out = { partners: [], contacts: [], brokers: [], unavailable: {} };
@@ -2255,7 +2255,7 @@ async function handleAdminBrokers(request, env) {
     "SELECT b.id, b.email, b.name, b.phone, b.role, b.assigned_rep, b.created_at, b.last_login_at, " +
     "       CASE WHEN b.password_hash = '' THEN 1 ELSE 0 END AS pending, " +
     "       a.id AS agency_id, a.name AS agency_name, a.assigned_rep AS agency_rep, " +
-    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email))) AS quote_count " +
+    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '') AS quote_count " +
     "FROM brokers b LEFT JOIN agencies a ON a.id = b.agency_id " +
     where + " ORDER BY quote_count DESC, b.created_at DESC LIMIT 500";
   try {
@@ -2297,7 +2297,7 @@ async function handleAdminStats(request, env) {
   const repFilter = rep ? "AND lower(COALESCE(b.assigned_rep,'')) = ?" : '';
     // Declared once so every section filters on the SAME definition of "whose quote this is",
     // and so no query has to repeat an expression it might repeat differently.
-    const BROKER_JOIN = "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email))";
+    const BROKER_JOIN = "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> ''";
     const STATUS_EXPR = "COALESCE(q.status,'P')";
     const BUCKET_EXPR = "CASE " +
       "  WHEN q.created_at >= datetime('now','-7 days')  THEN 'week' " +
@@ -2329,7 +2329,7 @@ async function handleAdminStats(request, env) {
       "       MAX(b.assigned_rep) AS rep, " +
       "       COUNT(*) AS n, MAX(q.created_at) AS last_quote " +
       "FROM quotes q " +
-      "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) " +
+      "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> '' " +
       "LEFT JOIN agencies a ON a.id = b.agency_id " +
       "WHERE 1=1 " + repFilter +
       " GROUP BY key ORDER BY n DESC LIMIT 1000").bind(...args).all();
@@ -2355,7 +2355,7 @@ async function handleAdminStats(request, env) {
       "                               NULLIF(lower(trim(q.broker_name)),''))) AS agents, " +
       "       MAX(q.created_at) AS last_quote " +
       "FROM quotes q " +
-      "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) " +
+      "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> '' " +
       "LEFT JOIN agencies a ON a.id = b.agency_id " +
       "WHERE 1=1 " + repFilter +
       " GROUP BY " + AGENCY_EXPR + " ORDER BY n DESC LIMIT 1000").bind(...args).all();
@@ -2444,7 +2444,7 @@ async function statsPerBlock(env, firstError, rep) {
   // that may be broken -- and that is the right trade: a section that cannot honour the filter
   // reports itself unavailable, section by section, rather than answering a different question.
   const repFilter = rep ? "AND lower(COALESCE(b.assigned_rep,'')) = ?" : '';
-  const joinIf    = rep ? " LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) " : ' ';
+  const joinIf    = rep ? " LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> '' " : ' ';
   const args      = rep ? [rep] : [];
   const attempt = async (name, run) => {
     try { return await run(); }
@@ -3105,7 +3105,7 @@ async function handleAgencyQuotes(request, env) {
                "COALESCE(q.state, 'TX') AS state";
   // Joined on email, which is the same key everything else in this system uses.
   const r = await env.DB.prepare(
-    `SELECT ${cols} FROM quotes q JOIN brokers b ON lower(trim(q.broker_email)) = lower(trim(b.email)) ` +
+    `SELECT ${cols} FROM quotes q JOIN brokers b ON lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '' ` +
     `WHERE b.agency_id = ? ORDER BY q.created_at DESC LIMIT 500`
   ).bind(me.agency_id).all();
   return jsonResp({ quotes: r.results || [] });
