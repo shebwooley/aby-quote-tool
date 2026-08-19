@@ -1302,6 +1302,10 @@ function adminPipelineHTML() {
  /* The page you are on. Without this the class added to the nav renders identically to the
     other three links -- markup that changes nothing, which is its own small trap. */
  header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
+ /* An ACTION, not a destination. Tinted so it reads as the thing you DO on a bar
+    where everything else is somewhere you go to look. */
+ header a.act{background:#2f9e73;opacity:1;font-weight:600}
+ header a.act:hover{background:#37b284}
  main{max-width:1240px;margin:22px auto;padding:0 18px}
  .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
  h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
@@ -1324,7 +1328,7 @@ function adminPipelineHTML() {
  .note{width:100%;border:1px solid transparent;background:transparent;border-radius:5px;padding:4px 6px;font-size:13px}
  .note:focus{border-color:#c8d2de;background:#fff;outline:none}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline" class="here">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates">Rates</a></header>
+<header><b>ABY admin</b><a href="/aby" class="act" title="Run a quote as ABY, with the internal overrides">Run a quote</a><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline" class="here">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates">Rates</a></header>
 <main>
   <div class="card">
     <h2>Add prospects</h2>
@@ -1566,6 +1570,10 @@ function adminBrokersHTML() {
  /* The page you are on. Without this the class added to the nav renders identically to the
     other three links -- markup that changes nothing, which is its own small trap. */
  header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
+ /* An ACTION, not a destination. Tinted so it reads as the thing you DO on a bar
+    where everything else is somewhere you go to look. */
+ header a.act{background:#2f9e73;opacity:1;font-weight:600}
+ header a.act:hover{background:#37b284}
  main{max-width:1180px;margin:22px auto;padding:0 18px}
  .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
  h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
@@ -1573,7 +1581,20 @@ function adminBrokersHTML() {
  th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
  th.srt{cursor:pointer;user-select:none}
  th.srt:hover{color:#143c73;background:#eef2f7}
- td{padding:8px 6px;border-bottom:1px solid #eef2f6} .muted{color:#8a97a8}
+ td{padding:8px 6px;border-bottom:1px solid #eef2f6}
+ /* Eric, 2026-08-19: "The date looks stupid - not enough room." An ISO date wrapping
+    after the month reads as broken data rather than as a narrow column. It is a fixed
+    width string, so it should simply never wrap. */
+ td.date,th.date{white-space:nowrap;width:1%}
+ /* Collapsible sections. Eric: "I'd like to be able to collapse each section of that
+    page." Five stacked tables is a long scroll when four of them are not what you came
+    for. ⭐ The state is REMEMBERED, because a section you collapse every visit is one
+    you are telling us you do not want. */
+ .card h2{cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px}
+ .card h2 .tw{font-size:11px;color:#8a97a8;transition:transform .12s}
+ .card.shut h2 .tw{transform:rotate(-90deg)}
+ .card.shut .sub,.card.shut>div,.card.shut>table,.card.shut>p:not(.sub){display:none}
+ .card h2 .cnt{margin-left:auto;font-size:12px;font-weight:400;color:#8a97a8} .muted{color:#8a97a8}
  .n{text-align:right;font-variant-numeric:tabular-nums}
  .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
  .filters button{background:#fff;border:1px solid #c8d2de;border-radius:6px;padding:7px 13px;cursor:pointer;font-size:14px}
@@ -1581,7 +1602,7 @@ function adminBrokersHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers" class="here">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates">Rates</a></header>
+<header><b>ABY admin</b><a href="/aby" class="act" title="Run a quote as ABY, with the internal overrides">Run a quote</a><a href="/admin">Quote log</a><a href="/admin/brokers" class="here">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates">Rates</a></header>
 <main>
   <div class="filters">
     <span class="muted" style="font-size:13px">Show:</span>
@@ -1699,7 +1720,7 @@ function adminBrokersHTML() {
        +'<th>Status</th><th>Owner</th></tr></thead><tbody>'
        + list.map(function(x){
            return '<tr><td>'+esc(x.name||'\u2014')+'</td><td>'+esc(x.email)+'</td><td>'+esc(x.agency_name||'\u2014')+'</td><td>'+esc(x.role||'member')+'</td>'
-             +'<td class="n">'+x.quote_count+'</td><td>'+day(x.last_login_at)+'</td>'
+             +'<td class="n">'+x.quote_count+'</td><td class="date">'+day(x.last_login_at)+'</td>'
              +'<td>'+(x.pending?'<span class="muted">invited</span>':'active')+'</td><td>'+repSelect('broker',x.id,x.assigned_rep)+'</td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">No broker accounts yet.</p>';
@@ -1727,7 +1748,7 @@ function adminBrokersHTML() {
    paintByAgency();
    function paintByAgency(){
    var ag=sorted('byAgency',CACHE.byAgency,{
-     agency:function(x){return String(x.agency||'').toLowerCase()},
+     agency:function(x){return String(x.agency_label||x.agency||'').toLowerCase()},
      n:function(x){return Number(x.n||0)},
      agents:function(x){return Number(x.agents||0)},
      last:function(x){return String(x.last_quote||'')}
@@ -1737,7 +1758,7 @@ function adminBrokersHTML() {
        +hc('byAgency','agents','Agents','n')+hc('byAgency','last','Last quote')
        +'<th>Owner</th></tr></thead><tbody>'
        + ag.map(function(x){
-           return '<tr><td>'+esc(x.agency)+'</td><td class="n">'+x.n+'</td><td class="n">'+x.agents+'</td><td>'+day(x.last_quote)+'</td>'
+           return '<tr><td>'+esc(x.agency_label||x.agency||'(no agency)')+'</td><td class="n">'+x.n+'</td><td class="n">'+x.agents+'</td><td class="date">'+day(x.last_quote)+'</td>'
              +'<td>'+(x.agency_id?repSelect('agency',x.agency_id,x.rep):'<span class="muted">\u2014</span>')+'</td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
@@ -1784,14 +1805,33 @@ function adminBrokersHTML() {
            var viaAgency = !x.name && !x.email && x.agency;
            return '<tr><td>'+esc(who)
              +(viaAgency?' <span class="muted" title="This quote records an agency but no individual broker">(agency only)</span>':'')
-             +'</td><td>'+esc(x.email||'\u2014')+'</td><td>'+esc(x.agency||'\u2014')+'</td><td class="n">'+x.n+'</td><td>'+day(x.last_quote)+'</td></tr>';
+             +'</td><td>'+esc(x.email||'\u2014')+'</td><td>'+esc(x.agency||'\u2014')+'</td><td class="n">'+x.n+'</td><td class="date">'+day(x.last_quote)+'</td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
    }
    wireSelects();
    wireSort();
    // Re-render the three lists from the cache when a header is clicked.
-   paint=function(){ paintBrokers(); paintByAgency(); paintByAgent(); wireSelects(); wireSort(); };
+   paint=function(){ paintBrokers(); paintByAgency(); paintByAgent(); wireSelects(); wireSort(); wireCollapse(); };
+   wireCollapse();
+ }
+
+ // Collapse / expand, remembered in localStorage per section.
+ // ⚠️ The twisty is added to the DOM rather than written into every heading, so a new card gets the
+ // behaviour without anyone remembering to mark it up.
+ function wireCollapse(){
+   Array.prototype.forEach.call(document.querySelectorAll('.card'),function(card){
+     var h=card.querySelector('h2'); if(!h||h.dataset.wired) return;
+     h.dataset.wired='1';
+     var key='abyfold:'+h.textContent.trim();
+     var tw=document.createElement('span'); tw.className='tw'; tw.textContent='\u25bc';
+     h.insertBefore(tw,h.firstChild);
+     if(localStorage.getItem(key)==='shut') card.classList.add('shut');
+     h.onclick=function(){
+       card.classList.toggle('shut');
+       localStorage.setItem(key, card.classList.contains('shut')?'shut':'open');
+     };
+   });
  }
  load();
 </script></body></html>`;
@@ -1814,12 +1854,20 @@ function adminReferralsHTML() {
  header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
  header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85;padding:4px 8px;border-radius:5px} header a:hover{opacity:1;background:rgba(255,255,255,.14)}
  header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
+ /* An ACTION, not a destination. Tinted so it reads as the thing you DO on a bar
+    where everything else is somewhere you go to look. */
+ header a.act{background:#2f9e73;opacity:1;font-weight:600}
+ header a.act:hover{background:#37b284}
  main{max-width:1100px;margin:0 auto;padding:20px}
  .card{background:#fff;border:1px solid #e3e9f0;border-radius:9px;padding:16px 18px;margin-bottom:16px}
  h2{margin:0 0 4px;font-size:15px} .sub{margin:0 0 12px;color:#5b6b7f;font-size:13px}
  table{width:100%;border-collapse:collapse;font-size:14px}
  th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
  td{padding:8px 6px;border-bottom:1px solid #eef2f6}
+ /* Eric, 2026-08-19: "The date looks stupid - not enough room." An ISO date wrapping
+    after the month reads as broken data rather than as a narrow column. It is a fixed
+    width string, so it should simply never wrap. */
+ td.date,th.date{white-space:nowrap;width:1%}
  .n{text-align:right} .muted{color:#8a97a8}
  input,select{padding:6px 8px;border:1px solid #c8d2de;border-radius:6px;font-size:13px}
  button{padding:6px 12px;border:1px solid #143c73;background:#143c73;color:#fff;border-radius:6px;font-size:13px;cursor:pointer}
@@ -1832,7 +1880,7 @@ function adminReferralsHTML() {
  .pbody{padding:12px 16px}
  .warn{margin:0 0 14px;padding:10px 14px;border-radius:7px;background:#fdf1e0;border:1px solid #f0d9ae;color:#7a5410;font-size:13px}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/referrals" class="here">Referrals</a><a href="/admin/rates">Rates</a></header>
+<header><b>ABY admin</b><a href="/aby" class="act" title="Run a quote as ABY, with the internal overrides">Run a quote</a><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/referrals" class="here">Referrals</a><a href="/admin/rates">Rates</a></header>
 <main>
   <div id="warn" class="warn" style="display:none"></div>
 
@@ -2005,6 +2053,10 @@ function adminRatesHTML() {
  /* The page you are on. Without this the class added to the nav renders identically to the
     other three links -- markup that changes nothing, which is its own small trap. */
  header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
+ /* An ACTION, not a destination. Tinted so it reads as the thing you DO on a bar
+    where everything else is somewhere you go to look. */
+ header a.act{background:#2f9e73;opacity:1;font-weight:600}
+ header a.act:hover{background:#37b284}
  main{max-width:1180px;margin:22px auto;padding:0 18px}
  .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
  h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
@@ -2026,7 +2078,7 @@ function adminRatesHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates" class="here">Rates</a></header>
+<header><b>ABY admin</b><a href="/aby" class="act" title="Run a quote as ABY, with the internal overrides">Run a quote</a><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates" class="here">Rates</a></header>
 <main>
   <div class="filters">
     <span class="muted" style="font-size:13px">State:</span>
@@ -2157,6 +2209,10 @@ async function handleAdminAssign(request, env) {
  * COUNT -- they simply have no agency. That is the honest picture: most of ABY's quoting history
  * predates accounts entirely, and a stat that silently dropped it would understate the tool.
  */
+// The agency an aggregate row belongs to. ⭐ ONE definition used by BOTH the query and its
+// GROUP BY, because those two disagreeing is exactly the bug this replaced.
+const AGENCY_EXPR = "COALESCE(a.name, NULLIF(trim(q.broker_agency),''), '(no agency)')";
+
 async function handleAdminStats(request, env) {
   const rep = (new URL(request.url).searchParams.get('rep') || '').trim().toLowerCase();
   const repFilter = rep ? "AND lower(COALESCE(b.assigned_rep,'')) = ?" : '';
@@ -2191,15 +2247,30 @@ async function handleAdminStats(request, env) {
       " GROUP BY key ORDER BY n DESC LIMIT 200").bind(...args).all();
 
     const byAgency = await env.DB.prepare(
-      "SELECT COALESCE(a.name, q.broker_agency, '(no agency)') AS agency, MAX(a.id) AS agency_id, " +
+      // 🔴🔴 IT GROUPED ALL 371 QUOTES INTO ONE BLANK ROW, AND THE CAUSE IS A SHADOWED ALIAS.
+      // This read `... AS agency ... GROUP BY agency`. The `brokers` table HAS A REAL COLUMN CALLED
+      // `agency`, and the LEFT JOIN brings it into scope -- so SQLite bound GROUP BY to `b.agency`
+      // rather than the SELECT alias. That column is NULL for every quote whose email matches no
+      // account, which is nearly all of them, so the whole book collapsed into a single group with
+      // a blank label: "371 quotes, 6 agents" against no agency name.
+      // ⭐ GROUPING BY THE EXPRESSION cannot be shadowed. The alias is renamed too, so no future
+      // join can quietly capture it again.
+      // ⚠️ And NULLIF on the trimmed value, not a bare COALESCE: an EMPTY STRING is not NULL, so
+      // `COALESCE(x,'(no agency)')` would leave '' as its own nameless group -- the same defect one
+      // layer down.
+      "SELECT " + AGENCY_EXPR + " AS agency_label, MAX(a.id) AS agency_id, " +
       "       MAX(COALESCE(a.assigned_rep, b.assigned_rep)) AS rep, " +
-      "       COUNT(*) AS n, COUNT(DISTINCT lower(trim(q.broker_email))) AS agents, " +
+      "       COUNT(*) AS n, " +
+      // ⚠️ Counts distinct identities the same way the agent table groups them, so "6 agents" and
+      // the agent list can no longer disagree about what an agent is.
+      "       COUNT(DISTINCT COALESCE(NULLIF(lower(trim(q.broker_email)),''), " +
+      "                               NULLIF(lower(trim(q.broker_name)),''))) AS agents, " +
       "       MAX(q.created_at) AS last_quote " +
       "FROM quotes q " +
       "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) " +
       "LEFT JOIN agencies a ON a.id = b.agency_id " +
       "WHERE 1=1 " + repFilter +
-      " GROUP BY agency ORDER BY n DESC LIMIT 200").bind(...args).all();
+      " GROUP BY " + AGENCY_EXPR + " ORDER BY n DESC LIMIT 200").bind(...args).all();
 
     const totals = await env.DB.prepare(
       "SELECT (SELECT COUNT(*) FROM quotes) AS quotes, " +
@@ -2282,10 +2353,13 @@ async function statsPerBlock(env, firstError) {
   if (agent) out.byAgent = agent.results || [];
 
   const agency = await attempt('byAgency', () => env.DB.prepare(
-    "SELECT COALESCE(q.broker_agency,'(no agency)') AS agency, NULL AS agency_id, NULL AS rep, " +
-    "       COUNT(*) AS n, COUNT(DISTINCT lower(trim(q.broker_email))) AS agents, " +
+    "SELECT COALESCE(NULLIF(trim(q.broker_agency),''), '(no agency)') AS agency_label, " +
+    "       NULL AS agency_id, NULL AS rep, COUNT(*) AS n, " +
+    "       COUNT(DISTINCT COALESCE(NULLIF(lower(trim(q.broker_email)),''), " +
+    "                               NULLIF(lower(trim(q.broker_name)),''))) AS agents, " +
     "       MAX(q.created_at) AS last_quote " +
-    "FROM quotes q GROUP BY agency ORDER BY n DESC LIMIT 200").all());
+    "FROM quotes q GROUP BY COALESCE(NULLIF(trim(q.broker_agency),''), '(no agency)') " +
+    "ORDER BY n DESC LIMIT 200").all());
   if (agency) out.byAgency = agency.results || [];
 
   const totals = await attempt('totals', () => env.DB.prepare(
@@ -3383,6 +3457,8 @@ header nav a:hover{background:rgba(255,255,255,.15);color:white}
 /* ⭐ The current page is marked. A four-link bar with nothing showing where you are makes every
    page look the same, which is its own small way of being lost. */
 header nav a.here{background:rgba(255,255,255,.2);color:white}
+header nav a.act{background:#2f9e73;color:white;font-weight:700}
+header nav a.act:hover{background:#37b284}
 header .logout{color:rgba(255,255,255,.75);font-size:.875rem;cursor:pointer;background:none;
                border:none;padding:4px 8px;border-radius:4px}
 header .logout:hover{background:rgba(255,255,255,.15);color:white}
@@ -3553,6 +3629,7 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
 <header>
   <h1>ABY admin</h1>
   <nav>
+    <a href="/aby" class="act" title="Run a quote as ABY, with the internal overrides">Run a quote</a>
     <a href="/admin" class="here">Quote log</a>
     <a href="/admin/brokers">Brokers &amp; Agencies</a>
     <a href="/admin/pipeline">Pipeline</a>
