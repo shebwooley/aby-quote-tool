@@ -525,7 +525,14 @@ ABYQuote.pricing = {
         // ACA C-form reporting carries no commission differential at all. That is a
         // change from what this file used to hold and it is flagged rather than assumed.
         // The two values with NO no-commission source are marked below.
-        smallB_base: 450, smallB_perForm: 1,      // no no-commission B-form proposal supplied; left as they were
+        //
+        // 🔴 SMALL-GROUP B: ERIC RULED IT DIRECTLY, 2026-08-18 -- "$450 / $2.50 for no
+        // commission." The BASE keeps its $25 discount against the commissioned $475; the
+        // PER-FORM rate MATCHES commissioned at $2.50. It had been $1.00 -- a figure with no
+        // source document behind it, inherited from before this week and chosen by nobody.
+        // ⛔ Do not re-derive either number from the proposals: no no-commission B-form
+        // proposal was ever supplied, which is precisely why this had to come from him.
+        smallB_base: 450, smallB_perForm: 2.50,
         fullLt100: 3300, fullMid: 3700, fullHigh: 4100, fullXL: 4550,   // fullXL: no no-comm source, matched to commissioned
         selfLt100: 1200, selfMid: 1550, selfHigh: 1850, selfXL: 2200    // selfXL: same
       }),
