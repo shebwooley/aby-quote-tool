@@ -110,11 +110,70 @@ function scanTemplateText(name, fnSrc) {
 // ⭐⭐ A CHECKER'S SCOPE IS A CLAIM, AND A LIST OF NAMES IS THE EASIEST CLAIM TO LET ROT: nothing
 // fails when a page is absent from it. It printed "all pages emit valid HTML and valid inline JS",
 // which reads as EVERY page, and the page nobody checked was the biggest one.
+// 🔴🔴 AND IT ROTTED AGAIN, 2026-08-19: `ABY_INTERNAL_JS` -- the override overlay served at /aby --
+// was never in this list, so a backtick in one of its comments passed every check and then FAILED
+// THE DEPLOY. `node --check` accepted it too; only esbuild, inside wrangler, refused it.
+// ⭐⭐ SO THE LIST NO LONGER GETS TO BE THE SCOPE. discoverTargets() reads worker.js for everything
+// that is shipped to a browser, and runAll FAILS if it finds one this file is not checking. A
+// checker that cannot notice its own blind spot will keep having them.
+// 🆕 `loginHTML` was ALSO never checked -- found by the scope check the moment it existed. It is
+// served on two routes and is the first thing anyone signing in sees.
 const PAGES = ["adminHTML", "adminBrokersHTML", "adminRatesHTML", "adminPipelineHTML",
-               "adminReferralsHTML", "brokerPageHTML", "setPasswordPageHTML"];
+               "adminReferralsHTML", "brokerPageHTML", "setPasswordPageHTML", "loginHTML"];
+
+// Template-literal constants served verbatim to a browser (not page functions).
+const RAW_LITERALS = ["ABY_INTERNAL_JS"];
+
+// Everything worker.js ships to a browser, found by reading it rather than by remembering.
+function discoverTargets(text) {
+  // ⚠️ ONLY TOP-LEVEL FUNCTIONS. A page's own client-side helpers sit INSIDE its template literal
+  // and also start a line with "function xHTML(" -- detailHTML is one. Those are already covered
+  // when the page's inline scripts are parsed, and listing them here would demand a second,
+  // meaningless check. An ODD number of backticks before the match means we are inside a literal.
+  const fns = [...text.matchAll(/^function\s+(\w*(?:HTML|Page))\s*\(/gm)]
+    .filter(m => (text.slice(0, m.index).split("`").length - 1) % 2 === 0)
+    .map(m => m[1]);
+  const raws = [...text.matchAll(/^const\s+(\w+_JS)\s*=\s*`/gm)].map(m => m[1]);
+  return { fns, raws };
+}
+
+// The same two source-text rules, applied to a raw template-literal constant.
+function checkRawLiteral(name, text) {
+  const start = text.indexOf("const " + name + " = `");
+  if (start === -1) { console.log("  FAIL " + name + ": not found in worker.js"); return 1; }
+  const from = text.indexOf("`", start) + 1;
+  const end  = text.indexOf("`;", from);
+  if (end === -1) { console.log("  FAIL " + name + ": its template literal is never closed"); return 1; }
+  const src = text.slice(from, end);
+  let bad = 0;
+  if (src.includes("`")) {
+    const line = src.slice(0, src.indexOf("`")).split(String.fromCharCode(10)).length;
+    console.log("  FAIL " + name + ": BACKTICK inside the template literal at line ~" + line +
+                " -- it ends the literal early. wrangler/esbuild refuses this even when node --check does not.");
+    bad++;
+  }
+  try { new Function(src); }
+  catch (e) { console.log("  FAIL " + name + " does not parse: " + e.message); bad++; }
+  if (!bad) console.log("  ok   " + name + "  (" + src.length + " bytes, parses)");
+  return bad;
+}
 
 function runAll(text) {
   let bad = 0;
+
+  // ⛔ SCOPE CHECK FIRST: anything shipped to a browser that this file does not check is a FAILURE,
+  // not a gap to be noticed later by a deploy.
+  const found = discoverTargets(text);
+  const checked = new Set([...PAGES, ...RAW_LITERALS]);
+  const unchecked = [...found.fns, ...found.raws].filter(n => !checked.has(n));
+  if (unchecked.length) {
+    console.log("  FAIL this checker does not cover: " + unchecked.join(", "));
+    console.log("       Add them to PAGES or RAW_LITERALS. A checker scope is a claim.");
+    bad++;
+  }
+
+  for (const name of RAW_LITERALS) bad += checkRawLiteral(name, text);
+
   for (const name of PAGES) {
     const fnSrc = body(name, text);
     if (!fnSrc) { console.log("  FAIL " + name + ": not found in worker.js"); bad++; continue; }

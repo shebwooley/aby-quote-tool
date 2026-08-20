@@ -5090,14 +5090,14 @@ const ABY_INTERNAL_JS = `
   // 🔴🔴 THE ABY-ONLY REPS LIVE HERE, IN THE OVERLAY, AND NOWHERE ELSE.
   // Eric, 2026-08-19: "they should be in the dropdown as well for the ABY tool (when we are
   // running the quotes), but for outside brokers it should just [be] Niels and me to choose from."
-  // ⛔ `assets/js/data/reps.js` SHIPS IN THE PUBLIC BUNDLE -- anyone added there is offered to
+  // ⛔ THE FILE assets/js/data/reps.js SHIPS IN THE PUBLIC BUNDLE -- anyone added there is offered to
   // every broker on the shared link. This file is served only to an authenticated ABY session,
   // which is exactly the distinction Eric drew.
   // ⚠️ THIS RUNS AT PARSE TIME AND THAT IS WHY IT WORKS: app.js builds the rep cards on
   // DOMContentLoaded (app.js:916), which fires after every script has been parsed. So the list is
   // already complete when the cards are drawn, and nothing has to be re-rendered.
   // ⭐ They are ABY staff who are NOT in sales -- account managers and others who field quote
-  // requests from brokers and clients. No `title` is set because Eric said "many but not all are
+  // requests from brokers and clients. No job title is set because Eric said "many but not all are
   // account managers", and guessing one each would put a wrong job title on a client proposal.
   var ABY_INTERNAL_REPS = [
     { id: 'sara',   name: 'Sara Wallace',    title: '', phone: '(817) 510-5843', email: 'sara@abybenefits.com'   },

@@ -23,6 +23,17 @@ if git diff --cached --name-only | grep -q '^worker\.js$'; then
     exit 1
   fi
 
+  # 🔴 THE AUTHORITATIVE CHECK, ADDED 2026-08-19 AFTER A REAL DEPLOY FAILURE.
+  # A backtick in a comment inside ABY_INTERNAL_JS passed `node --check` AND passed the page
+  # checker (which did not cover that literal at the time) and was then refused by esbuild, inside
+  # wrangler, at deploy. Only the real bundler agrees with production, so ask it. ~5 seconds.
+  if ! npx wrangler deploy --dry-run > /dev/null 2>&1; then
+    echo ""
+    echo "wrangler could not BUILD this worker, so it could not deploy either. Commit refused."
+    echo "See the real error with:  npx wrangler deploy --dry-run"
+    exit 1
+  fi
+
   if ! node scripts/check_worker_pages.mjs; then
     echo ""
     echo "A page the worker emits is broken. Commit refused."
