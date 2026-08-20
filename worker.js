@@ -4398,6 +4398,36 @@ function detailHTML(q, products) {
     products: q.products || '[]'
   });
   const rerunUrl = '/?rerun=' + encodeURIComponent(rerunState);
+
+  // 🔴🔴 A QUOTE WE CANNOT REPRODUCE MUST NOT OFFER "VIEW QUOTE".
+  // "View" does not open a stored document -- there isn't one. It RE-RUNS THE PRICING ENGINE from
+  // the inputs on the row. For a quote that came from the spreadsheet, or was logged by hand, the
+  // product entries carry no participant counts, so the engine would price it at TODAY's rates and
+  // hand back a document carrying the ORIGINAL 2024 quote number. It looks exactly like the quote
+  // that was sent. It is not, and it could be forwarded to a client.
+  // ⭐ Eric, 2026-08-19: "for all of the ones that were manually run ... we can't actually show them
+  // the quote ... the rates wouldn't be good anymore."
+  // ⚠️ THE TEST IS THE INPUTS, NOT THE SOURCE TAG. What makes a row un-reproducible is having no
+  // basis to reprice it -- which is equally true of an import and of a hand-logged quote, and would
+  // stay true of any future origin that records what was sold without recording what it was priced on.
+  var reproducible = false;
+  try {
+    var parsedForView = JSON.parse(q.products || '[]');
+    reproducible = Array.isArray(parsedForView) && parsedForView.some(function (p) {
+      return p && p.inputs && Object.keys(p.inputs).length > 0;
+    });
+  } catch (e) { reproducible = false; }
+
+  // Re-quoting is still useful -- it prefills the client, broker and products -- but it must MINT A
+  // NEW NUMBER rather than inherit the old one, or a fresh quote goes out wearing a 2024 identity.
+  var freshState = JSON.stringify({
+    clientName: q.client_name || '', effectiveDate: '',
+    brokerName: q.broker_name || '', brokerAgency: q.broker_agency || '',
+    brokerPhone: q.broker_phone || '', brokerEmail: q.broker_email || '',
+    commissionIncluded: !!q.commission_included, repName: q.rep_name || '',
+    products: q.products || '[]'
+  });
+  var freshUrl = '/?rerun=' + encodeURIComponent(freshState);
   var curStatus = q.status || 'P';
   var moveTargets = ['P','S','D'].filter(function(s){ return s !== curStatus; });
   var moveLabels = {P:'Pending',S:'Sold',D:'Dead'};
@@ -4451,8 +4481,11 @@ function detailHTML(q, products) {
       '</div>' +
     '</div>' +
     '<div class="detail-actions">' +
-      '<a href="' + rerunUrl + '&readonly=1" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:#e8f4ec;color:#1a5c3a;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4">View Quote ↗</a>' +
-      '<a href="' + rerunUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#555;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #ddd">Re-run Quote ↗</a>' +
+      (reproducible
+        ? '<a href="' + rerunUrl + '&readonly=1" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:#e8f4ec;color:#1a5c3a;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4">View Quote ↗</a>' +
+          '<a href="' + rerunUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#555;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #ddd">Re-run Quote ↗</a>'
+        : '<span class="muted" style="font-size:.82rem;max-width:38rem">This one was not run through the tool, so there is no quote to open — the record has what was quoted, not what it was priced on. Quoting it again uses <strong>current</strong> rates and gets its own number.</span>' +
+          '<a href="' + freshUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#555;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #ddd">Quote this again ↗</a>') +
       moveButtons +
       // 🔴 DELETE IS NO LONGER HERE. Eric, 2026-08-18: "Yes delete should move it out of the quote
       // panel." It sat as a peer of View, Re-run and Move to Sold -- four routine buttons and one
