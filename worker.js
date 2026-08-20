@@ -4981,6 +4981,34 @@ const ABY_INTERNAL_JS = `
   'use strict';
   if (!window.ABYQuote || !window.ABYQuote.engine) return;
 
+  // 🔴🔴 THE ABY-ONLY REPS LIVE HERE, IN THE OVERLAY, AND NOWHERE ELSE.
+  // Eric, 2026-08-19: "they should be in the dropdown as well for the ABY tool (when we are
+  // running the quotes), but for outside brokers it should just [be] Niels and me to choose from."
+  // ⛔ `assets/js/data/reps.js` SHIPS IN THE PUBLIC BUNDLE -- anyone added there is offered to
+  // every broker on the shared link. This file is served only to an authenticated ABY session,
+  // which is exactly the distinction Eric drew.
+  // ⚠️ THIS RUNS AT PARSE TIME AND THAT IS WHY IT WORKS: app.js builds the rep cards on
+  // DOMContentLoaded (app.js:916), which fires after every script has been parsed. So the list is
+  // already complete when the cards are drawn, and nothing has to be re-rendered.
+  // ⭐ They are ABY staff who are NOT in sales -- account managers and others who field quote
+  // requests from brokers and clients. No `title` is set because Eric said "many but not all are
+  // account managers", and guessing one each would put a wrong job title on a client proposal.
+  var ABY_INTERNAL_REPS = [
+    { id: 'sara',   name: 'Sara Wallace',    title: '', phone: '(817) 510-5843', email: 'sara@abybenefits.com'   },
+    { id: 'mark',   name: 'Mark Tawadrous',  title: '', phone: '(817) 510-5841', email: 'mark@abybenefits.com'   },
+    { id: 'martha', name: 'Martha Martinez', title: '', phone: '(817) 510-5838', email: 'martha@abybenefits.com' },
+    { id: 'sam',    name: 'Sam Kimbrell',    title: '', phone: '(817) 510-5845', email: 'sam@abybenefits.com'    },
+    { id: 'joe',    name: 'Joe Schoppe',     title: '', phone: '(817) 510-5839', email: 'joe@abybenefits.com'    },
+    { id: 'katie',  name: 'Katie Tawadrous', title: '', phone: '(817) 510-5846', email: 'katie@abybenefits.com'  },
+    { id: 'gage',   name: 'Gage Bridges',    title: '', phone: '(817) 510-5847', email: 'gage@abybenefits.com'   }
+  ];
+  if (window.ABYQuote && Array.isArray(window.ABYQuote.salesReps)) {
+    ABY_INTERNAL_REPS.forEach(function (r) {
+      var already = window.ABYQuote.salesReps.some(function (x) { return x.id === r.id; });
+      if (!already) window.ABYQuote.salesReps.push(r);
+    });
+  }
+
   // States ABY can quote. Add a state here once its pricing is provisioned.
   var STATES = [{ code: 'TX', name: 'Texas' }, { code: 'OUTSIDE', name: 'Outside Texas' }];
 

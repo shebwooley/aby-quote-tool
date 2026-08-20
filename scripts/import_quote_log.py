@@ -41,16 +41,21 @@ KNOWN = {
     "State Continuation":      ("product-stateContinuation", "Texas State Continuation"),
     "QTB":                     ("product-section132", "Qualified Transportation Benefit (QTB)"),
     "Medicare HRA":            ("product-mpra",  "Medicare Premium Reimbursement Arrangement"),
+    # ⭐ ERIC, 2026-08-19: "LSB is lifestyle benefit." It was in the registry the whole time --
+    # products.js calls it "Lifestyle Benefit Plan (LSB)", with the abbreviation in the NAME.
+    # The first import filed it as unrecognised because this table was matched by exact label
+    # and nothing here said LSB. Looking it up in products.js would have answered it.
+    "LSB":                     ("product-lifestyle", "Lifestyle Benefit Plan (LSB)"),
+    "Lifestyle Benefit":       ("product-lifestyle", "Lifestyle Benefit Plan (LSB)"),
 }
 # Labels with no counterpart in the existing vocabulary. They keep the sheet's own words.
-# ⏳ ERIC: "LSB" in particular is an abbreviation this script does not recognise.
+# ⏳ ERIC ruled on LSB (it is the Lifestyle Benefit, mapped above); the rest still stand alone.
 NEW_SLUGS = {
     "ICHRA":     ("product-ichra",     "ICHRA"),
     "QSEHRA":    ("product-qsehra",    "QSEHRA"),
     "NDT":       ("product-ndt",       "Non-discrimination testing (NDT)"),
     "Form 5500": ("product-form5500",  "Form 5500"),
     "HIPAA":     ("product-hipaa",     "HIPAA"),
-    "LSB":       ("product-lsb",       "LSB"),
 }
 
 # The earlier import wrote this label for a proposal that sat loose in no agency folder. The sheet
