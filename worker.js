@@ -3655,11 +3655,16 @@ header .logout{color:rgba(255,255,255,.75);font-size:.875rem;cursor:pointer;back
                border:none;padding:4px 8px;border-radius:4px}
 header .logout:hover{background:rgba(255,255,255,.15);color:white}
 .toolbar{background:white;border-bottom:1px solid #e5e5e5;padding:12px 24px;
-         display:flex;align-items:center;gap:12px}
+         display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .toolbar input{flex:1;max-width:400px;padding:.5rem .75rem;border:1px solid #ddd;
                border-radius:6px;font-size:.95rem}
 .toolbar input:focus{outline:none;border-color:#1a5c3a}
-.count{color:#888;font-size:.85rem;margin-left:auto;white-space:nowrap}
+/* 🔴 A NOWRAP WHITE-SPACE RULE ON A FLEX ROW THAT COULD NOT WRAP IS WHAT PUSHED THE SOURCES
+   DROPDOWN OFF THE RIGHT OF THE PAGE. The count grew when it started reporting a total,
+   could not shrink, and had nowhere to go, so it shoved its neighbours out of the window.
+   ⭐ Shorter wording alone would not have fixed this -- it would only have postponed it
+   until the next long string. The row wraps now, and the count may wrap within itself. */
+.count{color:#888;font-size:.85rem;margin-left:auto;min-width:0}
 main{padding:20px 24px}
 /* 🔴 overflow-x IS auto, NOT hidden, AND THAT IS THE BUG ERIC REPORTED: "Ran By is off the page -
    you just see the first letter." With hidden, a table wider than its box is CLIPPED -- silently,
@@ -4315,16 +4320,25 @@ function render() {
   var truncated = serverTotal > quotes.length;
   // ⚠️ THE WORDING HAS TO MATCH WHAT WAS ASKED FOR. "Most recent 300 of 1795" is honest for a count;
   // it is a lie for a year, where the page holds ALL of that year and nothing is being withheld.
+  // ⭐ SHORT ON PURPOSE. Eric, 2026-08-19: the long form "was pushing the sources dropdown off the
+  // right side of the page". "300 of 1795" already SAYS that more exist, so the sentence explaining
+  // it was carrying no information the numbers did not -- and the new dropdown beside it is a more
+  // discoverable answer than a hint in prose.
+  // ⚠️ NOTHING IS LOST: the full wording moves to the tooltip, so the meaning is one hover away.
   var showVal = (document.getElementById('showFilter') || {}).value || '300';
-  var scope = (showVal.charAt(0) === 'y') ? (showVal.slice(1) + ' only') : '';
-  document.getElementById('count').textContent =
-    filtered.length
-      ? (filtered.length + ' quote' + (filtered.length !== 1 ? 's' : '') +
-         (scope ? '  · ' + scope : '') +
-         (parts.length > 1 ? '  (' + parts.join(' · ') + ')' : '') +
-         (truncated ? '  · most recent ' + quotes.length + ' of ' + serverTotal +
-                      ' loaded — show more, or search, to reach the rest' : ''))
-      : '';
+  var isYear = (showVal.charAt(0) === 'y');
+  var head = truncated ? (filtered.length + ' of ' + serverTotal)
+           : isYear    ? (filtered.length + '  · ' + showVal.slice(1))
+           :             (filtered.length + ' quote' + (filtered.length !== 1 ? 's' : ''));
+  var el = document.getElementById('count');
+  el.textContent = filtered.length
+    ? (head + (parts.length > 1 ? '  (' + parts.join(' · ') + ')' : ''))
+    : '';
+  el.title = !filtered.length ? ''
+    : truncated ? ('Showing the ' + quotes.length + ' most recent of ' + serverTotal +
+                   ' quotes. Load more from the dropdown, or search to reach any of them.')
+    : isYear    ? ('Every quote run in ' + showVal.slice(1) + '.')
+    :             ('Every quote that matches.');
   if (!filtered.length) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No quotes found.</td></tr>';
     return;
