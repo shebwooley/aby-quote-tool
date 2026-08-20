@@ -387,7 +387,15 @@ async function handleSaveQuote(request, env, ctx) {
 async function handleListQuotes(request, env) {
   const url    = new URL(request.url);
   const q      = (url.searchParams.get('q') || '').trim();
-  const limit  = Math.min(parseInt(url.searchParams.get('limit')  || '300'), 500);
+  // 🔴 THE 300 WAS NEVER A DECISION -- it was a default set when the table held 372 rows, so it
+  // was effectively "everything" and nobody noticed it was a cap. The 2024-2026 import made it
+  // hide 83% of the book overnight. It stays the DEFAULT, because it is a sensible first
+  // screen, but the ceiling is now high enough that the toolbar can genuinely ask for all.
+  const limit  = Math.min(parseInt(url.searchParams.get('limit')  || '300'), 20000);
+  // A whole year, chosen from the toolbar. ⚠️ FILTERED ON created_at, THE DATE THE QUOTE WAS
+  // RUN -- never on source_tag, which records the FOLDER a proposal came out of and disagrees
+  // with the quote date on 18 rows.
+  const year   = (url.searchParams.get('year') || '').trim();
   const offset = parseInt(url.searchParams.get('offset') || '0');
 
   const ranByFilter = (url.searchParams.get('ran_by') || '').trim();   // '', 'ABY', or 'broker'
@@ -409,6 +417,10 @@ async function handleListQuotes(request, env) {
     if (stateFilter) {
       where.push("COALESCE(state, 'TX') = ?");
       args.push(stateFilter);
+    }
+    if (/^[0-9]{4}$/.test(year)) {
+      where.push("substr(created_at,1,4) = ?");
+      args.push(year);
     }
     const whereSql = where.length ? ('WHERE ' + where.join(' AND ')) : '';
     const result = await env.DB.prepare(
@@ -3824,6 +3836,15 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
   <select id="repFilter" style="margin-left:auto;padding:.4rem .5rem;border:1px solid #ddd;border-radius:6px;font-size:.85rem">
     <option value="">All reps</option>
   </select>
+  <select id="showFilter" title="How much of the log to load" style="padding:.4rem .5rem;border:1px solid #ddd;border-radius:6px;font-size:.85rem">
+    <option value="100">Most recent 100</option>
+    <option value="200">Most recent 200</option>
+    <option value="300" selected>Most recent 300</option>
+    <option value="y2026">2026 quotes</option>
+    <option value="y2025">2025 quotes</option>
+    <option value="y2024">2024 quotes</option>
+    <option value="all">All quotes</option>
+  </select>
   <select id="ranByFilter" style="padding:.4rem .5rem;border:1px solid #ddd;border-radius:6px;font-size:.85rem">
     <option value="">All sources</option>
     <option value="ABY">ABY-run</option>
@@ -4058,9 +4079,25 @@ function syncSortIndicators() {
 // so a book of 1,795 read as "300 quotes".
 var serverTotal = 0;
 
+// ⭐ WHAT THE TOOLBAR'S "how much" CONTROL MEANS, IN ONE PLACE.
+// Eric, 2026-08-19, after the import left 1,495 quotes unreachable: "I think we should instead be
+// able to decide from a drop-down how many to show - 100, 200, 300, 2024 quotes, 2025 quotes,
+// 2026 quotes, all."
+// ⚠️ A YEAR IS NOT A COUNT. Picking 2024 must fetch EVERY 2024 quote, so it carries a high limit
+// of its own -- otherwise "2024 quotes" would quietly mean "the most recent 300 of them", which is
+// the exact defect this control exists to remove.
+function showQuery() {
+  var v = (document.getElementById('showFilter') || {}).value || '300';
+  if (v === 'all') return 'limit=20000';
+  if (v.charAt(0) === 'y') return 'year=' + v.slice(1) + '&limit=20000';
+  return 'limit=' + encodeURIComponent(v);
+}
+
 async function load(q) {
   q = q || '';
-  const url = '/api/quotes' + (q ? ('?q=' + encodeURIComponent(q)) : '');
+  const parts = [showQuery()];
+  if (q) parts.push('q=' + encodeURIComponent(q));
+  const url = '/api/quotes?' + parts.join('&');
   const tbody = document.getElementById('tbody');
 
   tbody.innerHTML = '<tr><td colspan="7" class="loading">Loading quotes…</td></tr>';
@@ -4276,12 +4313,17 @@ function render() {
   // ⭐ WHEN THE SERVER HAS MORE THAN IT SENT, SAY SO ON THE SCREEN. A cap nobody is told about
   // is indistinguishable from the whole book, and this one hid 83% of it.
   var truncated = serverTotal > quotes.length;
+  // ⚠️ THE WORDING HAS TO MATCH WHAT WAS ASKED FOR. "Most recent 300 of 1795" is honest for a count;
+  // it is a lie for a year, where the page holds ALL of that year and nothing is being withheld.
+  var showVal = (document.getElementById('showFilter') || {}).value || '300';
+  var scope = (showVal.charAt(0) === 'y') ? (showVal.slice(1) + ' only') : '';
   document.getElementById('count').textContent =
     filtered.length
       ? (filtered.length + ' quote' + (filtered.length !== 1 ? 's' : '') +
+         (scope ? '  · ' + scope : '') +
          (parts.length > 1 ? '  (' + parts.join(' · ') + ')' : '') +
          (truncated ? '  · most recent ' + quotes.length + ' of ' + serverTotal +
-                      ' loaded — search to reach the rest' : ''))
+                      ' loaded — show more, or search, to reach the rest' : ''))
       : '';
   if (!filtered.length) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No quotes found.</td></tr>';
@@ -4707,6 +4749,23 @@ async function deleteQuote(id) {
     alert('Delete failed — please try again.');
   }
 }
+
+// The choice is remembered: somebody who works in 2025 all morning should not re-pick it on every
+// visit, and it is cheap to store.
+(function () {
+  var sel = document.getElementById('showFilter');
+  if (!sel) return;
+  var saved = localStorage.getItem('abyShow');
+  if (saved) {
+    var ok = Array.prototype.some.call(sel.options, function (o) { return o.value === saved; });
+    if (ok) sel.value = saved;
+  }
+  sel.addEventListener('change', function () {
+    localStorage.setItem('abyShow', sel.value);
+    expandedId = null;
+    load(document.getElementById('search').value.trim());
+  });
+})();
 
 let searchTimer;
 document.getElementById('search').addEventListener('input', function(e) {
