@@ -937,7 +937,8 @@ async function sendCommitmentEmail(env, c) {
  * sent" would let this endpoint write `status`, `first_year_value`, `source_tag` or `client_id`
  * -- fields that other code DERIVES and that a person editing a name must not be able to reach.
  */
-const QUOTE_EDITABLE = ['client_name', 'broker_name', 'broker_agency', 'broker_email', 'broker_phone'];
+const QUOTE_EDITABLE = ['client_name', 'broker_name', 'broker_agency', 'broker_email',
+                        'broker_phone', 'effective_date'];
 
 async function handleQuoteEdit(request, id, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
@@ -964,6 +965,22 @@ async function handleQuoteEdit(request, id, env) {
     // and join in this file normalises it. A broker's book is assembled by
     // lower(trim(broker_email)); one row saved as "Jane@Agency.com " and the next as
     // "jane@agency.com" splits one person in half with nothing in any log.
+    // ⭐ EFFECTIVE DATE IS A HUMAN STRING IN THIS TABLE, NOT A DATE COLUMN. Most rows hold an
+    // estimate the import produced -- "Oct 2025 or later", 85 of them on that value alone -- and
+    // Eric asked to be able to set the real one once it is known.
+    // 🔴 TWO GUARDS, BOTH LOAD-BEARING:
+    //   ⛔ AN EMPTY VALUE IS IGNORED, NEVER SAVED. A date input that is cleared, or one the browser
+    //     could not populate because the stored value is a phrase, would otherwise WIPE the estimate
+    //     and leave the row with no effective date at all. Absent must not overwrite known.
+    //   ⛔ ONLY ISO YYYY-MM-DD IS ACCEPTED. effectiveLabel() renders that as "Sep 1, 2026" and passes
+    //     anything else through verbatim, and the SORT comparator reads the same value -- so a
+    //     free-typed "9/1/26" would display raw and sort into the wrong place, silently.
+    if (col === 'effective_date') {
+      if (!v) continue;
+      if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v)) {
+        return jsonResp({ error: 'Effective date must be a real date.' }, 400);
+      }
+    }
     if (col === 'broker_email') v = v.toLowerCase();
     sets.push(col + ' = ?');
     vals.push(v);
@@ -4875,6 +4892,25 @@ function detailHTML(q, products) {
         '<input data-edit="broker_agency" value="' + esc(q.broker_agency || '') + '" placeholder="if you learn it later" ' +
           'onclick="event.stopPropagation()" style="width:100%;padding:4px 6px;border:1px solid #d7e3da;' +
           'border-radius:5px;font:inherit;font-size:.875rem;background:#fff"></div>' +
+      // ⭐ EFFECTIVE DATE, EDITABLE (Eric, 2026-08-21): "We have so many that say Sept 2026 or
+      // later and it would be nice to be able to put the right effective date if we learn it."
+      // ⛔ A DATE PICKER, NOT A TEXT BOX. The column is a human string and the display formatter
+      // only recognises ISO -- anything else is printed verbatim AND sorts by that raw text, so a
+      // typed "9/1/26" would look wrong and file itself in the wrong place at once.
+      // ⛔ [0-9] AND NOT the backslash-d shorthand: this lives inside a template literal, which
+      // EATS a lone backslash, so the shorthand would silently become the letter d and the test
+      // would match nothing. The page checker caught it; effectiveLabel() already uses [0-9].
+      // ⚠️ The picker cannot show an estimate, so the CURRENT VALUE IS PRINTED BESIDE IT. Without
+      // that the field reads empty on 1,700-odd rows and it looks as though nothing is recorded.
+      '<div class="detail-item"><label>Effective date</label>' +
+        '<input type="date" data-edit="effective_date" value="' +
+          (/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(String(q.effective_date || '')) ? esc(q.effective_date) : '') + '" ' +
+          'onclick="event.stopPropagation()" style="width:100%;padding:4px 6px;border:1px solid #d7e3da;' +
+          'border-radius:5px;font:inherit;font-size:.875rem;background:#fff">' +
+        (/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(String(q.effective_date || '')) || !q.effective_date ? '' :
+          '<div style="font-size:.75rem;color:#7b8794;margin-top:3px">now: ' + esc(q.effective_date) +
+          ' — setting a date replaces it</div>') +
+      '</div>' +
       ed('broker_email', 'Broker email', q.broker_email, '—') +
       // ⚠️ Phone is NOT a join key -- only the email is -- which is why it needs no normalising.
       ed('broker_phone', 'Broker phone', q.broker_phone, '—') +
