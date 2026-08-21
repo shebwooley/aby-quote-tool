@@ -764,10 +764,21 @@
   function prePopulateFromRerun() {
     var params = new URLSearchParams(window.location.search);
     var rerunParam = params.get('rerun');
-    if (!rerunParam) return;
 
-    var state;
-    try { state = JSON.parse(decodeURIComponent(rerunParam)); } catch (e) { return; }
+    // A SHARED LINK RESOLVES SERVER-SIDE, so its state arrives on the page rather than in the
+    // address bar. Eric, 2026-08-21: "is there any way ... these html quotes could be sent via
+    // link? I think it would be more professional than sending an html attachment."
+    // The reason it is not simply a longer ?rerun= URL: a short opaque token is the only shape
+    // that lets the SERVER decide what a given reader may see. The encoded blob cannot, because
+    // whoever holds the link holds the whole payload.
+    var state = null;
+    if (window.__ABY_SHARED && typeof window.__ABY_SHARED === 'object') {
+      state = window.__ABY_SHARED;
+    } else {
+      if (!rerunParam) return;
+      try { state = JSON.parse(decodeURIComponent(rerunParam)); } catch (e) { return; }
+    }
+    if (!state) return;
 
     // Carry the ORIGINAL quote number so re-opening a saved quote keeps its identity.
     // ⚠️ It keeps its original creation DATE too, deliberately: the date is embedded in
@@ -919,7 +930,11 @@
     requireBrokerEmail();
 
     // Capture readonly flag BEFORE prePopulateFromRerun() strips URL params via history.replaceState.
-    var isReadOnly = new URLSearchParams(window.location.search).get('readonly') === '1';
+    // A shared link is read-only by its nature -- nobody browsing to somebody else's quote is
+    // running a new one -- so the server says so on the page rather than in a query parameter
+    // anybody could delete.
+    var isReadOnly = new URLSearchParams(window.location.search).get('readonly') === '1'
+                  || !!(window.__ABY_SHARED && window.__ABY_SHARED.readonly);
 
     // WHICH SHARED LINK THIS VISIT CAME FROM (F-347), from `?src=`.
     // 🔴 READ HERE, BESIDE `readonly`, AND FOR THE SAME REASON: prePopulateFromRerun() clears the
@@ -944,6 +959,24 @@
     if (isReadOnly) {
       window.__abyReadOnly = true;
       setTimeout(generateQuote, 150);
+    }
+
+    // A SHARED LINK HAS A DIFFERENT READER, AND THAT IS NOT THE SAME THING AS READ-ONLY.
+    // `readonly` exists for ABY looking at their own quote: it suppresses the duplicate save and
+    // nothing else, because ABY WANTS to see the inputs that produced the figures.
+    // An employer does not. Eric asked for a link because it is "more professional than sending
+    // an html attachment" -- and landing on somebody else's quote-builder, with a Reset Form
+    // button, is not that. So the shared page hides the form and the tool's own header, and
+    // shows the proposal alone.
+    // ⛔ HIDDEN, NOT REMOVED. generateQuote() reads its values out of these fields, and the
+    // download and print handlers read them again afterwards. Removing the form would take the
+    // quote with it.
+    if (window.__ABY_SHARED) {
+      var hideWhenShared = ['#quoteForm', '.app-header'];
+      hideWhenShared.forEach(function (sel) {
+        var el = document.querySelector(sel);
+        if (el) el.style.display = 'none';
+      });
     }
   });
 })();

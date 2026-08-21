@@ -84,6 +84,16 @@ export default {
     if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'DELETE') {
       return withAuth(request, env, () => handleDeleteQuote(path.split('/').pop(), env));
     }
+    // The SHARED QUOTE LINK (F-368). Public and unauthenticated by design -- an employer has no
+    // account and must not need one to read a quote addressed to them. The token is the whole
+    // credential, which is why it is 128 bits of randomness rather than the quote number.
+    if (/^\/q\/[a-z2-9]{16}$/.test(path) && method === 'GET') {
+      return serveSharedQuote(path.slice(3), env, request);
+    }
+    // Minting one is ADMIN ONLY. Anyone who could mint a token could publish any quote.
+    if (/^\/api\/quotes\/[^/]+\/share$/.test(path) && method === 'POST') {
+      return withAuth(request, env, () => handleShareQuote(path.split('/')[3], env, url));
+    }
     if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'PATCH') {
       return withAuth(request, env, () => handleUpdateQuoteStatus(request, path.split('/').pop(), env));
     }
@@ -535,6 +545,153 @@ async function handleGetQuote(id, env) {
   const row = await env.DB.prepare('SELECT * FROM quotes WHERE id = ?').bind(id).first();
   if (!row) return jsonResp({ error: 'Not found' }, 404);
   return jsonResp(row);
+}
+
+// --- Quote: a shareable link (F-368) ------------------------------------------
+//
+// Eric, 2026-08-21: "is there any way ... these html quotes could be sent via link? I think it
+// would be more professional than sending an html attachment." He is right about the polish, and
+// there is a harder reason underneath it: corporate mail security increasingly strips or
+// quarantines HTML attachments, so some quotes are probably not arriving at all -- and an
+// attachment that never lands looks like a broker who did not reply. Same family as the
+// password-reset links that corporate scanners were spending (TRAPS #117).
+//
+// WHY A TOKEN AND NOT THE QUOTE NUMBER: quote numbers are readable and guessable --
+// TX260821-8019-C differs from the next employer's by four digits, so anyone holding one link
+// could walk the book. The token is 128 bits of randomness and carries no meaning at all.
+//
+// WHY A TOKEN AND NOT THE ENCODED STATE BLOB THE ADMIN ALREADY USES: whoever holds a ?rerun=
+// URL holds the entire payload, so the SERVER can never decide what a given reader may see. A
+// token puts that decision back on the server, which is also what F-367 needs -- an employer
+// correcting a headcount has to persist somewhere ABY can look, and a URL cannot do that.
+
+function newShareToken() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  // No l, o, 0 or 1: the link gets read down a phone and typed by hand often enough to matter.
+  const alphabet = 'abcdefghijkmnpqrstuvwxyz23456789';
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
+async function handleShareQuote(id, env, url) {
+  try {
+    const q = await env.DB.prepare(
+      'SELECT id, quote_number, share_token, adjustment, state FROM quotes WHERE id = ?'
+    ).bind(id).first();
+    if (!q) return jsonResp({ error: 'Not found' }, 404);
+
+    // REFUSE RATHER THAN SEND A PRICE THAT DOES NOT MATCH THE QUOTE.
+    // A shared link RE-RUNS the pricing engine in the reader's browser from the inputs, and the
+    // internal price adjustment is deliberately NOT among them -- publishing ABY's discount to
+    // the employer would be worse than any of this. The consequence is that an adjusted quote
+    // would re-price at STANDARD rates, so the employer opens a link showing MORE than the
+    // document they were sent, with nothing on the page saying so.
+    // Measured 2026-08-21: 0 of 1,751 quotes carry an adjustment, so nothing is blocked today --
+    // but the per-participant price box shipped the same evening, so this becomes reachable the
+    // first time somebody discounts a quote and shares it.
+    // The real fix is to resolve the PRICE server-side too. Until that exists, refusing is the
+    // honest behaviour; a silently wrong number is not.
+    const adjusted = q.adjustment && String(q.adjustment).trim() && String(q.adjustment) !== 'null';
+    if (adjusted) {
+      return jsonResp({
+        error: 'not_shareable_adjusted',
+        message: 'This quote carries a price adjustment. A shared link re-prices at standard rates, so the employer would see a higher figure than the quote you sent. Send the file for this one.'
+      }, 409);
+    }
+    // The same shape of mismatch: state is not carried either, so an Outside-Texas quote would
+    // re-price at Texas rates.
+    if (q.state && String(q.state) !== 'TX') {
+      return jsonResp({
+        error: 'not_shareable_state',
+        message: 'This quote was priced outside Texas, and a shared link re-prices at Texas rates. Send the file for this one.'
+      }, 409);
+    }
+
+    let token = q.share_token;
+    if (!token) {
+      token = newShareToken();
+      const r = await env.DB.prepare(
+        'UPDATE quotes SET share_token = ? WHERE id = ? AND share_token IS NULL'
+      ).bind(token, id).run();
+      // Report what came BACK. If the update changed nothing, a concurrent request minted one
+      // first and THIS token was never stored -- handing it out would give a link that 404s.
+      if (!r || !r.meta || !r.meta.changes) {
+        const again = await env.DB.prepare('SELECT share_token FROM quotes WHERE id = ?').bind(id).first();
+        token = (again && again.share_token) || null;
+      }
+    }
+    if (!token) return jsonResp({ error: 'Could not mint a link' }, 500);
+    return jsonResp({ ok: true, token: token, url: new URL('/q/' + token, url).toString() });
+  } catch (err) {
+    console.error('handleShareQuote failed:', err);
+    return jsonResp({ error: String(err) }, 500);
+  }
+}
+
+async function serveSharedQuote(token, env, request) {
+  const url = new URL(request.url);
+  const q = await env.DB.prepare(
+    'SELECT quote_number, client_name, effective_date, broker_name, broker_agency, broker_phone, ' +
+    '       broker_email, commission_included, rep_name, products ' +
+    'FROM quotes WHERE share_token = ?'
+  ).bind(token).first();
+
+  // An unknown token is a plain 404 with no detail. It must not become a way to ask whether a
+  // token exists, which is the rule /api/agency-logo already follows.
+  if (!q) return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+
+  // EXACTLY the fields the admin's own View link carries, and no more. Every one of them is
+  // already printed on the client document, so the link exposes nothing the employer does not
+  // hold. Everything internal -- adjustment, adjustment_note, ran_by, state, notes, status,
+  // source_tag, client_id, first_year_value, direct -- stays on the server.
+  const shared = {
+    quoteNumber: q.quote_number || '',
+    clientName: q.client_name || '',
+    effectiveDate: q.effective_date || '',
+    brokerName: q.broker_name || '',
+    brokerAgency: q.broker_agency || '',
+    brokerPhone: q.broker_phone || '',
+    brokerEmail: q.broker_email || '',
+    commissionIncluded: !!q.commission_included,
+    repName: q.rep_name || '',
+    products: q.products || '[]',
+    readonly: true
+  };
+
+  const res = await env.ASSETS.fetch(new Request(new URL('/', url), request));
+  let html = await res.text();
+  // Neutralise the one sequence that can end a script element early: a client name containing
+  // a closing tag would otherwise break out of it and the rest of the payload would render as
+  // markup. Escaping the slash is invisible to JSON.parse and inert to the HTML parser.
+  const CLOSE = '<' + '/';
+  const payload = JSON.stringify(shared).split(CLOSE).join('<' + String.fromCharCode(92) + '/');
+  // BASE HREF, AND IT IS NOT COSMETIC. index.html references every stylesheet and script with a
+  // RELATIVE path (assets/js/app.js), which the browser resolves against the current directory.
+  // At /q/<token> that directory is /q/, so every asset 404s: the page renders as a naked
+  // unstyled form with no JavaScript, and the injected quote never applies. It still returns
+  // 200 and still contains the payload, so nothing short of opening it in a browser shows this.
+  // The tag must come BEFORE the first relative reference, so it goes at the top of <head>
+  // rather than the bottom -- and the state rides with it, so it is set before any script runs.
+  const OPEN_HEAD = '<head>';
+  const inject = '<base href="/">' +
+                 '<script>window.__ABY_SHARED = ' + payload + ';' + CLOSE + 'script>';
+  html = html.indexOf(OPEN_HEAD) !== -1
+    ? html.replace(OPEN_HEAD, OPEN_HEAD + inject)
+    : inject + html;
+  return new Response(html, {
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      // Not cached: the quote behind the token can change, and a shared link should show what is
+      // true now rather than what was true when somebody first opened it.
+      'Cache-Control': 'no-store',
+      // A quote carries an employer's name and a broker's contact details. It is reachable by
+      // anyone holding the link by design, but it has no business in a search index.
+      'X-Robots-Tag': 'noindex, nofollow',
+      'X-Content-Type-Options': 'nosniff'
+    }
+  });
 }
 
 // ─── Quote: delete (admin) ────────────────────────────────────────────────────
@@ -5036,6 +5193,12 @@ function detailHTML(q, products) {
         ? '<a href="' + rerunUrl + '&readonly=1" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:#e8f4ec;color:#1a5c3a;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4">View Quote ↗</a>' +
           '<a href="' + rerunUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#555;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #ddd">Re-run Quote ↗</a>'
         : '<a href="' + freshUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#555;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #ddd">Quote this again ↗</a>') +
+      // COPY A LINK instead of sending the HTML file (F-368). Only for a quote we can actually
+      // reproduce -- the same test View Quote uses, and for the same reason: a link that
+      // re-prices a 2024 quote at today's rates looks exactly like the quote that was sent.
+      (reproducible
+        ? '<button onclick="event.stopPropagation();shareQuote(this.dataset.id,this)" data-id="' + q.id + '" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#1a5c3a;border-radius:6px;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4;cursor:pointer">Copy share link</button>'
+        : '') +
       moveButtons +
       // 🔴 DELETE IS NO LONGER HERE. Eric, 2026-08-18: "Yes delete should move it out of the quote
       // panel." It sat as a peer of View, Re-run and Move to Sold -- four routine buttons and one
@@ -5222,6 +5385,34 @@ async function saveQuoteNote(id) {
     }
   } catch (e) {
     if (msg) { msg.style.color = '#c0392b'; msg.textContent = 'Could not save'; }
+  }
+}
+
+async function shareQuote(id, btn) {
+  var original = btn.textContent;
+  btn.textContent = 'Minting...';
+  try {
+    var r = await fetch('/api/quotes/' + id + '/share', { method: 'POST' });
+    var d = await r.json().catch(function () { return {}; });
+    if (!r.ok) {
+      // SAY WHY. A refusal here is a real answer -- the quote carries a price adjustment, so a
+      // link would show the employer a HIGHER figure than the document. Collapsing that into
+      // 'something went wrong' would send somebody hunting for a bug that is not there.
+      btn.textContent = original;
+      alert(d.message || 'Could not create a link for this quote.');
+      return;
+    }
+    var url = d.url || (location.origin + '/q/' + d.token);
+    var copied = false;
+    try { await navigator.clipboard.writeText(url); copied = true; } catch (e) { copied = false; }
+    btn.textContent = copied ? 'Link copied' : 'Link ready';
+    // If the clipboard is unavailable the link must still be GETTABLE, or the button did
+    // nothing a human can act on.
+    if (!copied) prompt('Copy this link:', url);
+    setTimeout(function () { btn.textContent = original; }, 2500);
+  } catch (e) {
+    btn.textContent = original;
+    alert('Could not create a link for this quote.');
   }
 }
 
