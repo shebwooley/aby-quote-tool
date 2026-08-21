@@ -4697,6 +4697,16 @@ const PRODUCT_SHORT = {
                         smallB: '1094/1095-B',
                         fullLt100: '1094/1095-C', fullMid: '1094/1095-C', fullHigh: '1094/1095-C', fullXL: '1094/1095-C',
                         selfLt100: '1094/1095-C', selfMid: '1094/1095-C', selfHigh: '1094/1095-C', selfXL: '1094/1095-C',
+                        // DERIVED, NOT RECORDED. The imported quotes stored no package, so which form
+                        // set they were was read back off the ORIGINAL PROPOSAL PDF and written in on
+                        // 2026-08-21 (Eric: "Yes go with 1"). The ids say derived on purpose: every
+                        // other value here is something a person chose in the tool, and a reader has
+                        // to be able to tell those apart. Each row also carries inputs.derivedFrom
+                        // naming the proposal it was read from.
+                        // NO BACKTICKS IN THIS BLOCK -- it is inside the adminHTML template literal.
+                        // Written with them on the first attempt, for the third time in one day; the
+                        // deploy refused it. Run check_worker_pages.mjs after ANY worker.js edit.
+                        derivedB: '1094/1095-B', derivedC: '1094/1095-C',
                       }, countLabel: 'forms' },
   // ADDED 2026-08-21. These five had NO entry, so each fell through to its full name -- up to 76
   // characters, which is what pushed everything else in the cell behind a "+N more" nobody could open.

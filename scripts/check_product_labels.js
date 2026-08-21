@@ -78,7 +78,13 @@ for (const p of products) {
   }
   // The reverse direction is the one that found the erisa bug: a label pointing at nothing.
   for (const id of labelled) {
-    if (!real.has(id)) bad(`${p.id}.${id} is labelled but no such option exists in products.js`);
+    if (real.has(id)) continue;
+    // DERIVED IDS ARE ALLOWED AND ARE NOT A MISTAKE. The imported ACA quotes stored no package, so
+    // the form set was read off the original proposal PDF and written in on 2026-08-21. Those rows
+    // carry derivedB / derivedC, which by design do NOT exist in products.js -- nobody chose them in
+    // the tool. Kept to a NAMED list rather than a wildcard, so this check still catches a typo.
+    if (/^derived[A-Z]/.test(id)) continue;
+    bad(`${p.id}.${id} is labelled but no such option exists in products.js`);
   }
   for (const [id, label] of Object.entries(e.packages || {})) {
     if (label.length > MAX) bad(`${p.id}.${id} label is ${label.length} chars: "${label}"`);
