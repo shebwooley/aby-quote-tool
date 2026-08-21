@@ -400,7 +400,7 @@ async function handleListQuotes(request, env) {
 
   const ranByFilter = (url.searchParams.get('ran_by') || '').trim();   // '', 'ABY', or 'broker'
   const stateFilter  = (url.searchParams.get('state')  || '').trim().toUpperCase();
-  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, COALESCE(state, 'TX') AS state, adjustment, adjustment_note, client_id, source_tag, notes";
+  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, COALESCE(state, 'TX') AS state, adjustment, adjustment_note, client_id, source_tag, notes, COALESCE(direct, 0) AS direct";
 
   try {
     const where = [];
@@ -943,6 +943,20 @@ async function handleQuoteEdit(request, id, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
 
   const sets = [], vals = [];
+
+  // ⭐ "THE CLIENT CAME TO US DIRECTLY" IS AN ANSWER, NOT AN ABSENCE (Eric, 2026-08-21):
+  // "if there's no broker or if we're working directly with the client ... it wouldn't look on the
+  // log like something's missing, instead it would note that they are direct."
+  // 🔴 THIS IS WHY IT IS A STORED FLAG AND NOT INFERRED FROM AN EMPTY BROKER FIELD. A blank broker
+  // means WE DO NOT KNOW -- 1742 of 1750 imported rows are blank because the spreadsheet never had
+  // the agent's name, not because anybody came direct. Inferring would relabel the entire history.
+  // ⚠️ And it does NOT assert that no broker exists. Eric: "I'm sure there is a broker, but the
+  // client reached out to us directly." It is a fact about THIS QUOTE, not about the employer.
+  if ('direct' in body) {
+    sets.push('direct = ?');
+    vals.push(body.direct ? 1 : 0);
+  }
+
   for (const col of QUOTE_EDITABLE) {
     if (!(col in body)) continue;                       // absent means "leave it", never "clear it"
     let v = String(body[col] == null ? '' : body[col]).trim().slice(0, 200);
@@ -3302,6 +3316,9 @@ const MIGRATIONS = [
   // Added 2026-08-06. `client_id` is the BenefitLab client this quote is for, so a quote
   // no longer has to be matched to an employer by a TYPED company name (F-268).
   { sql: "ALTER TABLE quotes ADD COLUMN client_id TEXT",        table: "quotes", column: "client_id" },
+  // `direct` = ABY worked straight with the employer on this quote. Added 2026-08-21 so a blank
+  // broker stops reading as missing data. See handleQuoteEdit for why it is stored, not inferred.
+  { sql: "ALTER TABLE quotes ADD COLUMN direct INTEGER",       table: "quotes", column: "direct" },
   // `source_tag` is F-347: WHICH SHARED LINK a quote came in on, from `?src=`. Eric approved it
   // as "not sure yet, build it anyway, it's cheap". ⚠️ It is a HINT, not an identity -- a tag
   // lives in a URL and URLs get copied, so a forwarded link attributes the wrong broker. `ran_by`
@@ -4002,6 +4019,11 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
 .tab.active .tab-count{background:#1a5c3a;color:white}
 /* A separator instead of a gap. Eric: "we don't need so much space between the sections" -- the
    answer to "which block am I looking at" is a LINE, and a line costs no vertical room. */
+.direct-tag{display:inline-block;padding:1px 8px;border-radius:10px;background:#eef2f7;
+            color:#40566f;font-size:.78rem;font-weight:600;border:1px solid #d4dde8}
+.direct-check{display:flex;align-items:center;gap:6px;font-size:.875rem;color:#33404f;
+              cursor:pointer;padding:4px 0}
+.direct-check input{cursor:pointer;margin:0}
 .detail-actions{margin:0;padding:10px 16px;border-top:1px solid #e4eee8;
                 display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 /* ⭐ The manual-quote sentence, lifted OUT of the detail-actions row (Eric, 2026-08-21). Inside that
@@ -4603,7 +4625,13 @@ function render() {
         (extra || '') + '>' + esc(val || '') + '</span>' +
         (val ? '' : '<span class="ip-ph">' + esc(ph || '—') + '</span>');
     };
-    const brokerCell = inplace('broker_name', q.broker_name, '—') +
+    // ⭐ DIRECT READS AS AN ANSWER, NOT AS A GAP (Eric, 2026-08-21). A blank broker plus a dash
+    // looks like something nobody got round to filling in; this says somebody decided.
+    // ⚠️ The fields stay EDITABLE underneath -- marking a quote direct does not erase a broker
+    // name, and un-ticking it brings the row straight back. The label destroys nothing.
+    const brokerCell = Number(q.direct)
+      ? '<span class="direct-tag" title="ABY worked directly with the employer on this quote. It does not mean the employer has no broker.">Direct</span>'
+      : inplace('broker_name', q.broker_name, '—') +
       '<br><span style="font-size:.8rem;color:#888">' +
       inplace('broker_agency', q.broker_agency, '—') + '</span>';
 
@@ -4761,6 +4789,15 @@ function detailHTML(q, products) {
       // everything shows up twice - the group name, broker name, etc." They were duplicated
       // because the panel was the only place they could be EDITED; now that the row edits in
       // place, the duplicate has no job. ⭐ The panel holds only what the row does not show.
+      // ⭐ THE DIRECT TICK SITS WITH THE BROKER FIELDS because that is the question it answers:
+      // there is no broker on this one, and that is deliberate rather than unfinished.
+      // ⛔ Not a free-text field. Eric had two of these in a day; it has to be one click.
+      '<div class="detail-item"><label>Broker</label>' +
+        '<label class="direct-check" onclick="event.stopPropagation()">' +
+          '<input type="checkbox" data-edit-bool="direct"' + (Number(q.direct) ? ' checked' : '') + '> ' +
+          'Client came to us directly' +
+        '</label>' +
+      '</div>' +
       ed('broker_email', 'Broker email', q.broker_email, '—') +
       // ⚠️ Phone is NOT a join key -- only the email is -- which is why it needs no normalising.
       ed('broker_phone', 'Broker phone', q.broker_phone, '—') +
@@ -4902,6 +4939,13 @@ async function saveQuoteEdits(id) {
   var payload = {};
   if (host) Array.prototype.forEach.call(host.querySelectorAll('[data-edit]'), function (inp) {
     payload[inp.getAttribute('data-edit')] = inp.value;
+  });
+  // ⚠️ CHECKBOXES CANNOT RIDE THE [data-edit] PATH. That reader takes .value, which on a checkbox
+  // is the literal string "on" whether it is ticked or not -- so an unticked box would have saved
+  // as truthy and there would be no way to turn Direct back off.
+  // ⛔ NO BACKTICKS IN worker.js COMMENTS. Fourth time in one day; the page checker caught this one.
+  if (host) Array.prototype.forEach.call(host.querySelectorAll('[data-edit-bool]'), function (cb) {
+    payload[cb.getAttribute('data-edit-bool')] = cb.checked;
   });
 
   var fieldsOk = true, fieldErr = '';
