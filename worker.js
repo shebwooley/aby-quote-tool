@@ -4122,6 +4122,12 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
 </div>
 <div class="tabs">
   <button class="tab active" data-status="P">Pending</button>
+  <!-- IN PROCESS. Eric agreed this status on 2026-08-18 -- "ones that are buying but we don't
+       have anything yet" -- and the BACKEND shipped it: P/I/S/D are accepted, a signed
+       commitment sets I, and the pipeline queries already count it. The TAB was never added,
+       so an I quote appeared in no tab at all and vanished from the log. One row was already
+       in that state. A status with nowhere to show is worse than no status. -->
+  <button class="tab" data-status="I">In process</button>
   <button class="tab" data-status="S">Sold</button>
   <button class="tab" data-status="D">Dead</button>
   <button class="tab" data-view="commitments" id="commitmentsTab" style="margin-left:auto">Commitments</button>
@@ -4762,8 +4768,10 @@ function detailHTML(q, products) {
   });
   var freshUrl = '/?rerun=' + encodeURIComponent(freshState);
   var curStatus = q.status || 'P';
-  var moveTargets = ['P','S','D'].filter(function(s){ return s !== curStatus; });
-  var moveLabels = {P:'Pending',S:'Sold',D:'Dead'};
+  // I sits between P and S deliberately: it is the order the work happens in, and the buttons
+  // read as a path rather than a set of unrelated destinations.
+  var moveTargets = ['P','I','S','D'].filter(function(s){ return s !== curStatus; });
+  var moveLabels = {P:'Pending',I:'In process',S:'Sold',D:'Dead'};
   var moveButtons = moveTargets.map(function(s){
     return '<button onclick="event.stopPropagation();moveQuote(this.dataset.id,this.dataset.status)" data-id="' + q.id + '" data-status="' + s + '" style="display:inline-flex;align-items:center;gap:.25rem;padding:.35rem .8rem;background:white;color:#555;border-radius:6px;font-size:.82rem;font-weight:600;border:1px solid #ddd;cursor:pointer">Move to ' + moveLabels[s] + '</button>';
   }).join('');
@@ -4794,10 +4802,28 @@ function detailHTML(q, products) {
       // ⛔ Not a free-text field. Eric had two of these in a day; it has to be one click.
       '<div class="detail-item"><label>Broker</label>' +
         '<label class="direct-check" onclick="event.stopPropagation()">' +
-          '<input type="checkbox" data-edit-bool="direct"' + (Number(q.direct) ? ' checked' : '') + '> ' +
+          '<input type="checkbox" data-edit-bool="direct" onchange="toggleDirectFields(this)"' + (Number(q.direct) ? ' checked' : '') + '> ' +
           'Client came to us directly' +
         '</label>' +
       '</div>' +
+      // ⭐ BROKER NAME AND AGENCY, SHOWN ONLY WHEN DIRECT IS TICKED (Eric, 2026-08-21):
+      // "it could be a direct client but we later learn the broker's info. better to include it
+      // than not." Ticking Direct hides the in-place editors in the ROW, so without these there
+      // was nowhere left to record a broker once you found out who it was.
+      // ⛔ HIDDEN OTHERWISE, ON PURPOSE. Eric, 2026-08-18: "I don't like how everything shows up
+      // twice - the group name, broker name, etc." When Direct is off the row already edits both
+      // fields, and two live editors for one column is how one save quietly reverts the other.
+      // ⚠️ The toggle is live rather than on reload, so ticking the box reveals them immediately.
+      '<div class="detail-item direct-only"' + (Number(q.direct) ? '' : ' hidden') + '>' +
+        '<label>Broker name</label>' +
+        '<input data-edit="broker_name" value="' + esc(q.broker_name || '') + '" placeholder="if you learn it later" ' +
+          'onclick="event.stopPropagation()" style="width:100%;padding:4px 6px;border:1px solid #d7e3da;' +
+          'border-radius:5px;font:inherit;font-size:.875rem;background:#fff"></div>' +
+      '<div class="detail-item direct-only"' + (Number(q.direct) ? '' : ' hidden') + '>' +
+        '<label>Agency</label>' +
+        '<input data-edit="broker_agency" value="' + esc(q.broker_agency || '') + '" placeholder="if you learn it later" ' +
+          'onclick="event.stopPropagation()" style="width:100%;padding:4px 6px;border:1px solid #d7e3da;' +
+          'border-radius:5px;font:inherit;font-size:.875rem;background:#fff"></div>' +
       ed('broker_email', 'Broker email', q.broker_email, '—') +
       // ⚠️ Phone is NOT a join key -- only the email is -- which is why it needs no normalising.
       ed('broker_phone', 'Broker phone', q.broker_phone, '—') +
@@ -4930,6 +4956,14 @@ async function moveQuote(id, status) {
 // is the failure this whole screen keeps re-learning (save-hook.js swallowing errors, an UPDATE
 // matching no rows). ⭐ The local row is patched from what the SERVER returned, never from what
 // was typed, so a value the database normalised (email is lower-cased) shows as stored.
+function toggleDirectFields(cb) {
+  var host = cb.closest('.detail-inner');
+  if (!host) return;
+  Array.prototype.forEach.call(host.querySelectorAll('.direct-only'), function (el) {
+    if (cb.checked) el.removeAttribute('hidden'); else el.setAttribute('hidden', '');
+  });
+}
+
 async function saveQuoteEdits(id) {
   var msg  = document.querySelector('[data-note-msg="' + id + '"]');
   var host = document.querySelector('.detail-inner[data-qid="' + id + '"]');
@@ -4938,6 +4972,11 @@ async function saveQuoteEdits(id) {
 
   var payload = {};
   if (host) Array.prototype.forEach.call(host.querySelectorAll('[data-edit]'), function (inp) {
+    // ⛔ A HIDDEN FIELD IS NOT AN ANSWER. The broker name and agency inputs only apply to a DIRECT
+    // quote; when the box is unticked the ROW owns those columns, and submitting the panel's copy
+    // as well would let a stale value overwrite whatever was just typed in the row.
+    var wrap = inp.closest ? inp.closest('.direct-only') : null;
+    if (wrap && wrap.hasAttribute('hidden')) return;
     payload[inp.getAttribute('data-edit')] = inp.value;
   });
   // ⚠️ CHECKBOXES CANNOT RIDE THE [data-edit] PATH. That reader takes .value, which on a checkbox
