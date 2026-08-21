@@ -4464,9 +4464,18 @@ function render() {
       }
       return p;
     };
-    const chipHtml = products.slice(0,2).map(function(p){
+    // EVERY PRODUCT IS SHOWN. There is no "+N more" any more.
+    // Eric, 2026-08-21: "How is that helpful if we don't know what the 'one more' is?" He was right,
+    // and the honest reading is that the count was hiding a naming problem rather than a space one.
+    // The full list WAS in a title tooltip, which is invisible on a tablet, does not print, and
+    // requires knowing to hover -- so in practice the row said "there is something here" and stopped.
+    // The cut to two chips was a reasonable response to labels running to 82 characters
+    // ("White Glove: Full SPD, Section 125 plan with POP/HSA testing, and Form 5500 filing").
+    // With PRODUCT_SHORT filled in, the labels are short enough that the reason to truncate is gone.
+    // A quote with many products now makes its row slightly taller, which is the honest outcome.
+    const chipHtml = products.map(function(p){
       return '<span class="chip" title="' + esc(p) + '">' + esc(shortLabel(p)) + '</span>';
-    }).join('') + (products.length > 2 ? '<span style="color:#888;font-size:.78rem;white-space:nowrap" title="' + esc(products.join(', ')) + '">+' + (products.length-2) + ' more</span>' : '');
+    }).join('');
 
     row.innerHTML =
       // 🔴 THE QUOTE NUMBER CARRIES *THREE* COLUMNS' WORTH: the state, the commission basis, and
@@ -4649,16 +4658,47 @@ function detailHTML(q, products) {
     '</div>';
 }
 
+// WHAT A PRODUCT IS CALLED IN THE QUOTE LOG. Display only -- the full names in products.js are what
+// a CLIENT reads on a proposal and are untouched by anything here (Eric, 2026-08-21: "In the log").
+//
+// Keyed on the product ID, never the display name, so renaming a product on a proposal cannot
+// silently break its label here.
+//
+// TITLE CASE THROUGHOUT, on Eric's instruction: "Can you please capitalize all words: Direct Bill,
+// for instance. Or Plan Docs."
 const PRODUCT_SHORT = {
   pop:              { def: 'POP', embedsName: true, packages: { docsOnly: 'POP Docs Only', popHsa: 'POP + NDT (POP & HSA)', full: 'POP + NDT (FSA & HSA)' } },
-  fsa:              { def: 'FSA / DCAP / LFSA', countLabel: 'participants' },
+  // Eric: "FSA instead of all the other stuff that's mentioned." DCAP and LFSA ride along in the
+  // full name on the proposal; in a scannable list the broker is looking for the letters FSA.
+  fsa:              { def: 'FSA', countLabel: 'participants' },
   hsa:              { def: 'HSA', countLabel: 'accounts' },
   hra:              { def: 'HRA', countLabel: 'participants' },
   ichra:            { def: 'ICHRA / QSEHRA', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
   cobra:            { def: 'COBRA', countLabel: 'eligible employees' },
   stateContinuation:{ def: 'State Continuation', countLabel: 'employees' },
-  erisa:            { def: 'ERISA Wrap', packages: { basic: 'Basic', buyUp: 'Buy-Up', enhanced: 'Enhanced', fullPlan: 'Full Plan', whiteGlove: 'White Glove' } },
-  aca:              { def: 'ACA Reporting', packages: { smallB: 'Small/Level-Funded 1095-B', fullLt100: 'ALE Full <100', fullMid: 'ALE Full 100–249', fullHigh: 'ALE Full 250–499', selfLt100: 'ALE Self <100', selfMid: 'ALE Self 100–249', selfHigh: 'ALE Self 250–499' }, countLabel: 'forms' },
+  // Eric: "For ERISA Wrap can we just call it ERISA?"
+  // FIXED SAME DAY: the package list named 'fullPlan', which does not exist in products.js, while
+  // the two that DO exist (fullSpd, fullSpdTesting) had no label at all -- so quoting either one
+  // printed the raw id, e.g. "ERISA - fullSpd", straight into the log.
+  erisa:            { def: 'ERISA', packages: { basic: 'Basic', buyUp: 'Buy-Up', enhanced: 'Enhanced', fullSpd: 'Full SPD', fullSpdTesting: 'Full SPD + Testing', whiteGlove: 'White Glove' } },
+  // Eric, 2026-08-21: label ACA by WHICH FORM SET it is, not by service tier -- "1094B/1095B or
+  // 1094C/1095C" -- and deliberately WITHOUT Full vs Self: "A lot of the time we quote both full
+  // and self so it's hard to say."
+  // The B/C split is the real distinction: smallB is the non-ALE B-form product; every ALE option
+  // is a C-form filing. The form-count band stays out of the label and lives in the quote.
+  // FIXED SAME DAY: fullXL and selfXL (501 to 1,000 forms) had no label and printed their raw id.
+  aca:              { def: 'ACA Reporting', packages: {
+                        smallB: '1094B/1095B',
+                        fullLt100: '1094C/1095C', fullMid: '1094C/1095C', fullHigh: '1094C/1095C', fullXL: '1094C/1095C',
+                        selfLt100: '1094C/1095C', selfMid: '1094C/1095C', selfHigh: '1094C/1095C', selfXL: '1094C/1095C',
+                      }, countLabel: 'forms' },
+  // ADDED 2026-08-21. These five had NO entry, so each fell through to its full name -- up to 76
+  // characters, which is what pushed everything else in the cell behind a "+N more" nobody could open.
+  mpra:             { def: 'Medicare HRA', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
+  section127:       { def: 'EDU / SLRP', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
+  section132:       { def: 'QTB', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
+  lifestyle:        { def: 'LSB', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
+  directBilling:    { def: 'Direct Bill', countLabel: 'participants' },
 };
 const PRODUCT_NAME_TO_ID = {
   'Section 125 Premium Only Plan (POP)': 'pop',
@@ -4670,6 +4710,12 @@ const PRODUCT_NAME_TO_ID = {
   'Texas State Continuation (Mini-COBRA)': 'stateContinuation',
   'ERISA Wrap Document & Compliance': 'erisa',
   'ACA Forms 1094/1095 Reporting': 'aca',
+  // The fallback path, for older rows that stored a display NAME rather than an id.
+  'Medicare Premium Reimbursement Arrangement (Medicare HRA)': 'mpra',
+  'Section 127 Educational Assistance (EDU) & Student Loan Reimbursement (SLRP)': 'section127',
+  'Section 132 Qualified Commuter Benefits (QTB)': 'section132',
+  'Lifestyle Benefit Plan (LSB)': 'lifestyle',
+  'Direct Billing': 'directBilling',
 };
 
 function shortProductName(p) {
