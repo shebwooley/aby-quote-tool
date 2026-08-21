@@ -4582,6 +4582,31 @@ function effectiveKey(v) {
 // How the effective date READS in the row. An ISO value becomes "Sep 1, 2026"; free text from the
 // import passes through untouched, because "Sep 2026 or later" is what was actually agreed and
 // tidying it into a specific day would invent precision the spreadsheet never had.
+// The month list for the effective-date dropdown.
+// ⛔ MONTHS ONLY. A group plan starts on the 1st, so the day was never a question and a calendar
+// made you navigate to answer one (Eric, 2026-08-21). The VALUE is still a full ISO date ending
+// -01, because effectiveLabel() only formats ISO and the sort comparator reads the same field.
+// ⚠️ RANGE IS TIED TO THE DATA, not guessed: real effective dates run Apr 2024 to Sep 2026, so it
+// starts at 2024 and runs two years past today, which keeps next year's renewals reachable.
+// ⭐ THE FIRST OPTION IS EMPTY AND IS THE DEFAULT. An empty value is ignored by the save, so
+// opening a quote and pressing Save can never overwrite an estimate you did not mean to touch.
+function effectiveOptions(current) {
+  var cur = String(current == null ? '' : current).trim();
+  var isIso = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(cur);
+  var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var thisYear = new Date().getFullYear();
+  var out = '<option value="">' + (isIso ? 'Change to...' : 'Set a date...') + '</option>';
+  for (var y = 2024; y <= thisYear + 2; y++) {
+    out += '<option disabled style="color:#9aa5b1">' + y + '</option>';
+    for (var m = 0; m < 12; m++) {
+      var val = y + '-' + (m < 9 ? '0' : '') + (m + 1) + '-01';
+      out += '<option value="' + val + '"' + (val === cur ? ' selected' : '') + '>' +
+             MON[m] + ' ' + y + '</option>';
+    }
+  }
+  return out;
+}
+
 function effectiveLabel(v) {
   var s = String(v == null ? '' : v).trim();
   if (!s) return '';
@@ -4894,22 +4919,23 @@ function detailHTML(q, products) {
           'border-radius:5px;font:inherit;font-size:.875rem;background:#fff"></div>' +
       // ⭐ EFFECTIVE DATE, EDITABLE (Eric, 2026-08-21): "We have so many that say Sept 2026 or
       // later and it would be nice to be able to put the right effective date if we learn it."
-      // ⛔ A DATE PICKER, NOT A TEXT BOX. The column is a human string and the display formatter
-      // only recognises ISO -- anything else is printed verbatim AND sorts by that raw text, so a
-      // typed "9/1/26" would look wrong and file itself in the wrong place at once.
-      // ⛔ [0-9] AND NOT the backslash-d shorthand: this lives inside a template literal, which
-      // EATS a lone backslash, so the shorthand would silently become the letter d and the test
-      // would match nothing. The page checker caught it; effectiveLabel() already uses [0-9].
-      // ⚠️ The picker cannot show an estimate, so the CURRENT VALUE IS PRINTED BESIDE IT. Without
-      // that the field reads empty on 1,700-odd rows and it looks as though nothing is recorded.
+      // ⛔ A MONTH DROPDOWN, NOT A CALENDAR. Eric: "I do not want a calendar date picker because
+      // it's always the first of the month. Drop-down is easier." A group plan starts on the 1st,
+      // so a calendar makes you navigate to pick a day that was never in question.
+      // ⚠️ IT STILL STORES A FULL ISO DATE (YYYY-MM-01). effectiveLabel() only formats ISO and the
+      // sort comparator reads the same field, so storing a "Sep 2026" phrase would print raw and
+      // sort as text. The dropdown is the INPUT shape; the stored shape does not change.
+      // ⚠️ The list cannot show an estimate, so the CURRENT VALUE IS PRINTED BESIDE IT -- otherwise
+      // the field reads empty on most of the book and looks as though nothing is recorded.
       '<div class="detail-item"><label>Effective date</label>' +
-        '<input type="date" data-edit="effective_date" value="' +
-          (/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(String(q.effective_date || '')) ? esc(q.effective_date) : '') + '" ' +
-          'onclick="event.stopPropagation()" style="width:100%;padding:4px 6px;border:1px solid #d7e3da;' +
-          'border-radius:5px;font:inherit;font-size:.875rem;background:#fff">' +
+        '<select data-edit="effective_date" onclick="event.stopPropagation()" ' +
+          'style="width:100%;padding:4px 6px;border:1px solid #d7e3da;border-radius:5px;' +
+          'font:inherit;font-size:.875rem;background:#fff">' +
+          effectiveOptions(q.effective_date) +
+        '</select>' +
         (/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(String(q.effective_date || '')) || !q.effective_date ? '' :
           '<div style="font-size:.75rem;color:#7b8794;margin-top:3px">now: ' + esc(q.effective_date) +
-          ' — setting a date replaces it</div>') +
+          ' — choosing a month replaces it</div>') +
       '</div>' +
       ed('broker_email', 'Broker email', q.broker_email, '—') +
       // ⚠️ Phone is NOT a join key -- only the email is -- which is why it needs no normalising.
