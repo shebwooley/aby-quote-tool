@@ -541,8 +541,37 @@ async function handleGetQuote(id, env) {
 
 async function handleDeleteQuote(id, env) {
   try {
-    await env.DB.prepare('DELETE FROM quotes WHERE id = ?').bind(id).run();
-    return jsonResp({ ok: true });
+    // A SIGNED AUTHORIZATION MUST NOT OUTLIVE THE QUOTE IT AUTHORIZES.
+    // This used to delete the quote row alone. Four orphaned commitments were found in
+    // production on 2026-08-21 -- test signatures for quotes that no longer existed --
+    // and an orphan is not merely untidy: a commitment is the record that an employer
+    // said yes, so anything counting them counts an agreement nobody can produce.
+    //
+    // THE quote_number GUARD IS LOAD-BEARING. Commitments join to quotes by
+    // quote_number, and that column was NOT unique until F-339 added the index, so
+    // historic rows can share one. Deleting by number alone could therefore take a
+    // commitment belonging to a quote that is staying. Only delete the commitment when
+    // no OTHER quote still carries that number.
+    const q = await env.DB.prepare('SELECT quote_number FROM quotes WHERE id = ?').bind(id).first();
+    if (!q) {
+      // 'ok: true' regardless of whether anything was deleted is how the old handler
+      // reported a no-op as a success. Say what happened instead.
+      return jsonResp({ error: 'Not found', deleted: 0 }, 404);
+    }
+    let commitments = 0;
+    const others = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM quotes WHERE quote_number = ? AND id <> ?'
+    ).bind(q.quote_number, id).first();
+    if (!others || !others.n) {
+      const c = await env.DB.prepare('DELETE FROM commitments WHERE quote_number = ?')
+        .bind(q.quote_number).run();
+      commitments = (c && c.meta && c.meta.changes) || 0;
+    }
+    const d = await env.DB.prepare('DELETE FROM quotes WHERE id = ?').bind(id).run();
+    const deleted = (d && d.meta && d.meta.changes) || 0;
+    // Report what came BACK, not what was asked for.
+    return jsonResp({ ok: deleted > 0, deleted: deleted, commitments: commitments,
+                      sharedNumber: !!(others && others.n) });
   } catch (err) {
     console.error('handleDeleteQuote failed:', err);
     return jsonResp({ error: String(err) }, 500);
@@ -5620,6 +5649,41 @@ const ABY_INTERNAL_JS = `
         // The tier no longer describes what is being charged, so stop printing it.
         copy.monthlyFee.tierLabel = '';
       }
+      // A typed PER-PARTICIPANT rate. Unlike a typed total this survives a change in
+      // headcount, which is the whole reason it exists: the price is rate times count,
+      // so a new count re-prices at the agreed rate rather than at the standard one.
+      // THE STANDARD MINIMUM STILL APPLIES, and that is a decision rather than an
+      // oversight: the floor exists because a small group costs the same to administer.
+      // But it is never applied silently -- when the floor is what is being charged the
+      // breakdown says so, because a typed rate that appears to do nothing reads as a
+      // broken box.
+      if (p.monthlyRate != null && !isNaN(p.monthlyRate) && copy.monthlyFee && copy.monthlyFee._m) {
+        var meta2 = copy.monthlyFee._m;
+        var cnt = meta2.count;
+        if (cnt != null && !isNaN(cnt)) {
+          // THE FLOOR IS NOT ALWAYS meta.min. Below the first per-participant band the
+          // standard book charges a FLAT amount -- FSA under 20 people is 85 dollars, a
+          // flat tier whose min is zero -- so a naive rate times count made a 10-person
+          // group 35 dollars and quietly undercut the small-group floor by more than half.
+          // A flat tier IS that floor, wearing a different name, so treat it as one.
+          // Somebody who really does mean 35 can type it into Monthly admin; both
+          // intentions stay expressible, and neither happens by accident.
+          var floor = (meta2.kind === 'flat') ? (meta2.rate || 0) : (meta2.min || 0);
+          var raw = p.monthlyRate * cnt;
+          meta2.rate = p.monthlyRate;
+          meta2.kind = 'pppm';
+          copy.monthlyFee.amount = Math.round(Math.max(raw, floor) * 100) / 100;
+          // money() drops the pence, and a RATE is quoted to the cent -- it printed the
+          // agreed 3.50 as "3.5", which reads like a typo on an internal record.
+          var bd = rateMoney(p.monthlyRate) + ' per participant per month (agreed rate)';
+          if (floor > 0 && floor > raw) {
+            bd += ' - the standard minimum of ' + money(floor) + ' per month applies at this headcount';
+          }
+          copy.monthlyFee.breakdown = bd;
+          copy.monthlyFee.tierLabel = '';
+          copy.monthlyFee.adjusted = true;
+        }
+      }
       copy.adjusted = true;
       return copy;
     });
@@ -5636,10 +5700,15 @@ const ABY_INTERNAL_JS = `
     });
     var m = (adj.prices || {}).monthlyFee;
     if (m != null && !isNaN(m)) parts.push('Monthly ' + money(m));
+    var pr = (adj.prices || {}).monthlyRate;
+    if (pr != null && !isNaN(pr)) parts.push('Per participant ' + rateMoney(pr));
     return parts.length ? ('Price set on ' + scope + ': ' + parts.join(', ')) : '';
   }
 
   function money(n) { return (n < 0 ? '-$' : '$') + Math.abs(n); }
+  // Rates carry cents; totals do not. Kept separate rather than making money() always
+  // show two places, because "$3,837.00" on a fee line is noise.
+  function rateMoney(n) { return (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(2); }
 
   function recompute(panel) {
     var mode = panel.querySelector('#abyMode').value;
@@ -5672,10 +5741,22 @@ const ABY_INTERNAL_JS = `
       };
       SET_FIELDS.forEach(function (f) { readPrice(f.input, f.label, f.key); });
       readPrice('abySetMonthly', 'Monthly admin', 'monthlyFee');
+      readPrice('abySetPerPart', 'Per participant', 'monthlyRate');
       if (negatives.length) {
         window.ABY_ADJUSTMENT = null;
         summary.textContent = 'Not applied — a set price cannot be negative (' + negatives.join(', ') +
           '). To take money OFF the standard price, use Percent or Flat, where a negative amount is a discount.';
+        return;
+      }
+      // Eric, 2026-08-21, describing what he actually adjusts: "if we lower the per
+      // employee fee ... it would survive if they adjust the number of employees". A typed
+      // monthly TOTAL cannot do that -- 200 dollars for 50 people is still 200 for 78 -- so
+      // the per-participant box exists to make his rule expressible.
+      // Typing BOTH is refused rather than resolved: either answer would be a price nobody
+      // chose, and this panel already refuses instead of guessing (see the negative check).
+      if (prices.monthlyFee != null && prices.monthlyRate != null) {
+        window.ABY_ADJUSTMENT = null;
+        summary.textContent = 'Not applied - you have typed both a monthly total and a per-participant rate, and they can disagree. Type one: the total fixes the monthly figure, the rate re-prices when the headcount changes.';
         return;
       }
       if (!Object.keys(prices).length) {
@@ -5730,6 +5811,7 @@ const ABY_INTERNAL_JS = `
         '<label style="font-size:12px;color:#143c73;">Renewal<br><input id="abySetRenewal" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:120px;"></label>' +
         '<label style="font-size:12px;color:#143c73;">Annual<br><input id="abySetAnnual" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:120px;"></label>' +
         '<label style="font-size:12px;color:#143c73;">Monthly admin<br><input id="abySetMonthly" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:130px;"></label>' +
+        '<label style="font-size:12px;color:#143c73;">Per participant<br><input id="abySetPerPart" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:130px;"></label>' +
       '</div>' +
       '<div id="abySummary" style="margin-top:10px;font-size:12.5px;color:#143c73;font-weight:bold;"></div>';
 
@@ -5737,7 +5819,7 @@ const ABY_INTERNAL_JS = `
     else host.insertBefore(panel, host.firstChild);
 
     ['abyState', 'abyMode', 'abyAmt', 'abyScope', 'abyNote',
-     'abySetSetup', 'abySetRenewal', 'abySetAnnual', 'abySetMonthly'].forEach(function (id) {
+     'abySetSetup', 'abySetRenewal', 'abySetAnnual', 'abySetMonthly', 'abySetPerPart'].forEach(function (id) {
       var el = panel.querySelector('#' + id);
       el.addEventListener('input', function () { recompute(panel); });
       el.addEventListener('change', function () { recompute(panel); });
