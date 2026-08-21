@@ -1377,7 +1377,7 @@ function adminPipelineHTML() {
  .note{width:100%;border:1px solid transparent;background:transparent;border-radius:5px;padding:4px 6px;font-size:13px}
  .note:focus{border-color:#c8d2de;background:#fff;outline:none}
 </style></head><body>
-<header><b>ABY admin</b><a href="/aby" class="act" title="Run a quote as ABY, with the internal overrides">Run a quote</a><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline" class="here">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates">Rates</a></header>
+${abyAdminNav('/admin/pipeline')}
 <main>
   <div id="warn" style="display:none;background:#fdecec;color:#a12622;border:1px solid #f3c2c2;border-radius:8px;padding:10px 13px;margin:0 0 16px;font-size:13.5px"></div>
   <div class="card">
@@ -1668,7 +1668,7 @@ function adminBrokersHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/aby" class="act" title="Run a quote as ABY, with the internal overrides">Run a quote</a><a href="/admin">Quote log</a><a href="/admin/brokers" class="here">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates">Rates</a></header>
+${abyAdminNav('/admin/brokers')}
 <main>
   <div id="warn" style="display:none;background:#fdecec;color:#a12622;border:1px solid #f3c2c2;border-radius:8px;padding:10px 13px;margin:0 0 16px;font-size:13.5px"></div>
   <div class="filters">
@@ -1995,7 +1995,7 @@ function adminReferralsHTML() {
  .pbody{padding:12px 16px}
  .warn{margin:0 0 14px;padding:10px 14px;border-radius:7px;background:#fdf1e0;border:1px solid #f0d9ae;color:#7a5410;font-size:13px}
 </style></head><body>
-<header><b>ABY admin</b><a href="/aby" class="act" title="Run a quote as ABY, with the internal overrides">Run a quote</a><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/referrals" class="here">Referrals</a><a href="/admin/rates">Rates</a></header>
+${abyAdminNav('/admin/referrals')}
 <main>
   <div id="warn" class="warn" style="display:none"></div>
 
@@ -2209,7 +2209,7 @@ function adminRatesHTML() {
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
-<header><b>ABY admin</b><a href="/aby" class="act" title="Run a quote as ABY, with the internal overrides">Run a quote</a><a href="/admin">Quote log</a><a href="/admin/brokers">Brokers &amp; Agencies</a><a href="/admin/pipeline">Pipeline</a><a href="/admin/referrals">Referrals</a><a href="/admin/rates" class="here">Rates</a></header>
+${abyAdminNav('/admin/rates')}
 <main>
   <div class="filters">
     <span class="muted" style="font-size:13px">State:</span>
@@ -3289,13 +3289,75 @@ function isOpenPath(path) {
 
 // Serve the same front end as the public tool, plus the internal overlay script.
 // The public bundle is never modified; the overlay is only referenced here.
+// ---- ABY ADMIN NAV ---------------------------------------------------------------------------
+// ONE list of links, six pages. It was six copies of the same markup, each differing only in which
+// link carried class="here" -- so adding a screen meant editing all of them and the /aby tool had
+// simply been forgotten.
+// Eric, 2026-08-21: "On the page where ABY runs quotes /aby is it possible to add the same header
+// navigation that the other admin panels have?"
+const ABY_ADMIN_LINKS = [
+  { href: '/aby',              label: 'Run a quote',          cls: 'act',
+    title: 'Run a quote as ABY, with the internal overrides' },
+  { href: '/admin',            label: 'Quote log' },
+  { href: '/admin/brokers',    label: 'Brokers &amp; Agencies' },
+  { href: '/admin/pipeline',   label: 'Pipeline' },
+  { href: '/admin/referrals',  label: 'Referrals' },
+  { href: '/admin/rates',      label: 'Rates' },
+];
+
+/** The header bar. `here` is the path of the page being rendered, so it marks itself. */
+function abyAdminNav(here) {
+  const links = ABY_ADMIN_LINKS.map((l) => {
+    // The current page wins over the accent style: on /aby, "Run a quote" is where you ARE, not a
+    // call to action, and leaving it green would make the bar look like it linked somewhere else.
+    const cls = (l.href === here) ? 'here' : (l.cls || '');
+    return '<a href="' + l.href + '"' + (cls ? ' class="' + cls + '"' : '') +
+           (l.title ? ' title="' + l.title + '"' : '') + '>' + l.label + '</a>';
+  }).join('');
+  return '<header class="aby-adminbar"><h1>ABY admin</h1><nav>' + links + '</nav>' +
+         '<button class="logout" onclick="logout()">Log out</button></header>';
+}
+
 async function serveAbyTool(request, env) {
   const url = new URL(request.url);
   // Fetch the root ('/'), not '/index.html': the asset handler redirects
   // '/index.html' -> '/' with an empty body, which would strip the app scripts.
   const res = await env.ASSETS.fetch(new Request(new URL('/', url), request));
   let html = await res.text();
-  const inject = '<script>window.ABY_INTERNAL=true;</script>\n<script src="/internal/aby.js"></script>\n</body>';
+  // ⭐ THE ADMIN NAV, ON THE TOOL ITSELF (Eric, 2026-08-21): "On the page where ABY runs quotes
+  // /aby is it possible to add the same header navigation that the other admin panels have?"
+  // /aby was the one authenticated screen with no way back to the rest of the admin, so getting
+  // from a quote to the quote log meant typing the URL. The same defect the quote log itself had
+  // on 2026-08-19, one page over.
+  // 🔴 THE CSS IS CLASS-SCOPED, NOT ELEMENT-SCOPED, AND THAT IS THE CARE THIS NEEDED. The admin
+  // pages style a bare header selector; this page is the PUBLIC QUOTE TOOL, with its own
+  // stylesheet and its own header. A bare header rule injected here would restyle the tool's own
+  // chrome for ABY users only, and nobody would connect that back to a nav bar.
+  const navCss =
+    '<style>' +
+    '.aby-adminbar{background:#1a5c3a;color:#fff;padding:10px 20px;display:flex;align-items:center;' +
+      'gap:12px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}' +
+    '.aby-adminbar h1{font-size:1.05rem;font-weight:700;margin:0;flex:0 0 auto;color:#fff}' +
+    '.aby-adminbar nav{flex:1;display:flex;flex-wrap:wrap;gap:2px;margin-left:6px}' +
+    '.aby-adminbar nav a{color:rgba(255,255,255,.78);text-decoration:none;font-size:.85rem;' +
+      'font-weight:600;padding:5px 10px;border-radius:5px;white-space:nowrap}' +
+    '.aby-adminbar nav a:hover{background:rgba(255,255,255,.15);color:#fff}' +
+    '.aby-adminbar nav a.here{background:rgba(255,255,255,.2);color:#fff}' +
+    '.aby-adminbar nav a.act{background:#2f9e73;color:#fff;font-weight:700}' +
+    '.aby-adminbar .logout{color:rgba(255,255,255,.75);font-size:.875rem;cursor:pointer;' +
+      'background:none;border:none;padding:4px 8px;border-radius:4px}' +
+    '.aby-adminbar .logout:hover{background:rgba(255,255,255,.15);color:#fff}' +
+    '@media print{.aby-adminbar{display:none}}' +
+    '</style>';
+  // ⛔ HIDDEN WHEN PRINTING. The output of this page gets handed to an employer; an internal
+  // navigation bar must not turn up on a proposal.
+  const logoutFn = '<script>function logout(){fetch("/api/admin/logout").then(function(){location.href="/admin";});}</script>';
+  if (html.includes('</head>')) html = html.replace('</head>', navCss + '</head>');
+  html = html.includes('<body>')
+    ? html.replace('<body>', '<body>' + abyAdminNav('/aby'))
+    : (abyAdminNav('/aby') + html);
+
+  const inject = logoutFn + '<script>window.ABY_INTERNAL=true;</script>\n<script src="/internal/aby.js"></script>\n</body>';
   html = html.includes('</body>') ? html.replace('</body>', inject) : (html + inject);
   return new Response(html, {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
@@ -4085,18 +4147,7 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
 </style>
 </head>
 <body>
-<header>
-  <h1>ABY admin</h1>
-  <nav>
-    <a href="/aby" class="act" title="Run a quote as ABY, with the internal overrides">Run a quote</a>
-    <a href="/admin" class="here">Quote log</a>
-    <a href="/admin/brokers">Brokers &amp; Agencies</a>
-    <a href="/admin/pipeline">Pipeline</a>
-    <a href="/admin/referrals">Referrals</a>
-    <a href="/admin/rates">Rates</a>
-  </nav>
-  <button class="logout" onclick="logout()">Log out</button>
-</header>
+${abyAdminNav('/admin')}
 <div class="toolbar">
   <input type="text" id="search" placeholder="Search by client, broker, agency, quote number, or product…">
   <span class="count" id="count"></span>

@@ -188,11 +188,20 @@ function runAll(text) {
   // as the RAG stream checker earlier the same day: an anchor written with \n cannot match a CRLF
   // file, and the symptom points at the wrong thing.
   const flat = text.replace(/\r\n/g, "\n");
-  for (const decl of ["const PRODUCT_SHORT = ", "const PRODUCT_NAME_TO_ID = ", "function shortProductName("]) {
+  // ⚠️ ORDER MATTERS: a declaration that reads another must come after it.
+  for (const decl of ["const PRODUCT_SHORT = ", "const PRODUCT_NAME_TO_ID = ", "function shortProductName(",
+                      "const ABY_ADMIN_LINKS = ", "function abyAdminNav("]) {
     const at = flat.indexOf("\n" + decl);
     const isFn = decl.startsWith("function");
-    const close = isFn ? "\n}\n" : "\n};\n";
-    const endAt = at === -1 ? -1 : flat.indexOf(close, at);
+    // ⚠️ A const may be an OBJECT or an ARRAY, so both closers are tried and the NEARER one wins.
+    // Assuming "};" silently found nothing for the array and sliced an empty string, which then
+    // failed as "not defined" -- the same misleading symptom as the CRLF bug above.
+    let close = isFn ? "\n}\n" : "\n};\n";
+    let endAt = at === -1 ? -1 : flat.indexOf(close, at);
+    if (!isFn) {
+      const altAt = flat.indexOf("\n];\n", at);
+      if (altAt !== -1 && (endAt === -1 || altAt < endAt)) { close = "\n];\n"; endAt = altAt; }
+    }
     if (at === -1 || endAt === -1) {
       console.log("  FAIL prelude: " + decl.trim() + " not found at module scope in worker.js");
       bad++;
