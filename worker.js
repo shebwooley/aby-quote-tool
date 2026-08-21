@@ -589,7 +589,7 @@ async function handleUpdateQuoteStatus(request, id, env) {
   // ⛔ It had to be added HERE as well as in the commitment handler -- that one writes the
   // value straight to the database, so without this an admin could see the status and never
   // be able to set it back.
-  if (!['P', 'I', 'S', 'D'].includes(status)) {
+  if (!['P', 'I', 'S', 'D', 'N'].includes(status)) {
     return jsonResp({ error: 'Invalid status' }, 400);
   }
   try {
@@ -1074,7 +1074,7 @@ async function handleAdminAddQuote(request, env) {
   const agency = String(body.agency || '').trim().slice(0, 160);
   const when = String(body.quotedOn || '').trim() || new Date().toISOString().slice(0, 10);
   const rep = String(body.rep || '').trim().toLowerCase();
-  const status = ['P', 'I', 'S', 'D'].includes(String(body.status || 'P')) ? String(body.status || 'P') : 'P';
+  const status = ['P', 'I', 'S', 'D', 'N'].includes(String(body.status || 'P')) ? String(body.status || 'P') : 'P';
 
   // Product ids arrive as the tool's own vocabulary, so a manual row filters and reports exactly
   // like a generated one.
@@ -1457,7 +1457,7 @@ ${abyAdminNav('/admin/pipeline')}
       <span class="muted" style="font-size:13px">Rep:</span>
       <select id="qRep"><option value="">—</option><option value="eric">Eric</option><option value="niels">Niels</option></select>
       <span class="muted" style="font-size:13px">Status:</span>
-      <select id="qStatus"><option value="P">Pending</option><option value="I">In process</option><option value="S">Sold</option><option value="D">Dead</option></select>
+      <select id="qStatus"><option value="P">Pending</option><option value="I">In process</option><option value="S">Sold</option><option value="D">Dead</option><option value="N">No Response</option></select>
       <label style="font-size:13px"><input type="checkbox" id="qComm" checked style="margin-right:6px">Commission</label>
       <button id="qAdd" style="background:#143c73;color:#fff;border:0;font-weight:600">Log it</button>
     </div>
@@ -1920,7 +1920,7 @@ ${abyAdminNav('/admin/brokers')}
          }).join('')+moreRow('byAgency', capRows('byAgency', ag).length, ag.length, 5)+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
    }
-   var SL={P:'Pending',I:'In process',S:'Sold',D:'Dead'};
+   var SL={P:'Pending',I:'In process',S:'Sold',D:'Dead',N:'No Response'};
    function money(v){return v?('$'+Number(v).toLocaleString('en-US',{maximumFractionDigits:0})):'\u2014'}
    var bs=st.byStatus||[];
    document.getElementById('byStatus').innerHTML = bs.length
@@ -2528,8 +2528,10 @@ async function handleAdminStats(request, env) {
         " GROUP BY " + STATUS_EXPR).bind(...args).all();
       byStatus = r1.results || [];
 
-      // How long has each open quote been sitting? Only P and I -- a Sold or Dead quote is not
-      // waiting on anybody, and including them would bury the ones that are.
+      // How long has each open quote been sitting? Only P and I. A Sold, Dead or
+      // No Response quote is not waiting on anybody, and including them would bury the
+      // ones that are. No Response is CLOSED for this purpose even though nobody said no:
+      // the point of dispositioning it is that we have stopped waiting.
       const r2 = await env.DB.prepare(
         "SELECT " + BUCKET_EXPR + " AS bucket, COUNT(*) AS n, " +
         "       COALESCE(SUM(q.first_year_value),0) AS value " +
@@ -4242,6 +4244,14 @@ ${abyAdminNav('/admin')}
   <button class="tab" data-status="I">In process</button>
   <button class="tab" data-status="S">Sold</button>
   <button class="tab" data-status="D">Dead</button>
+  <!-- NO RESPONSE. Eric, 2026-08-21: "one that we never got an answer on, but it wasnt a
+       no. Its just one that was out there with no response. That seems different than
+       dead, though the effect is probably the same." He is right, and it is the same
+       distinction he already drew on the BROKER side between lost and withdrawn:
+       collapsing them makes a book look like it loses business it never competed for.
+       The tab goes in at the SAME TIME as the status, because the In process row above is
+       what happens when it does not. -->
+  <button class="tab" data-status="N">No Response</button>
   <button class="tab" data-view="commitments" id="commitmentsTab" style="margin-left:auto">Commitments</button>
 </div>
 <main>
@@ -4708,7 +4718,7 @@ function render() {
     var btn = document.querySelector('.tab[data-status="' + s + '"]');
     if (!btn) return;
     var n = quotes.filter(function(q){ return (q.status || 'P') === s; }).length;
-    var label = {P:'Pending',S:'Sold',D:'Dead'}[s];
+    var label = {P:'Pending',I:'In process',S:'Sold',D:'Dead',N:'No Response'}[s];
     btn.innerHTML = label + (n ? ' <span class="tab-count">' + n + '</span>' : '');
   });
 
@@ -4909,8 +4919,8 @@ function detailHTML(q, products) {
   var curStatus = q.status || 'P';
   // I sits between P and S deliberately: it is the order the work happens in, and the buttons
   // read as a path rather than a set of unrelated destinations.
-  var moveTargets = ['P','I','S','D'].filter(function(s){ return s !== curStatus; });
-  var moveLabels = {P:'Pending',I:'In process',S:'Sold',D:'Dead'};
+  var moveTargets = ['P','I','S','D','N'].filter(function(s){ return s !== curStatus; });
+  var moveLabels = {P:'Pending',I:'In process',S:'Sold',D:'Dead',N:'No Response'};
   var moveButtons = moveTargets.map(function(s){
     return '<button onclick="event.stopPropagation();moveQuote(this.dataset.id,this.dataset.status)" data-id="' + q.id + '" data-status="' + s + '" style="display:inline-flex;align-items:center;gap:.25rem;padding:.35rem .8rem;background:white;color:#555;border-radius:6px;font-size:.82rem;font-weight:600;border:1px solid #ddd;cursor:pointer">Move to ' + moveLabels[s] + '</button>';
   }).join('');
