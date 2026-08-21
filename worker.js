@@ -4586,8 +4586,10 @@ function effectiveKey(v) {
 // ⛔ MONTHS ONLY. A group plan starts on the 1st, so the day was never a question and a calendar
 // made you navigate to answer one (Eric, 2026-08-21). The VALUE is still a full ISO date ending
 // -01, because effectiveLabel() only formats ISO and the sort comparator reads the same field.
-// ⚠️ RANGE IS TIED TO THE DATA, not guessed: real effective dates run Apr 2024 to Sep 2026, so it
-// starts at 2024 and runs two years past today, which keeps next year's renewals reachable.
+// ⚠️ RANGE: 2024 (the oldest real effective date) to ONE year past today. Eric, 2026-08-21:
+// "I definitely don't need 2028 in there right now - that's overkill." A group is quoted at
+// most a renewal ahead, so a second future year is scrolling past months nobody will pick.
+// ⭐ It is a rolling window, so 2028 appears on its own once 2027 arrives -- no edit needed.
 // ⭐ THE FIRST OPTION IS EMPTY AND IS THE DEFAULT. An empty value is ignored by the save, so
 // opening a quote and pressing Save can never overwrite an estimate you did not mean to touch.
 function effectiveOptions(current) {
@@ -4596,7 +4598,7 @@ function effectiveOptions(current) {
   var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   var thisYear = new Date().getFullYear();
   var out = '<option value="">' + (isIso ? 'Change to...' : 'Set a date...') + '</option>';
-  for (var y = 2024; y <= thisYear + 2; y++) {
+  for (var y = 2024; y <= thisYear + 1; y++) {
     out += '<option disabled style="color:#9aa5b1">' + y + '</option>';
     for (var m = 0; m < 12; m++) {
       var val = y + '-' + (m < 9 ? '0' : '') + (m + 1) + '-01';
