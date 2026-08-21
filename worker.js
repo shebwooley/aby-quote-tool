@@ -407,8 +407,22 @@ async function handleListQuotes(request, env) {
     const args = [];
     if (q) {
       const like = `%${q}%`;
-      where.push('(client_name LIKE ? OR broker_name LIKE ? OR broker_agency LIKE ? OR quote_number LIKE ? OR rep_name LIKE ?)');
+      const fields = ['client_name LIKE ?', 'broker_name LIKE ?', 'broker_agency LIKE ?',
+                      'quote_number LIKE ?', 'rep_name LIKE ?'];
       args.push(like, like, like, like, like);
+
+      // SEARCH WHAT IS ON THE SCREEN, NOT WHAT IS IN THE COLUMN (Eric, 2026-08-21).
+      // The `products` column holds ids and OLD names -- "product-erisa", "ERISA Wrap Document",
+      // "derivedC" -- while the log shows the SHORT labels: ERISA, 1094/1095-C, FSA. Searching the
+      // raw column would find "ERISA" by luck and never find "1094/1095-C" at all, because that
+      // string exists nowhere in the data. It is generated at render time.
+      // So the term is resolved through the SAME label map the screen uses, back to the ids that
+      // produce it, and those are matched in SQL. Typing what you can see works.
+      for (const idPat of productIdsMatchingLabel(q)) {
+        fields.push('products LIKE ?');
+        args.push(idPat);
+      }
+      where.push('(' + fields.join(' OR ') + ')');
     }
     if (ranByFilter === 'ABY' || ranByFilter === 'broker') {
       where.push("COALESCE(ran_by, 'broker') = ?");
@@ -3690,6 +3704,154 @@ function esc(s) {
 
 // ─── Admin dashboard HTML ──────────────────────────────────────────────────────
 
+// ---- PRODUCT LABELS FOR THE QUOTE LOG -------------------------------------------------
+// Module scope on purpose: the SERVER needs them for product search, and the admin page
+// needs them to render. adminHTML() interpolates this same object into the browser copy.
+const PRODUCT_SHORT = {
+  pop:              { def: 'POP', embedsName: true, packages: { docsOnly: 'POP Docs Only', popHsa: 'POP + NDT (POP & HSA)', full: 'POP + NDT (FSA & HSA)' } },
+  // Eric: "FSA instead of all the other stuff that's mentioned." DCAP and LFSA ride along in the
+  // full name on the proposal; in a scannable list the broker is looking for the letters FSA.
+  fsa:              { def: 'FSA', countLabel: 'participants' },
+  hsa:              { def: 'HSA', countLabel: 'accounts' },
+  hra:              { def: 'HRA', countLabel: 'participants' },
+  ichra:            { def: 'ICHRA / QSEHRA', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
+  cobra:            { def: 'COBRA', countLabel: 'eligible employees' },
+  stateContinuation:{ def: 'State Continuation', countLabel: 'employees' },
+  // Eric: "For ERISA Wrap can we just call it ERISA?"
+  // FIXED SAME DAY: the package list named 'fullPlan', which does not exist in products.js, while
+  // the two that DO exist (fullSpd, fullSpdTesting) had no label at all -- so quoting either one
+  // printed the raw id, e.g. "ERISA - fullSpd", straight into the log.
+  erisa:            { def: 'ERISA', packages: { basic: 'Basic', buyUp: 'Buy-Up', enhanced: 'Enhanced', fullSpd: 'Full SPD', fullSpdTesting: 'Full SPD + Testing', whiteGlove: 'White Glove' } },
+  // Eric, 2026-08-21: label ACA by WHICH FORM SET it is, not by service tier -- "1094B/1095B or
+  // 1094C/1095C" -- and deliberately WITHOUT Full vs Self: "A lot of the time we quote both full
+  // and self so it's hard to say."
+  // The B/C split is the real distinction: smallB is the non-ALE B-form product; every ALE option
+  // is a C-form filing. The form-count band stays out of the label and lives in the quote.
+  // FIXED SAME DAY: fullXL and selfXL (501 to 1,000 forms) had no label and printed their raw id.
+  // Eric's preferred spelling, 2026-08-21: "I actually prefer that: 1094/1095-B and 1094/1095-C."
+  // The 106 IMPORTED ACA quotes carry no package at all (inputs is {}), so which form set they were
+  // cannot be recovered -- those read the bare def. Only quotes run through the tool can say B or C.
+  // embedsName: the package label REPLACES the product name rather than being appended to it.
+  // Without it this read "ACA Reporting - 1094/1095-C", which says the same thing twice and is the
+  // long label Eric objected to. The form number alone is what he asked for.
+  aca:              { def: 'ACA Reporting', embedsName: true, packages: {
+                        smallB: '1094/1095-B',
+                        fullLt100: '1094/1095-C', fullMid: '1094/1095-C', fullHigh: '1094/1095-C', fullXL: '1094/1095-C',
+                        selfLt100: '1094/1095-C', selfMid: '1094/1095-C', selfHigh: '1094/1095-C', selfXL: '1094/1095-C',
+                        // DERIVED, NOT RECORDED. The imported quotes stored no package, so which form
+                        // set they were was read back off the ORIGINAL PROPOSAL PDF and written in on
+                        // 2026-08-21 (Eric: "Yes go with 1"). The ids say derived on purpose: every
+                        // other value here is something a person chose in the tool, and a reader has
+                        // to be able to tell those apart. Each row also carries inputs.derivedFrom
+                        // naming the proposal it was read from.
+                        // NO BACKTICKS IN THIS BLOCK -- it is inside the adminHTML template literal.
+                        // Written with them on the first attempt, for the third time in one day; the
+                        // deploy refused it. Run check_worker_pages.mjs after ANY worker.js edit.
+                        derivedB: '1094/1095-B', derivedC: '1094/1095-C',
+                      }, countLabel: 'forms' },
+  // ADDED 2026-08-21. These five had NO entry, so each fell through to its full name -- up to 76
+  // characters, which is what pushed everything else in the cell behind a "+N more" nobody could open.
+  mpra:             { def: 'Medicare HRA', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
+  section127:       { def: 'EDU / SLRP', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
+  section132:       { def: 'QTB', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
+  lifestyle:        { def: 'LSB', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
+  directBilling:    { def: 'Direct Bill', countLabel: 'participants' },
+  // LEGACY-ONLY. These three are NOT in products.js -- the tool no longer offers them -- but they
+  // are in the imported history and therefore on screen: Form 5500 (9 quotes), NDT (7), HIPAA (6).
+  // Measured on production, not guessed. Do not delete them to tidy the map: the rows outlive the
+  // product, and without an entry each prints whatever name the old spreadsheet happened to use.
+  form5500:         { def: 'Form 5500' },
+  ndt:              { def: 'NDT' },
+  hipaa:            { def: 'HIPAA' },
+};
+const PRODUCT_NAME_TO_ID = {
+  'Section 125 Premium Only Plan (POP)': 'pop',
+  'Section 125 Cafeteria Plan with FSA / DCAP / LFSA': 'fsa',
+  'Health Savings Account (HSA) Administration': 'hsa',
+  'Section 105 Health Reimbursement Arrangement (HRA)': 'hra',
+  'ICHRA / QSEHRA': 'ichra',
+  'COBRA Administration': 'cobra',
+  'Texas State Continuation (Mini-COBRA)': 'stateContinuation',
+  'ERISA Wrap Document & Compliance': 'erisa',
+  'ACA Forms 1094/1095 Reporting': 'aca',
+  // The fallback path, for older rows that stored a display NAME rather than an id.
+  'Medicare Premium Reimbursement Arrangement (Medicare HRA)': 'mpra',
+  'Section 127 Educational Assistance (EDU) & Student Loan Reimbursement (SLRP)': 'section127',
+  'Section 132 Qualified Commuter Benefits (QTB)': 'section132',
+  'Lifestyle Benefit Plan (LSB)': 'lifestyle',
+  'Direct Billing': 'directBilling',
+};
+
+/**
+ * Which stored product ids would DISPLAY a label containing this search term?
+ *
+ * Returns SQL LIKE patterns for the `products` column. Empty array when the term matches no label,
+ * so an ordinary name search is unaffected.
+ *
+ * The two quoting shapes are deliberate and are what stop false positives:
+ *   product id  ->  '%erisa"%'      matches both "erisa" and "product-erisa" (the imported form)
+ *   package id  ->  '%"derivedC"%'  fully quoted, so "full" cannot match "fullMid"
+ */
+function productIdsMatchingLabel(term) {
+  const t = String(term || '').trim().toLowerCase();
+  if (t.length < 2) return [];
+  const out = [];
+  for (const [pid, entry] of Object.entries(PRODUCT_SHORT)) {
+    const def = (typeof entry === 'string') ? entry : (entry.def || '');
+    if (def && def.toLowerCase().indexOf(t) !== -1) out.push('%' + pid + '"%');
+    const pkgs = (typeof entry === 'object' && entry.packages) || {};
+    for (const [pkgId, label] of Object.entries(pkgs)) {
+      if (String(label).toLowerCase().indexOf(t) !== -1) out.push('%"' + pkgId + '"%');
+    }
+  }
+  // A term matching EVERY product is not a search, it is a full scan with extra steps.
+  return out.length > 40 ? [] : out;
+}
+
+function shortProductName(p) {
+  if (typeof p === 'string') return p;
+  // THE IMPORTED HISTORY USES A DIFFERENT ID CONVENTION, AND IT IS THE MAJORITY OF THE LOG.
+  // Measured on production 2026-08-21: of 1750 quotes, 1738 store ids like 'product-erisa' while
+  // only 12 use the live tool's 'erisa'. So every label added on 2026-08-21 missed almost every row,
+  // which is what Eric saw -- "it still says ERISA Wrap Document instead of ERISA".
+  // Their stored NAMES are older too ("ERISA Wrap Document", "Qualified Transportation Benefit
+  // (QTB)"), so matching on the name cannot rescue them either -- those strings are not in
+  // products.js any more. Stripping the prefix fixes all twelve legacy ids in one rule, rather
+  // than the three that happened to get noticed.
+  const rawId = String(p.id || '');
+  const baseId = rawId.indexOf('product-') === 0 ? rawId.slice(8) : rawId;
+  const id = (baseId in PRODUCT_SHORT) ? baseId : (PRODUCT_NAME_TO_ID[rawId] || PRODUCT_NAME_TO_ID[p.name] || baseId);
+  const entry = PRODUCT_SHORT[id];
+  let label;
+
+  if (!entry) {
+    label = p.name || p.id || '?';
+  } else {
+    const def        = (typeof entry === 'string') ? entry : (entry.def || id);
+    const pkgs       = (typeof entry === 'object') ? entry.packages : null;
+    const countLabel = (typeof entry === 'object' && entry.countLabel) ? entry.countLabel : 'participants';
+    const embedsName = !!(typeof entry === 'object' && entry.embedsName);
+
+    if (p.inputs && p.inputs.packageIds) {
+      const labels = p.inputs.packageIds.split(',').filter(Boolean).map(function(pkgId) {
+        return (pkgs && pkgs[pkgId]) || pkgId;
+      });
+      label = labels.length > 0 ? def + ' — ' + labels.join(', ') : def;
+    } else if (p.inputs && p.inputs.package) {
+      const pkgLabel = pkgs && pkgs[p.inputs.package];
+      label = pkgLabel ? (embedsName ? pkgLabel : def + ' — ' + pkgLabel) : def;
+    } else {
+      label = def;
+    }
+
+    if (p.inputs && p.inputs.count) {
+      label += ' (' + p.inputs.count + ' ' + countLabel + ')';
+    }
+  }
+
+  return label;
+}
+
 function adminHTML() {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -3914,7 +4076,7 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
   <button class="logout" onclick="logout()">Log out</button>
 </header>
 <div class="toolbar">
-  <input type="text" id="search" placeholder="Search by client, broker, agency, or quote number…">
+  <input type="text" id="search" placeholder="Search by client, broker, agency, quote number, or product…">
   <span class="count" id="count"></span>
   <select id="repFilter" style="margin-left:auto;padding:.4rem .5rem;border:1px solid #ddd;border-radius:6px;font-size:.85rem">
     <option value="">All reps</option>
@@ -4666,124 +4828,13 @@ function detailHTML(q, products) {
 //
 // TITLE CASE THROUGHOUT, on Eric's instruction: "Can you please capitalize all words: Direct Bill,
 // for instance. Or Plan Docs."
-const PRODUCT_SHORT = {
-  pop:              { def: 'POP', embedsName: true, packages: { docsOnly: 'POP Docs Only', popHsa: 'POP + NDT (POP & HSA)', full: 'POP + NDT (FSA & HSA)' } },
-  // Eric: "FSA instead of all the other stuff that's mentioned." DCAP and LFSA ride along in the
-  // full name on the proposal; in a scannable list the broker is looking for the letters FSA.
-  fsa:              { def: 'FSA', countLabel: 'participants' },
-  hsa:              { def: 'HSA', countLabel: 'accounts' },
-  hra:              { def: 'HRA', countLabel: 'participants' },
-  ichra:            { def: 'ICHRA / QSEHRA', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
-  cobra:            { def: 'COBRA', countLabel: 'eligible employees' },
-  stateContinuation:{ def: 'State Continuation', countLabel: 'employees' },
-  // Eric: "For ERISA Wrap can we just call it ERISA?"
-  // FIXED SAME DAY: the package list named 'fullPlan', which does not exist in products.js, while
-  // the two that DO exist (fullSpd, fullSpdTesting) had no label at all -- so quoting either one
-  // printed the raw id, e.g. "ERISA - fullSpd", straight into the log.
-  erisa:            { def: 'ERISA', packages: { basic: 'Basic', buyUp: 'Buy-Up', enhanced: 'Enhanced', fullSpd: 'Full SPD', fullSpdTesting: 'Full SPD + Testing', whiteGlove: 'White Glove' } },
-  // Eric, 2026-08-21: label ACA by WHICH FORM SET it is, not by service tier -- "1094B/1095B or
-  // 1094C/1095C" -- and deliberately WITHOUT Full vs Self: "A lot of the time we quote both full
-  // and self so it's hard to say."
-  // The B/C split is the real distinction: smallB is the non-ALE B-form product; every ALE option
-  // is a C-form filing. The form-count band stays out of the label and lives in the quote.
-  // FIXED SAME DAY: fullXL and selfXL (501 to 1,000 forms) had no label and printed their raw id.
-  // Eric's preferred spelling, 2026-08-21: "I actually prefer that: 1094/1095-B and 1094/1095-C."
-  // The 106 IMPORTED ACA quotes carry no package at all (inputs is {}), so which form set they were
-  // cannot be recovered -- those read the bare def. Only quotes run through the tool can say B or C.
-  // embedsName: the package label REPLACES the product name rather than being appended to it.
-  // Without it this read "ACA Reporting - 1094/1095-C", which says the same thing twice and is the
-  // long label Eric objected to. The form number alone is what he asked for.
-  aca:              { def: 'ACA Reporting', embedsName: true, packages: {
-                        smallB: '1094/1095-B',
-                        fullLt100: '1094/1095-C', fullMid: '1094/1095-C', fullHigh: '1094/1095-C', fullXL: '1094/1095-C',
-                        selfLt100: '1094/1095-C', selfMid: '1094/1095-C', selfHigh: '1094/1095-C', selfXL: '1094/1095-C',
-                        // DERIVED, NOT RECORDED. The imported quotes stored no package, so which form
-                        // set they were was read back off the ORIGINAL PROPOSAL PDF and written in on
-                        // 2026-08-21 (Eric: "Yes go with 1"). The ids say derived on purpose: every
-                        // other value here is something a person chose in the tool, and a reader has
-                        // to be able to tell those apart. Each row also carries inputs.derivedFrom
-                        // naming the proposal it was read from.
-                        // NO BACKTICKS IN THIS BLOCK -- it is inside the adminHTML template literal.
-                        // Written with them on the first attempt, for the third time in one day; the
-                        // deploy refused it. Run check_worker_pages.mjs after ANY worker.js edit.
-                        derivedB: '1094/1095-B', derivedC: '1094/1095-C',
-                      }, countLabel: 'forms' },
-  // ADDED 2026-08-21. These five had NO entry, so each fell through to its full name -- up to 76
-  // characters, which is what pushed everything else in the cell behind a "+N more" nobody could open.
-  mpra:             { def: 'Medicare HRA', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
-  section127:       { def: 'EDU / SLRP', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
-  section132:       { def: 'QTB', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
-  lifestyle:        { def: 'LSB', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
-  directBilling:    { def: 'Direct Bill', countLabel: 'participants' },
-  // LEGACY-ONLY. These three are NOT in products.js -- the tool no longer offers them -- but they
-  // are in the imported history and therefore on screen: Form 5500 (9 quotes), NDT (7), HIPAA (6).
-  // Measured on production, not guessed. Do not delete them to tidy the map: the rows outlive the
-  // product, and without an entry each prints whatever name the old spreadsheet happened to use.
-  form5500:         { def: 'Form 5500' },
-  ndt:              { def: 'NDT' },
-  hipaa:            { def: 'HIPAA' },
-};
-const PRODUCT_NAME_TO_ID = {
-  'Section 125 Premium Only Plan (POP)': 'pop',
-  'Section 125 Cafeteria Plan with FSA / DCAP / LFSA': 'fsa',
-  'Health Savings Account (HSA) Administration': 'hsa',
-  'Section 105 Health Reimbursement Arrangement (HRA)': 'hra',
-  'ICHRA / QSEHRA': 'ichra',
-  'COBRA Administration': 'cobra',
-  'Texas State Continuation (Mini-COBRA)': 'stateContinuation',
-  'ERISA Wrap Document & Compliance': 'erisa',
-  'ACA Forms 1094/1095 Reporting': 'aca',
-  // The fallback path, for older rows that stored a display NAME rather than an id.
-  'Medicare Premium Reimbursement Arrangement (Medicare HRA)': 'mpra',
-  'Section 127 Educational Assistance (EDU) & Student Loan Reimbursement (SLRP)': 'section127',
-  'Section 132 Qualified Commuter Benefits (QTB)': 'section132',
-  'Lifestyle Benefit Plan (LSB)': 'lifestyle',
-  'Direct Billing': 'directBilling',
-};
-
-function shortProductName(p) {
-  if (typeof p === 'string') return p;
-  // THE IMPORTED HISTORY USES A DIFFERENT ID CONVENTION, AND IT IS THE MAJORITY OF THE LOG.
-  // Measured on production 2026-08-21: of 1750 quotes, 1738 store ids like 'product-erisa' while
-  // only 12 use the live tool's 'erisa'. So every label added on 2026-08-21 missed almost every row,
-  // which is what Eric saw -- "it still says ERISA Wrap Document instead of ERISA".
-  // Their stored NAMES are older too ("ERISA Wrap Document", "Qualified Transportation Benefit
-  // (QTB)"), so matching on the name cannot rescue them either -- those strings are not in
-  // products.js any more. Stripping the prefix fixes all twelve legacy ids in one rule, rather
-  // than the three that happened to get noticed.
-  const rawId = String(p.id || '');
-  const baseId = rawId.indexOf('product-') === 0 ? rawId.slice(8) : rawId;
-  const id = (baseId in PRODUCT_SHORT) ? baseId : (PRODUCT_NAME_TO_ID[rawId] || PRODUCT_NAME_TO_ID[p.name] || baseId);
-  const entry = PRODUCT_SHORT[id];
-  let label;
-
-  if (!entry) {
-    label = p.name || p.id || '?';
-  } else {
-    const def        = (typeof entry === 'string') ? entry : (entry.def || id);
-    const pkgs       = (typeof entry === 'object') ? entry.packages : null;
-    const countLabel = (typeof entry === 'object' && entry.countLabel) ? entry.countLabel : 'participants';
-    const embedsName = !!(typeof entry === 'object' && entry.embedsName);
-
-    if (p.inputs && p.inputs.packageIds) {
-      const labels = p.inputs.packageIds.split(',').filter(Boolean).map(function(pkgId) {
-        return (pkgs && pkgs[pkgId]) || pkgId;
-      });
-      label = labels.length > 0 ? def + ' — ' + labels.join(', ') : def;
-    } else if (p.inputs && p.inputs.package) {
-      const pkgLabel = pkgs && pkgs[p.inputs.package];
-      label = pkgLabel ? (embedsName ? pkgLabel : def + ' — ' + pkgLabel) : def;
-    } else {
-      label = def;
-    }
-
-    if (p.inputs && p.inputs.count) {
-      label += ' (' + p.inputs.count + ' ' + countLabel + ')';
-    }
-  }
-
-  return label;
-}
+// ONE DEFINITION, SERVED TO BOTH SIDES. These used to live here, inside the page, so the SERVER
+// could not see them -- which is why product search could not use the labels. They now sit at
+// module scope and the browser copy is generated from that same object below.
+// Do not paste a second copy in here: two label maps that drift is the failure this avoids.
+const PRODUCT_SHORT = ${JSON.stringify(PRODUCT_SHORT)};
+const PRODUCT_NAME_TO_ID = ${JSON.stringify(PRODUCT_NAME_TO_ID)};
+${shortProductName.toString()}
 
 function parseProducts(raw) {
   try {

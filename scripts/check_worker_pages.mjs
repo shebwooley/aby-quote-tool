@@ -174,6 +174,35 @@ function runAll(text) {
 
   for (const name of RAW_LITERALS) bad += checkRawLiteral(name, text);
 
+  // 🔴 MODULE-SCOPE DEPENDENCIES MUST BE IN SCOPE BEFORE A PAGE IS EVALUATED.
+  // Pages are evaluated on their own, which was fine while every page function was self-contained.
+  // On 2026-08-21 the product-label map moved OUT of adminHTML to module scope, so the SERVER could
+  // use it for product search -- and adminHTML began interpolating it. This checker then reported
+  // "adminHTML threw: PRODUCT_SHORT is not defined", which was true OF THE CHECKER and not of the
+  // worker: at runtime that const is initialised long before any request arrives.
+  // ⚠️ A checker that fails for its own reasons trains people to ignore it, which is worse than not
+  // having one. Anything a page reads from module scope belongs in this list.
+  // ⚠️ LINE ENDINGS NORMALISED FIRST. worker.js is checked out CRLF, so a search for "\n};\n" finds
+  // nothing and the slice silently comes back EMPTY -- which then failed as "PRODUCT_SHORT is not
+  // defined" and looked like a missing declaration rather than a bad extraction. Same class of bug
+  // as the RAG stream checker earlier the same day: an anchor written with \n cannot match a CRLF
+  // file, and the symptom points at the wrong thing.
+  const flat = text.replace(/\r\n/g, "\n");
+  for (const decl of ["const PRODUCT_SHORT = ", "const PRODUCT_NAME_TO_ID = ", "function shortProductName("]) {
+    const at = flat.indexOf("\n" + decl);
+    const isFn = decl.startsWith("function");
+    const close = isFn ? "\n}\n" : "\n};\n";
+    const endAt = at === -1 ? -1 : flat.indexOf(close, at);
+    if (at === -1 || endAt === -1) {
+      console.log("  FAIL prelude: " + decl.trim() + " not found at module scope in worker.js");
+      bad++;
+      continue;
+    }
+    const nm = isFn ? "shortProductName" : decl.replace("const ", "").replace(" = ", "").trim();
+    try { (0, eval)(flat.slice(at, endAt + close.length) + "; globalThis." + nm + " = " + nm + ";"); }
+    catch (e) { console.log("  FAIL prelude " + nm + ": " + e.message); bad++; }
+  }
+
   for (const name of PAGES) {
     const fnSrc = body(name, text);
     if (!fnSrc) { console.log("  FAIL " + name + ": not found in worker.js"); bad++; continue; }
