@@ -4221,7 +4221,7 @@ ${abyAdminNav('/admin')}
             <span style="color:#c3ccc6">/</span>
             <span class="sortable-sub" data-sort="agency" style="cursor:pointer">Agency <span class="arr"></span></span></th>
           <th class="sortable" data-sort="rep">Rep <span class="arr"></span></th>
-          <th>Products</th><th>Ran by</th>
+          <th>Products</th><th>Run by</th>
         </tr>
       </thead>
       <tbody id="tbody">
