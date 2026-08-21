@@ -1,0 +1,66 @@
+# WHAT MUST NOT BE PUBLISHED TO abyquotes.com
+#
+# 2026-08-21. `wrangler.jsonc` sets the static-asset directory to "." -- the whole repo -- so every
+# file here was being uploaded and SERVED PUBLICLY. Measured live before this file existed:
+#
+#   /.dev.vars        200  <- ADMIN_PASSWORD, SESSION_SECRET and INTEGRATION_TOKEN, in the clear
+#   /worker.js        200  325KB, the entire server source
+#   /.git/config      200
+#   /.git/index       200
+#   /.git/objects/..  200  <- the whole repository, cloneable, including deleted history
+#   /schema.sql       200
+#
+# This file works like .gitignore and is read by wrangler at deploy time.
+#
+# RULES FOR EDITING IT:
+#   - Adding a pattern REMOVES a file from the public site. Safe direction.
+#   - Removing one PUBLISHES that file. Never do it to make something work without checking what
+#     else the pattern was holding back.
+#   - It only takes effect on `npx wrangler deploy`. Nothing here is enforced by a push.
+#
+# The real fix is to move the front-end into its own directory and point `assets.directory` at that,
+# so the default becomes "publish nothing" instead of "publish everything". This is the urgent stop.
+
+# --- the repository itself -------------------------------------------------------------------
+.git
+.git/**
+.githooks
+.githooks/**
+.gitignore
+.assetsignore
+
+# --- secrets and local state -----------------------------------------------------------------
+# .dev.vars is wrangler's LOCAL secret file. It is not supposed to leave the machine.
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+.wrangler
+.wrangler/**
+
+# --- server code -----------------------------------------------------------------------------
+# worker.js is the worker ENTRY POINT (`main`), not an asset. It does not need to be downloadable
+# and publishing it hands over every admin page, every query and every business rule.
+worker.js
+worker.js.map
+wrangler.jsonc
+package.json
+package-lock.json
+node_modules
+node_modules/**
+
+# --- build, tooling and data -----------------------------------------------------------------
+scripts
+scripts/**
+schema.sql
+agencies.txt
+README.md
+*.md
+
+# NOTE ON WHAT IS DELIBERATELY STILL PUBLISHED:
+#   index.html, july-2026.html, aby-logo.png and everything under assets/ are the tool itself.
+#   The root-level copies (app.js, pricing.js, renderer.js, reps.js, save-hook.js, utils.js,
+#   quote.css) look like older duplicates of files now under assets/, and are LEFT ALONE here on
+#   purpose: this change is a security stop, and quietly un-publishing a file the page might still
+#   load would turn it into an outage. Work out which are dead and remove them deliberately.
+#   reps.js in particular is PUBLIC BY DESIGN -- it is the outside-broker rep list.
