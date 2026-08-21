@@ -179,6 +179,29 @@ ABYQuote.renderer = (function () {
     ].join('\n');
   }
 
+  // The count a tiered price was actually calculated on.
+  //
+  // The tier label -- "20-99 participants" -- is the BAND the group falls in, not
+  // the number this quote used, and nothing else on the card carried it. So a quote
+  // priced for 50 people showed $225 with no way for the reader to see the 50.
+  // Reported by Eric, 2026-08-21, looking at a real FSA quote.
+  //
+  // Stated as an INPUT and never as arithmetic. "50 x $4.50" would be wrong every
+  // time the monthly minimum binds: 10 participants at $4.50 is $45, but the card
+  // correctly shows the $85 minimum, and a printed multiplication would not
+  // reconcile with it.
+  //
+  // No countLabel means the product does not take a count at all (pop, erisa), so
+  // there is no noun to use and we say nothing rather than invent "participants".
+  function countNote(fee, meta) {
+    if (!fee || !meta || !meta.countLabel) return '';
+    // tierExceeded already names the count inside its own breakdown sentence.
+    if (fee.tierExceeded) return '';
+    if (fee.count != null) return 'Estimated for ' + fee.count + ' ' + meta.countLabel + '.';
+    if (fee.countMissing) return 'No count was entered, so this shows the lowest tier.';
+    return '';
+  }
+
   function renderPricingCards(result, meta) {
     var cards = [];
     // Fixed fees. When setup and annual renewal are the same recurring amount,
@@ -195,7 +218,7 @@ ABYQuote.renderer = (function () {
     }
     if (result.docsFee) cards.push({ label: result.docsFee.label || 'Documents', price: u.money(result.docsFee.amount), note: 'One-time.' });
     if (result.annualFee != null) {
-      var aNote = (result.annualFee.count != null && meta.countLabel) ? 'Estimated for ' + result.annualFee.count + ' ' + meta.countLabel + '.' : 'Per year.';
+      var aNote = countNote(result.annualFee, meta) || 'Per year.';
       if (result.formulaBreakdown) aNote = result.formulaBreakdown;
       cards.push({ label: result.annualFee.label || 'Annual fee', price: u.money(result.annualFee.amount), note: aNote });
     }
@@ -203,6 +226,8 @@ ABYQuote.renderer = (function () {
       var mNote = [];
       if (result.monthlyFee.tierLabel) mNote.push(esc(result.monthlyFee.tierLabel));
       if (result.monthlyFee.breakdown) mNote.push(esc(result.monthlyFee.breakdown));
+      var mCount = countNote(result.monthlyFee, meta);
+      if (mCount) mNote.push(esc(mCount));
       cards.push({
         label: result.monthlyFee.label || 'Monthly administration',
         price: u.money(result.monthlyFee.amount) + ' <small>monthly</small>',
