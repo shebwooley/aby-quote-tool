@@ -4687,10 +4687,16 @@ const PRODUCT_SHORT = {
   // The B/C split is the real distinction: smallB is the non-ALE B-form product; every ALE option
   // is a C-form filing. The form-count band stays out of the label and lives in the quote.
   // FIXED SAME DAY: fullXL and selfXL (501 to 1,000 forms) had no label and printed their raw id.
-  aca:              { def: 'ACA Reporting', packages: {
-                        smallB: '1094B/1095B',
-                        fullLt100: '1094C/1095C', fullMid: '1094C/1095C', fullHigh: '1094C/1095C', fullXL: '1094C/1095C',
-                        selfLt100: '1094C/1095C', selfMid: '1094C/1095C', selfHigh: '1094C/1095C', selfXL: '1094C/1095C',
+  // Eric's preferred spelling, 2026-08-21: "I actually prefer that: 1094/1095-B and 1094/1095-C."
+  // The 106 IMPORTED ACA quotes carry no package at all (inputs is {}), so which form set they were
+  // cannot be recovered -- those read the bare def. Only quotes run through the tool can say B or C.
+  // embedsName: the package label REPLACES the product name rather than being appended to it.
+  // Without it this read "ACA Reporting - 1094/1095-C", which says the same thing twice and is the
+  // long label Eric objected to. The form number alone is what he asked for.
+  aca:              { def: 'ACA Reporting', embedsName: true, packages: {
+                        smallB: '1094/1095-B',
+                        fullLt100: '1094/1095-C', fullMid: '1094/1095-C', fullHigh: '1094/1095-C', fullXL: '1094/1095-C',
+                        selfLt100: '1094/1095-C', selfMid: '1094/1095-C', selfHigh: '1094/1095-C', selfXL: '1094/1095-C',
                       }, countLabel: 'forms' },
   // ADDED 2026-08-21. These five had NO entry, so each fell through to its full name -- up to 76
   // characters, which is what pushed everything else in the cell behind a "+N more" nobody could open.
@@ -4699,6 +4705,13 @@ const PRODUCT_SHORT = {
   section132:       { def: 'QTB', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
   lifestyle:        { def: 'LSB', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
   directBilling:    { def: 'Direct Bill', countLabel: 'participants' },
+  // LEGACY-ONLY. These three are NOT in products.js -- the tool no longer offers them -- but they
+  // are in the imported history and therefore on screen: Form 5500 (9 quotes), NDT (7), HIPAA (6).
+  // Measured on production, not guessed. Do not delete them to tidy the map: the rows outlive the
+  // product, and without an entry each prints whatever name the old spreadsheet happened to use.
+  form5500:         { def: 'Form 5500' },
+  ndt:              { def: 'NDT' },
+  hipaa:            { def: 'HIPAA' },
 };
 const PRODUCT_NAME_TO_ID = {
   'Section 125 Premium Only Plan (POP)': 'pop',
@@ -4720,7 +4733,17 @@ const PRODUCT_NAME_TO_ID = {
 
 function shortProductName(p) {
   if (typeof p === 'string') return p;
-  const id = (p.id in PRODUCT_SHORT) ? p.id : (PRODUCT_NAME_TO_ID[p.id] || PRODUCT_NAME_TO_ID[p.name] || p.id);
+  // THE IMPORTED HISTORY USES A DIFFERENT ID CONVENTION, AND IT IS THE MAJORITY OF THE LOG.
+  // Measured on production 2026-08-21: of 1750 quotes, 1738 store ids like 'product-erisa' while
+  // only 12 use the live tool's 'erisa'. So every label added on 2026-08-21 missed almost every row,
+  // which is what Eric saw -- "it still says ERISA Wrap Document instead of ERISA".
+  // Their stored NAMES are older too ("ERISA Wrap Document", "Qualified Transportation Benefit
+  // (QTB)"), so matching on the name cannot rescue them either -- those strings are not in
+  // products.js any more. Stripping the prefix fixes all twelve legacy ids in one rule, rather
+  // than the three that happened to get noticed.
+  const rawId = String(p.id || '');
+  const baseId = rawId.indexOf('product-') === 0 ? rawId.slice(8) : rawId;
+  const id = (baseId in PRODUCT_SHORT) ? baseId : (PRODUCT_NAME_TO_ID[rawId] || PRODUCT_NAME_TO_ID[p.name] || baseId);
   const entry = PRODUCT_SHORT[id];
   let label;
 
