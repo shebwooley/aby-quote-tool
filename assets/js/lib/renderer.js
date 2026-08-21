@@ -476,13 +476,28 @@ ABYQuote.renderer = (function () {
 
   function renderAuthorizationPage(form, groups, quoteNumber, opts) {
     opts = opts || {};
-    function feeSummary(r) {
+    // What this line has to say is what the employer is AUTHORIZING, and it was missing
+    // two thirds of it: it printed the per-participant rate but neither the headcount the
+    // price was worked out on nor the monthly figure itself. So the page somebody signs
+    // did not state how many people it covers or what it costs a month.
+    // Eric, 2026-08-21, on where the count belongs: "if they change it on the quote that
+    // number should appear near the bottom in the signature line ... when they sign the
+    // part of the form saying they want to move forward, it will show the pricing there
+    // (and the per employee amount)."
+    // ORDER IS DELIBERATE: the amount first, then the rate that produced it, then the
+    // count it assumed -- price, then workings.
+    function feeSummary(r, meta) {
       var parts = [];
       if (r.setupFee) parts.push('Setup ' + u.money(r.setupFee.amount));
       if (r.docsFee) parts.push('Documents ' + u.money(r.docsFee.amount));
       if (r.renewalFee != null) parts.push('Renewal ' + u.money(r.renewalFee.amount) + '/yr');
       if (r.annualFee != null) parts.push(u.money(r.annualFee.amount) + '/yr');
-      if (r.monthlyFee) parts.push(r.monthlyFee.breakdown || (u.money(r.monthlyFee.amount) + '/mo'));
+      if (r.monthlyFee) {
+        parts.push(u.money(r.monthlyFee.amount) + '/mo');
+        if (r.monthlyFee.breakdown) parts.push(r.monthlyFee.breakdown);
+      }
+      var cn = countNote(r.monthlyFee || r.annualFee, meta);
+      if (cn) parts.push(cn.replace(/\.$/, ''));
       return parts.join('  |  ');
     }
     var picker = groups.map(function (g, i) {
@@ -495,14 +510,14 @@ ABYQuote.renderer = (function () {
           var pkg = findPackage(meta, r.packageId) || {};
           var parsed = splitPackageName(pkg.name || r.packageId);
           var label = parsed.name + (parsed.detail ? ': ' + parsed.detail : '');
-          var fs = feeSummary(r);
+          var fs = feeSummary(r, meta);
           if (fs) label += '  (' + fs + ')';
           var sel = (rec && r.packageId === rec) ? ' selected' : '';
           return '<option value="' + esc(parsed.name) + '"' + sel + '>' + esc(label) + '</option>';
         }).join('');
         tier = '<div class="opt-tier"><label>Option:</label><select class="opt-tier-select">' + opts + '</select></div>';
       } else {
-        var fs2 = feeSummary(g.results[0]);
+        var fs2 = feeSummary(g.results[0], meta);
         if (fs2) desc = '<div class="opt-desc">' + esc(fs2) + '</div>';
       }
       return '<div class="opt-row"><input type="checkbox" class="opt-check" data-label="' + esc(name) + '" checked>' +

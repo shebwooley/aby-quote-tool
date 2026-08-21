@@ -1830,6 +1830,12 @@ ${abyAdminNav('/admin/brokers')}
      } else { warn.style.display='none'; }
    }
    CACHE.byAgency=st.byAgency||[];
+   // Share-of-total uses st.totals.quotes, NOT the sum of the rows above.
+   // Two reasons, both of which would give a wrong percentage: byAgency is LIMIT 1000,
+   // and the SHOW: Eric / Niels filter applies to both, so the denominator has to be the
+   // filtered one. When totals is missing (the degraded path) share prints a dash rather
+   // than a number computed from whatever happened to load.
+   CACHE.totalQuotes=(st.totals&&st.totals.quotes)||0;
    paintByAgency();
    // 🔴🔴 THESE TWO TABLES HOLD 235 ROWS EACH SINCE THE 2024-2026 IMPORT, AND THE PAGE WAS 31
  // SCREENS TALL. "Quotes by status" and "Open quotes, by age" -- the two short summaries most
@@ -1859,19 +1865,28 @@ ${abyAdminNav('/admin/brokers')}
    });
  }
 
+ function pctOfTotal(n){
+   var t=CACHE.totalQuotes; if(!t) return '-';
+   var v=(Number(n||0)*100)/t;
+   // A one-quote agency out of 1,751 is 0.06%, which rounds to 0.1% and reads as more than
+   // it is. Show it as under a tenth instead of rounding it up.
+   return (v>0&&v<0.1)?'<0.1%':(v.toFixed(1)+'%');
+ }
  function paintByAgency(){
    var ag=sorted('byAgency',CACHE.byAgency,{
      agency:function(x){return String(x.agency_label||x.agency||'').toLowerCase()},
      n:function(x){return Number(x.n||0)},
+     share:function(x){return Number(x.n||0)},
      agents:function(x){return Number(x.agents||0)},
      last:function(x){return String(x.last_quote||'')}
    },'n');
    document.getElementById('byAgency').innerHTML = ag.length
      ? '<table><thead><tr>'+hc('byAgency','agency','Agency')+hc('byAgency','n','Quotes','n')
+       +hc('byAgency','share','Share','n')
        +hc('byAgency','agents','Agents','n')+hc('byAgency','last','Last quote')
        +'<th>Owner</th></tr></thead><tbody>'
        + capRows('byAgency', ag).map(function(x){
-           return '<tr><td>'+esc(x.agency_label||x.agency||'(no agency)')+'</td><td class="n">'+x.n+'</td><td class="n">'+x.agents+'</td><td class="date">'+day(x.last_quote)+'</td>'
+           return '<tr><td>'+esc(x.agency_label||x.agency||'(no agency)')+'</td><td class="n">'+x.n+'</td><td class="n">'+pctOfTotal(x.n)+'</td><td class="n">'+x.agents+'</td><td class="date">'+day(x.last_quote)+'</td>'
              +'<td>'+(x.agency_id?repSelect('agency',x.agency_id,x.rep):'<span class="muted">\u2014</span>')+'</td></tr>';
          }).join('')+moreRow('byAgency', capRows('byAgency', ag).length, ag.length, 5)+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
