@@ -179,8 +179,17 @@ def main():
             notes = []
             if comm_txt and comm_txt.lower() not in ("commission", "no commission"):
                 notes.append("Commission: " + comm_txt)
-            if srcfile:
-                notes.append("Source: " + str(srcfile).strip()[:300])
+            # ⛔ THE SOURCE FILENAME IS DELIBERATELY NOT WRITTEN INTO `notes` ANY MORE.
+            # ⭐ Eric, 2026-08-21: "Yes strip it. It's not useful at all. What is useful is notes like
+            # this was quoted twice, once with and once without commission. or Kandice quoted this
+            # and Niels quoted it too."
+            # The value was the PROPOSAL FILENAME, so on a COBRA proposal the note said the source of
+            # the quote was the quote, restating the employer name a third time on the same row --
+            # and `source_tag` (import-<year>) already answers "where did this row come from" in the
+            # panel's own LINK SOURCE field.
+            # 🔬 The rows already loaded are cleaned by `stripImportedSourceNotes()` in worker.js,
+            # which runs from /api/migrate. ⚠️ If that ever needs undoing, the filenames come back by
+            # re-reading the source sheet here -- this is not the only copy.
             if note:
                 notes.append(str(note).strip()[:300])
 

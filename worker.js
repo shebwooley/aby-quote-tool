@@ -3551,6 +3551,69 @@ async function indexExists(env, name) {
 // the same rule the `client_id` half was eventually settled by: verify on the thing that needed the
 // change, never on the change's own report of itself. It also means a column added by hand, or by
 // an earlier run, verifies correctly -- `already` and `applied` are both fine, only `failed` is not.
+/**
+ * Strip the dead "Source: <filename>" segment out of imported notes.
+ *
+ * ⭐ ERIC, 2026-08-21: "Yes strip it. It's not useful at all. What is useful is notes like this was
+ * quoted twice, once with and once without commission. or Kandice quoted this and Niels quoted it
+ * too." The importer wrote the PROPOSAL FILENAME into notes, so on a COBRA proposal the note read
+ * "Source: ABY COBRA Administration Proposal- <the same employer>" -- i.e. the source of the quote
+ * is the quote. And LINK SOURCE already shows the import tag, so it was the second source on screen.
+ *
+ * 🔴🔴 WHY THIS IS SURGICAL AND NOT "clear the notes column". `notes` is up to THREE things joined
+ * by " | ": a Commission line, this Source line, and the sheet's own note. The Commission line
+ * exists because `commission_included` has only two states while the sheet had three -- "Quoted both
+ * ways" is 305 rows, and that note is the ONLY place the real answer survives. It is also exactly
+ * the kind of note Eric just said is worth keeping. ⛔ Clearing the column would destroy it.
+ *
+ * ⛔ AND NOT A DISPLAY-SIDE FILTER EITHER, which was the other candidate and is worse: that textarea
+ * is EDITABLE with a Save button, so hiding a segment would mean the next person to edit a note
+ * silently deletes the hidden text on save.
+ *
+ * ⚠️ SCOPED TO ROWS THE IMPORTER CREATED (`source_tag LIKE 'import-%'`), so a broker-typed note that
+ * happens to begin with the word Source is never touched. The residual risk is a human note added to
+ * an IMPORTED row that also begins that way, which is accepted.
+ *
+ * ✅ IDEMPOTENT: after one run nothing matches, so it reports 0 and changes nothing. `/api/migrate`
+ * is opened by hand more than once and must stay safe to re-run.
+ * ℹ️ RECOVERABLE if it is ever wanted: the filenames are re-derivable from the original spreadsheet
+ * via `scripts/import_quote_log.py`. Nothing here is the only copy.
+ */
+function stripSourceSegment(notes) {
+  const kept = String(notes == null ? '' : notes)
+    .split('|')
+    .map((s) => s.trim())
+    .filter((s) => s && !s.toLowerCase().startsWith('source:'));
+  return kept.length ? kept.join(' | ') : null;
+}
+
+async function stripImportedSourceNotes(env) {
+  let scanned = 0, changed = 0, emptied = 0;
+  try {
+    const { results } = await env.DB.prepare(
+      "SELECT id, notes FROM quotes WHERE source_tag LIKE 'import-%' AND notes LIKE '%Source:%'"
+    ).all();
+    const rows = results || [];
+    scanned = rows.length;
+
+    const updates = [];
+    for (const r of rows) {
+      const next = stripSourceSegment(r.notes);
+      if (next === r.notes) continue;
+      if (next === null) emptied++;
+      changed++;
+      updates.push(env.DB.prepare("UPDATE quotes SET notes = ? WHERE id = ?").bind(next, r.id));
+    }
+    // Batched so a partial run cannot leave half the rows in one shape and half in another.
+    if (updates.length) await env.DB.batch(updates);
+    return { scanned, changed, emptied };
+  } catch (e) {
+    // ⚠️ REPORTED, NEVER THROWN. This is a tidy-up riding along with the schema migration; a failure
+    // here must not make `/api/migrate` look like the schema did not apply.
+    return { scanned, changed, emptied, error: String((e && e.message) || e) };
+  }
+}
+
 async function handleMigrate(env) {
   const statements = [];
 
@@ -3582,6 +3645,9 @@ async function handleMigrate(env) {
 
   const missing = verified.filter((v) => !v.present).map((v) => v.what);
 
+  // Data tidy-up, not schema. Runs after the columns are proven present, and reports what it moved.
+  const notesCleanup = await stripImportedSourceNotes(env);
+
   // ⚠️ `ok` NOW MEANS "every object this migration is responsible for is present", which is the
   // question anybody opening this URL is actually asking. It used to be the constant `true`.
   // Nothing calls this endpoint programmatically (grep: one route, no callers) -- it is opened by
@@ -3590,6 +3656,9 @@ async function handleMigrate(env) {
     ok: missing.length === 0,
     missing,
     verified,
+    // `scanned` is how many imported rows still carried a Source line, `changed` how many were
+    // rewritten, `emptied` how many held NOTHING ELSE and are now null. On a second run all zero.
+    notesCleanup,
     statements,
     // Kept so an older eye still finds what it is looking for in the same payload.
     applied: statements.filter((s) => s.result === "applied").map((s) => s.sql),
@@ -3773,6 +3842,15 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
    answer to "which block am I looking at" is a LINE, and a line costs no vertical room. */
 .detail-actions{margin:0;padding:10px 16px;border-top:1px solid #e4eee8;
                 display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+/* ⭐ The manual-quote sentence, lifted OUT of the detail-actions row (Eric, 2026-08-21). Inside that
+   row it competed with the buttons for width and pushed "Move to Dead" onto its own line. It carries
+   the top border now, so the row below it keeps its separation without a doubled rule.
+   ⛔ NO BACKTICKS IN THIS BLOCK. It lives inside a template literal, so one would end the literal
+   early and the parse error would land on an innocent line further down. The page checker caught
+   exactly that here on the first attempt, which is what it was rebuilt for. */
+.detail-manual-note{margin:0;padding:10px 16px 0;border-top:1px solid #e4eee8;
+                    font-size:.82rem;color:#5b6b7f;max-width:52rem}
+.detail-manual-note + .detail-actions{border-top:none;padding-top:8px}
 /* 🔴 RAISED FROM 680px TO 900px, 2026-08-18. Between the old breakpoint and roughly 950px the
    seven-column table could not fit and was being CLIPPED -- that is where "Ran By is off the page"
    was happening, and it is not a phone width, it is an ordinary half-screen desktop window.
@@ -4536,12 +4614,25 @@ function detailHTML(q, products) {
         '<span data-note-msg="' + esc(q.id) + '" style="font-size:.8rem;color:#5b6b7f"></span>' +
       '</div>' +
     '</div>' +
+    // ⭐ ERIC, 2026-08-21: the manual-quote sentence is RIGHT but was too long, and it sat INSIDE the
+    // button row — so it ate the width and pushed "Move to Dead" onto a line of its own, away from
+    // the other buttons. ✅ Two changes, and the second is the one that actually holds: the sentence
+    // is shortened, AND it is lifted out of the detail-actions row into its own line above.
+    // ⚠️ SHORTENING ALONE WOULD NOT HAVE FIXED IT. That row is flex-wrap:wrap, so any text sharing
+    // it competes with the buttons for space and the break point just moves to a different window
+    // width. With the note out of the row, the buttons are the only things in it and stay together
+    // at every width.
+    // ⛔ NO BACKTICKS ANYWHERE IN THIS COMMENT — it sits inside the adminHTML template literal.
+    // ⛔ What must NOT be lost from the wording: re-quoting prices at CURRENT rates and mints a NEW
+    // number. That is the sentence stopping somebody reading "Quote this again" as "reprint this".
+    (reproducible
+      ? ''
+      : '<div class="detail-manual-note">Quoted outside the tool, so there is nothing to open. Quoting it again uses <strong>current</strong> rates and gets a new number.</div>') +
     '<div class="detail-actions">' +
       (reproducible
         ? '<a href="' + rerunUrl + '&readonly=1" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:#e8f4ec;color:#1a5c3a;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4">View Quote ↗</a>' +
           '<a href="' + rerunUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#555;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #ddd">Re-run Quote ↗</a>'
-        : '<span class="muted" style="font-size:.82rem;max-width:38rem">This one was not run through the tool, so there is no quote to open — the record has what was quoted, not what it was priced on. Quoting it again uses <strong>current</strong> rates and gets its own number.</span>' +
-          '<a href="' + freshUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#555;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #ddd">Quote this again ↗</a>') +
+        : '<a href="' + freshUrl + '" target="_blank" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#555;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #ddd">Quote this again ↗</a>') +
       moveButtons +
       // 🔴 DELETE IS NO LONGER HERE. Eric, 2026-08-18: "Yes delete should move it out of the quote
       // panel." It sat as a peer of View, Re-run and Move to Sold -- four routine buttons and one
