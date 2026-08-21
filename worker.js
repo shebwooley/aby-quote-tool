@@ -3297,7 +3297,7 @@ function isOpenPath(path) {
 // navigation that the other admin panels have?"
 const ABY_ADMIN_LINKS = [
   { href: '/aby',              label: 'Run a quote',          cls: 'act',
-    title: 'Run a quote as ABY, with the internal overrides' },
+    title: 'Run a quote as ABY, with the internal price adjustments' },
   { href: '/admin',            label: 'Quote log' },
   { href: '/admin/brokers',    label: 'Brokers &amp; Agencies' },
   { href: '/admin/pipeline',   label: 'Pipeline' },
@@ -4745,7 +4745,7 @@ function render() {
           (originOf(q) === 'dashboard' ? 'Handed over from the BenefitLab dashboard (carries a client id)'
            : originOf(q) === 'direct' ? 'Run on the shared link - broker typed their own details'
            : 'Run by ABY from the admin') + '">' + ORIGIN_LABEL[originOf(q)] + '</span>' +
-        (q.adjustment ? '<br><span style="font-size:.72rem;color:#b8860b" title="' + esc(q.adjustment_note || "") + '">rate override</span>' : '') +
+        (q.adjustment ? '<br><span style="font-size:.72rem;color:#b8860b" title="' + esc(q.adjustment_note || "") + '">price adjusted</span>' : '') +
       '</td>';
 
     row.addEventListener('click', function(e){
@@ -5612,7 +5612,7 @@ const ABY_INTERNAL_JS = `
 
     if (mode === 'none' || isNaN(amt) || amt === 0) {
       window.ABY_ADJUSTMENT = null;
-      summary.textContent = 'No override. State: ' + window.ABY_STATE + '. Quotes run at standard ' + window.ABY_STATE + ' pricing.';
+      summary.textContent = 'No price adjustment. State: ' + window.ABY_STATE + '. Quotes run at standard ' + window.ABY_STATE + ' pricing.';
       return;
     }
     window.ABY_ADJUSTMENT = { mode: mode, amount: amt, scope: scope };
@@ -5637,10 +5637,10 @@ const ABY_INTERNAL_JS = `
         '<strong style="color:#143c73;font-size:15px;">ABY internal controls</strong>' +
         '<span style="background:#205aa6;color:#fff;font-size:11px;padding:2px 8px;border-radius:999px;">not visible to brokers</span>' +
       '</div>' +
-      '<p style="margin:0 0 12px;color:#4a5568;font-size:12.5px;">State pricing and rate overrides. Overrides change the quoted price; the override itself is recorded internally and never appears on the client proposal or PDF.</p>' +
+      '<p style="margin:0 0 12px;color:#4a5568;font-size:12.5px;">State pricing and price adjustments. An adjustment changes the quoted price; the adjustment itself is recorded internally and never appears on the client proposal or PDF.</p>' +
       '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">' +
         '<label style="font-size:12px;color:#143c73;">State<br><select id="abyState" style="padding:6px;min-width:150px;">' + stateOpts + '</select></label>' +
-        '<label style="font-size:12px;color:#143c73;">Override<br><select id="abyMode" style="padding:6px;"><option value="none">None</option><option value="percent">Percent (%)</option><option value="flat">Flat ($)</option><option value="set">Set price ($)</option></select></label>' +
+        '<label style="font-size:12px;color:#143c73;">Price Adjustment<br><select id="abyMode" style="padding:6px;"><option value="none">None</option><option value="percent">Percent (%)</option><option value="flat">Flat ($)</option><option value="set">Set price ($)</option></select></label>' +
         '<label style="font-size:12px;color:#143c73;">Amount<br><input id="abyAmt" type="number" step="0.01" placeholder="e.g. 10 or -15" style="padding:6px;width:130px;"></label>' +
         '<label style="font-size:12px;color:#143c73;">Applies to<br><select id="abyScope" style="padding:6px;min-width:150px;">' + scopeOpts + '</select></label>' +
         '<label style="font-size:12px;color:#143c73;flex:1;min-width:180px;">Reason (internal note)<br><input id="abyNote" type="text" placeholder="e.g. DFW regional / ABC brokerage discount" style="padding:6px;width:100%;box-sizing:border-box;"></label>' +
