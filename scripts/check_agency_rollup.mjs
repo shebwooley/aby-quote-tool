@@ -49,6 +49,24 @@ function buildHarness(src) {
   return { rollup, agRowSrc, loop };
 }
 
+// Family totals as SQL returns them: employers counted DISTINCTLY across the whole family.
+// ⭐ THE NUMBERS HERE ARE DELIBERATELY LESS THAN THE SUM OF THE ROWS. Parent has 10 employers and
+// the child has 6, but two were quoted under both names, so the family is 14 and not 16. A rule
+// below asserts the rendered parent shows 14 -- which is the only way to catch a rollup that goes
+// back to adding the rows up.
+const FAMILY_FIXTURE = [
+  // MMA's own row has 10 employers and MHBT's has 6, so a rollup that ADDS them gets 16.
+  // The truth is 14: two employers were quoted under both names. A rule below asserts the
+  // rendered MMA row says 14, which is the only way to catch a regression back to summing.
+  { family: 'MMA', employers: 14, won: 7, kept: 5, n: 927 },
+  { family: 'USI', employers: 12, won: 3, kept: 3, n: 335 },
+  { family: 'HUB', employers: 9, won: 4, kept: 4, n: 70 },
+  // A SYNTHESISED parent still gets a family row, because the SQL groups on
+  // COALESCE(parent name, agency) -- the child's quotes land under the parent's name even though
+  // the parent has never quoted under its own. Its figures are its only child's.
+  { family: 'Ghostly', employers: 2, won: 0, kept: 0, n: 12 },
+];
+
 function run(rows, open, src) {
   const { rollup, agRowSrc, loop } = buildHarness(src || SRC);
   const prelude = `
@@ -56,6 +74,10 @@ function run(rows, open, src) {
     // The rollup reads CACHE.byAgent to nest the named agents under their agency. Stubbed from
     // the fixture so the harness exercises the real grouping rather than an empty list.
     var CACHE = { byAgent: AGENTS };
+    // FAM_BY_NAME holds the per-FAMILY conversion figures that SQL counts distinctly, so a
+    // rolled-up parent does not double-count an employer quoted under two names in the family.
+    // Built here from the fixture the same way paint() builds it from the response.
+    var FAM_BY_NAME = {}; (FAMILIES || []).forEach(function(f){ FAM_BY_NAME[f.family] = f; });
     function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
       return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
     function pctOfTotal(n){ return String(n) + '%'; }
@@ -69,8 +91,8 @@ ${agRowSrc}
     var shown = tops;
     var html = ${loop};
     return { tops: tops, kids: kids, rolled: rolled, html: html };`;
-  const fn = new Function("ROWS", "OPEN", "AGENTS", body);
-  return fn(rows, open || {}, AGENT_FIXTURE);
+  const fn = new Function("ROWS", "OPEN", "AGENTS", "FAMILIES", body);
+  return fn(rows, open || {}, AGENT_FIXTURE, FAMILY_FIXTURE);
 }
 
 // ---- fixtures ---------------------------------------------------------------------------------
@@ -88,21 +110,88 @@ const AGENT_FIXTURE = [
 ];
 
 const FIXTURE = [
-  { agency_label: "MMA", n: 743, agents: 6, sales: 3, last_quote: "2026-08-06", agency_id: "id-mma" },
-  { agency_label: "MHBT", n: 184, agents: 2, sales: 0, last_quote: "2017-12-21",
+  { agency_label: "MMA", n: 743, employers: 10, won: 5, kept: 4, agents: 6, sales: 3, last_quote: "2026-08-06", agency_id: "id-mma" },
+  { agency_label: "MHBT", n: 184, employers: 6, won: 3, kept: 1, agents: 2, sales: 0, last_quote: "2017-12-21",
     parent_name: "MMA", relationship: "succeeded", agency_id: "id-mhbt" },
-  { agency_label: "USI", n: 335, agents: 9, sales: 1, last_quote: "2026-08-03", agency_id: "id-usi" },
-  { agency_label: "HUB", n: 41, agents: 2, sales: 0, last_quote: "2026-06-04", agency_id: "id-hub" },
-  { agency_label: "HUB-Wellspring", n: 13, agents: 1, sales: 0, last_quote: "2021-12-27",
+  { agency_label: "USI", n: 335, employers: 12, won: 3, kept: 3, agents: 9, sales: 1, last_quote: "2026-08-03", agency_id: "id-usi" },
+  { agency_label: "HUB", n: 41, employers: 5, won: 2, kept: 2, agents: 2, sales: 0, last_quote: "2026-06-04", agency_id: "id-hub" },
+  { agency_label: "HUB-Wellspring", n: 13, employers: 3, won: 1, kept: 1, agents: 1, sales: 0, last_quote: "2021-12-27",
     parent_name: "HUB", relationship: "division", agency_id: "id-hw" },
-  { agency_label: "Gus Bates", n: 16, agents: 1, sales: 0, last_quote: "2019-10-23",
+  { agency_label: "Gus Bates", n: 16, employers: 4, won: 2, kept: 2, agents: 1, sales: 0, last_quote: "2019-10-23",
     parent_name: "HUB", relationship: "succeeded", agency_id: "id-gb" },
   // A child whose parent has NEVER quoted. The parent must be synthesised.
-  { agency_label: "Ghost - TX", n: 12, agents: 1, sales: 0, last_quote: "2024-01-01",
+  { agency_label: "Ghost - TX", n: 12, employers: 2, won: 0, kept: 0, agents: 1, sales: 0, last_quote: "2024-01-01",
     parent_name: "Ghostly", relationship: "division", agency_id: "id-ghost" },
 ];
 
 const RULES = [
+  {
+    // ⭐⭐ THE ONE THAT MATTERS. Summing the child rows gives 16 employers for the MMA family;
+    // the truth is 14, because two employers were quoted under both MMA and MHBT. A rate built
+    // on an inflated denominator is wrong in a CONSISTENT DIRECTION -- always too low -- which
+    // is worse than an obviously broken one, because nothing about it looks wrong.
+    name: "a rolled-up parent takes conversion from the FAMILY, not the sum of its rows",
+    holds(src) {
+      const r = run(FIXTURE, {}, src);
+      const row = r.html.slice(0, r.html.indexOf("USI"));
+      // 7 of 14 renders as 50%. Summing would be 8 of 16, which is ALSO 50% -- so assert on the
+      // tooltip, which carries the counts, not on the percentage.
+      return /7 of 14 employers/.test(row) && !/8 of 16 employers/.test(row);
+    },
+  },
+  {
+    // RETENTION IS OF WHAT WE WON, NOT OF WHAT WE QUOTED. MMA's family kept 5 of the 7 it won,
+    // which is 71%. Measured against the 14 employers quoted it would read 36% -- a number that
+    // is not wrong so much as answering a different question, silently. Both figures are
+    // percentages in the same row, so nothing about the wrong one looks out of place.
+    // ⚠️ Asserts the RENDERED percentage, because the tooltip is built from `won` either way and
+    // would keep saying "of the 7 we won" while the cell showed 36%.
+    name: "retention is measured against the employers we WON",
+    holds(src) {
+      const r = run(FIXTURE, {}, src);
+      const row = r.html.slice(0, r.html.indexOf("USI"));
+      return row.includes(">71%<") && !row.includes(">36%<");
+    },
+  },
+  {
+    name: "an expanded child shows its OWN conversion, not the family's",
+    holds(src) {
+      const r = run(FIXTURE, { MMA: true }, src);
+      const i = r.html.indexOf("MHBT");
+      return /3 of 6 employers/.test(r.html.slice(i, i + 900));
+    },
+  },
+  {
+    name: "the parent's own row shows the parent alone, not the family",
+    holds(src) {
+      const r = run(FIXTURE, { MMA: true }, src);
+      // The parent's own row is rendered before the children; it must say 5 of 10, not 7 of 14.
+      const head = r.html.slice(0, r.html.indexOf("MHBT"));
+      return /5 of 10 employers/.test(head);
+    },
+  },
+  {
+    // ⛔ A PERCENTAGE OF A HANDFUL IS NOT A RATE. Ghost - TX has 2 employers; "0%" would sort and
+    // read exactly like a real zero. Below the threshold the fraction is shown instead.
+    name: "a tiny denominator renders as a fraction, never as a percentage",
+    holds(src) {
+      const r = run(FIXTURE, { Ghostly: true }, src);
+      const i = r.html.indexOf("Ghost - TX");
+      const cell = r.html.slice(i, i + 700);
+      return cell.includes("0/2") && !/>0%</.test(cell);
+    },
+  },
+  {
+    name: "every agency row emits the same number of cells as the header",
+    holds(src) {
+      const r = run(FIXTURE, { MMA: true }, src);
+      const rows = r.html.split("<tr").slice(1);
+      return rows.every((row) => {
+        const cells = (row.match(/<td/g) || []).length;
+        return cells === 9 || /colspan="9"/.test(row);
+      });
+    },
+  },
   {
     name: "a child never appears as a top-level row",
     holds(src) {
@@ -301,6 +390,26 @@ const RULES = [
 
 // ---- sabotages: prove each rule can go red ----------------------------------------------------
 const SABOTAGES = [
+  // ⭐⭐ THE REGRESSION THIS FEATURE IS MOST LIKELY TO SUFFER: somebody looks at the family lookup,
+  // decides it is indirection for its own sake, and adds the child rows up instead. It gives a
+  // plausible number that is always slightly too low.
+  { why: "a parent sums its children's employers instead of using the family figure",
+    apply: (s) => s.replace("var f = (child || ownRow) ? x : (FAM_BY_NAME[x.agency_label] || x);",
+      "var f = (child || ownRow) ? x : (function(){ var k=(kids[x.agency_label]||[]);" +
+      " return { employers: Number(x.employers||0)+k.reduce(function(t,c){return t+Number(c.employers||0);},0)," +
+      " won: Number(x.won||0)+k.reduce(function(t,c){return t+Number(c.won||0);},0)," +
+      " kept: Number(x.kept||0)+k.reduce(function(t,c){return t+Number(c.kept||0);},0) }; })();") },
+  { why: "a child row shows the family's conversion rather than its own",
+    apply: (s) => s.replace("var f = (child || ownRow) ? x : (FAM_BY_NAME[x.agency_label] || x);",
+      "var f = (FAM_BY_NAME[x.parent_name||x.agency_label] || x);") },
+  { why: "a percentage is printed however small the denominator",
+    apply: (s) => s.replace("var body = (bottom < floor) ? (top+'/'+bottom) : (pc+'%');",
+                            "var body = pc+'%';") },
+  { why: "retention is measured against employers quoted instead of employers won",
+    apply: (s) => s.replace("var keptCell = rate(kept, won, 5,", "var keptCell = rate(kept, emp, 5,") },
+  { why: "a row emits fewer cells than the header",
+    apply: (s) => s.replace("+ '<td class=\"c\">'+convCell+'</td><td class=\"c\">'+keptCell+'</td>'",
+                            "+ '<td class=\"c\">'+convCell+'</td>'") },
   { why: "children left in the top-level list",
     apply: (s) => s.replace("var tops = ag.filter(function(x){ return !x.parent_name; });",
                             "var tops = ag.slice();") },

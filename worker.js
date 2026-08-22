@@ -320,8 +320,8 @@ async function handleSaveQuote(request, env, ctx) {
           (id, quote_number, created_at, client_name, effective_date,
            broker_name, broker_agency, broker_phone, broker_email,
            rep_name, rep_phone, rep_email, commission_included, products,
-           ran_by, state, adjustment, adjustment_note, client_id, revision)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+           ran_by, state, adjustment, adjustment_note, client_id, client_match_key, revision)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
       `).bind(
         id, quoteNumber, now, clientName, effectiveDate,
         brokerName, brokerAgency, brokerPhone, brokerEmail,
@@ -329,7 +329,14 @@ async function handleSaveQuote(request, env, ctx) {
         commissionIncluded ? 1 : 0,
         productsJson,
         ranBy, stateCode, adjustmentJson, adjustmentNoteVal,
-        String(clientId || '')
+        String(clientId || ''),
+        // WRITTEN HERE SO IT CANNOT ROT. `client_match_key` is normName(client_name) stored on the
+        // row, which is what lets a quote be joined to a client IN SQL instead of pulling both
+        // tables into memory and normalising in JavaScript -- which is what every consumer used to
+        // do, and how two screens come to disagree about one number.
+        // A derived column is only safe while EVERY write path maintains it. There are three, and
+        // backfill_quote_match_key.py repairs the table if one is ever missed.
+        normName(clientName)
       ).run();
     } catch (err) {
       console.error('DB insert failed:', err);
@@ -373,7 +380,7 @@ async function handleSaveQuote(request, env, ctx) {
       // number, which is the bug (Eric raised this himself).
       await env.DB.prepare(`
         UPDATE quotes SET
-          client_name = ?, effective_date = ?,
+          client_name = ?, client_match_key = ?, effective_date = ?,
           broker_name = ?, broker_agency = ?, broker_phone = ?, broker_email = ?,
           rep_name = ?, rep_phone = ?, rep_email = ?, commission_included = ?, products = ?,
           ran_by = ?, state = ?, adjustment = ?, adjustment_note = ?,
@@ -381,7 +388,7 @@ async function handleSaveQuote(request, env, ctx) {
           revision = COALESCE(revision, 1) + 1
         WHERE quote_number = ?
       `).bind(
-        clientName, effectiveDate,
+        clientName, normName(clientName), effectiveDate,
         brokerName, brokerAgency, brokerPhone, brokerEmail,
         repName, repPhone, repEmail,
         commissionIncluded ? 1 : 0,
@@ -1456,6 +1463,12 @@ async function handleQuoteEdit(request, id, env) {
     if (col === 'broker_email') v = v.toLowerCase();
     sets.push(col + ' = ?');
     vals.push(v);
+    // Renaming the employer has to RE-KEY the row, or the quote silently stops joining to its
+    // client -- and a conversion rate that quietly drops a quote looks like a business fact.
+    if (col === 'client_name') {
+      sets.push('client_match_key = ?');
+      vals.push(normName(v));
+    }
   }
   if (!sets.length) return jsonResp({ error: 'Nothing to change.' }, 400);
 
@@ -1740,7 +1753,16 @@ function normName(s) {
   return String(s == null ? '' : s)
     .toLowerCase().trim()
     .replace(/&/g, ' and ')
-    .replace(/[.,/'"]+/g, ' ')
+    // TYPOGRAPHIC QUOTES FOLD TO STRAIGHT ONES. Every client list in this system arrives from
+    // Word or from a screenshot of a shared drive, and both produce U+2019 -- so "Gosdin's Dozer
+    // Service" on a folder and "Gosdin’s Dozer Service" on a quote kept the curly character
+    // INSIDE the key and never matched. Six employers were affected when this was measured.
+    // ⛔ It does NOT fold an apostrophe that is simply ABSENT: "Bone Daddys" and "Bone
+    // Daddy's" stay apart, because that is a spelling difference and merging it is a guess.
+    // ⚠ The backslash was in the Python twin's character class and not in this one. A
+    // divergence in a pair of functions that MUST agree is exactly what the parity check exists
+    // to catch, and it had never been exercised on a name containing one.
+    .replace(/[.,/\'"‘’“”]+/g, ' ')
     .replace(/\b(inc|llc|ltd|lp|llp|pa|plc|pllc|co|corp|corporation|company|group|the)\b/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -2419,7 +2441,7 @@ ${abyAdminNav('/admin/brokers')}
  // places for the blank-handling rule to drift, and that rule is the one that matters.
  // ⭐ The rows are CACHED so re-sorting does not re-query. Reordering what is already on screen
  // must not be able to return a different set than the one being looked at.
- var CACHE={brokers:[],byAgency:[],byAgent:[]}, SORTS={}, OPEN_AG={}, NAMED_ONLY=true, paint=function(){};
+ var CACHE={brokers:[],byAgency:[],byAgent:[],byFamily:[]}, FAM_BY_NAME={}, SORTS={}, OPEN_AG={}, NAMED_ONLY=true, paint=function(){};
  var TOP_N=25, SHOW_ALL={};
  // ⚠️ THE DEFAULT DIRECTION FOLLOWS THE DEFAULT KEY. Initialising every table ascending put
  // '(no agency)' with 12 quotes above MMA with 36 on first paint -- technically sorted, and the
@@ -2529,6 +2551,8 @@ ${abyAdminNav('/admin/brokers')}
    // TRAPS #239 in this same file, one layer over: that entry is about HANDLERS wired only inside
    // paint(); this is the same failure about DATA. The first render is not a repaint.
    CACHE.byAgent=st.byAgent||[];
+   CACHE.byFamily=st.byFamily||[];
+   FAM_BY_NAME={}; (CACHE.byFamily||[]).forEach(function(f){ FAM_BY_NAME[f.family]=f; });
    CACHE.byAgency=st.byAgency||[];
    // Share-of-total uses st.totals.quotes, NOT the sum of the rows above.
    // Two reasons, both of which would give a wrong percentage: byAgency is LIMIT 1000,
@@ -2674,13 +2698,37 @@ ${abyAdminNav('/admin/brokers')}
        ? ('<strong>'+x.sales+'</strong>'+(Number(x.sales||0)>Number(x.n||0)
            ? ' <span title="more sales than quotes on file" style="color:#a0574f">*</span>' : ''))
        : '\u2014';
+     // CONVERSION AND RETENTION.
+     //   A ROLLED-UP PARENT USES THE FAMILY FIGURE FROM SQL, not the sum of the rows below it:
+     //   37 employers were quoted under two names in the same family, so summing would inflate
+     //   the denominator and understate the rate. A child row, and the parent's OWN row, use
+     //   their own numbers -- which is what those rows are for.
+     var f = (child || ownRow) ? x : (FAM_BY_NAME[x.agency_label] || x);
+     var emp = Number(f.employers||0), won = Number(f.won||0), kept = Number(f.kept||0);
+     // ⛔ A PERCENTAGE OF A HANDFUL IS NOT A RATE. One win out of three employers is 33% and
+     // means nothing; shown plainly it would sort and read exactly like a real 33%. Below the
+     // threshold the fraction is shown instead of a percentage, so the reader sees the size.
+     function rate(top, bottom, floor, tip){
+       if (!bottom) return '<span class="muted">—</span>';
+       var pc = Math.round(100*top/bottom);
+       var body = (bottom < floor) ? (top+'/'+bottom) : (pc+'%');
+       return '<span'+(bottom < floor ? ' class="muted"' : '')+' title="'+esc(tip)+'">'+body+'</span>';
+     }
+     var convCell = rate(won, emp, 10,
+       won+' of '+emp+' employers quoted here are on our books (active or termed). '+
+       'A FLOOR, not a rate: an employer we won may sit in a folder tree we have not seen.');
+     var keptCell = rate(kept, won, 5,
+       kept+' of the '+won+' we won are still active. Both sides of this one come from folder '+
+       'lists, so it is the sturdier of the two figures.');
      var indent = (child || ownRow) ? 38 : 22;
      return '<tr'+((child||ownRow)?' style="background:#fafbfa"':'')+'>'
        + '<td class="wrapcell" style="position:relative;padding-left:'+indent+'px">'+caret
        + esc(x.agency_label||x.agency||'(no agency)')+tag+'</td>'
        + '<td class="c">'+tot+'</td>'
        + '<td class="c">'+pctOfTotal(tot)+'</td>'
-       + '<td class="c">'+sales+'</td><td class="c">'+(x.agents||0)+'</td>'
+       + '<td class="c">'+sales+'</td>'
+       + '<td class="c">'+convCell+'</td><td class="c">'+keptCell+'</td>'
+       + '<td class="c">'+(x.agents||0)+'</td>'
        + '<td class="date">'+(x.last_quote?day(x.last_quote):'\u2014')+'</td>'
        + '<td>'+(x.agency_id?repSelect('agency',x.agency_id,x.rep):'<span class="muted">\u2014</span>')+'</td></tr>';
    }
@@ -2688,11 +2736,18 @@ ${abyAdminNav('/admin/brokers')}
    var shown = capRows('byAgency', tops);
    document.getElementById('byAgency').innerHTML = tops.length
      ? '<table class="grid"><colgroup>'
-       + '<col style="width:32%"><col style="width:9%"><col style="width:9%">'
-       + '<col style="width:9%"><col style="width:9%"><col style="width:14%"><col style="width:18%">'
+       + '<col style="width:26%"><col style="width:7%"><col style="width:7%">'
+       + '<col style="width:7%"><col style="width:10%"><col style="width:9%">'
+       + '<col style="width:6%"><col style="width:12%"><col style="width:16%">'
        + '</colgroup><thead><tr>'+hc('byAgency','agency','Agency')+hc('byAgency','n','Quotes','c')
        +hc('byAgency','share','Share','c')
        +hc('byAgency','sales','Sales','c')
+       +'<th class="c" title="Employers this agency quoted that are on our books, active or '
+       +'termed. Counts each EMPLOYER once however many times they were quoted, and ignores the '
+       +'quote status column entirely -- nothing in the back-book was ever dispositioned.">'
+       +'Converted</th>'
+       +'<th class="c" title="Of the employers we won here, how many are still active rather '
+       +'than termed.">Still with us</th>'
        +hc('byAgency','agents','Agents','c')+hc('byAgency','last','Last quote')
        +'<th>Owner</th></tr></thead><tbody>'
        + shown.map(function(x){
@@ -2712,7 +2767,7 @@ ${abyAdminNav('/admin/brokers')}
              // them up would find a hole and think something was missing.
              var ppl = agentsFor(x);
              if (ppl.length) {
-               out += '<tr style="background:#f4f7f5"><td colspan="7" style="padding:6px 22px;'
+               out += '<tr style="background:#f4f7f5"><td colspan="9" style="padding:6px 22px;'
                  + 'font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:#6b7b72">'
                  + 'Agents we can name here &mdash; ' + ppl.length
                  + ' of the ' + (x.agents||0) + ' who have quoted</td></tr>';
@@ -2723,6 +2778,10 @@ ${abyAdminNav('/admin/brokers')}
                    + (p.email ? ' <span class="muted" style="font-size:11.5px">'+esc(p.email)+'</span>' : '')
                    + '</td>'
                    + '<td class="c">'+Number(p.n||0)+'</td>'
+                   // Five dashes, not three: an agent has no conversion figure of their own
+                   // because a client folder records the AGENCY, never the individual.
+                   + '<td class="c"><span class="muted">&mdash;</span></td>'
+                   + '<td class="c"><span class="muted">&mdash;</span></td>'
                    + '<td class="c"><span class="muted">&mdash;</span></td>'
                    + '<td class="c"><span class="muted">&mdash;</span></td>'
                    + '<td class="c"><span class="muted">&mdash;</span></td>'
@@ -2734,7 +2793,7 @@ ${abyAdminNav('/admin/brokers')}
              }
            }
            return out;
-         }).join('')+moreRow('byAgency', shown.length, tops.length, 7)+'</tbody></table>'
+         }).join('')+moreRow('byAgency', shown.length, tops.length, 9)+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
    wireAgToggles();
    }
@@ -3890,11 +3949,59 @@ async function handleAdminStats(request, env) {
       // by the sales rows and silently inflate the very count this table exists to report.
       // ⚠️ 156 of the 406 sales have no quote at all, so an agency can show sales with a low
       // quote count -- that is the finding, not an error.
-      "       (SELECT COUNT(*) FROM aby_sales sx WHERE sx.agency = " + AGENCY_EXPR + ") AS sales " +
+      "       (SELECT COUNT(*) FROM aby_sales sx WHERE sx.agency = " + AGENCY_EXPR + ") AS sales, " +
+
+      // CONVERSION AND RETENTION. Eric, 2026-08-22: "out of those quotes that were run, how many
+      // were sold and how many are still active. That will help to tell us agency conversion and
+      // retention rates."
+      //
+      // ⭐⭐ IT DELIBERATELY IGNORES quotes.status. Every row in the back-book is 'P' because
+      // nothing was ever dispositioned, so a win rate read off that column is fiction. Asking
+      // instead "did this employer end up on our books?" is a question the records can answer.
+      //
+      // ⭐ COUNT(DISTINCT client_match_key), NOT COUNT(*). An agency that quoted one company five
+      // times did not get five chances to convert it, and counting quotes would reward re-quoting
+      // an employer who never buys.
+      //
+      // ⚠️ THE JOIN IS 1:1 AND THAT IS LOAD-BEARING -- aby_clients.match_key carries a UNIQUE
+      // index (measured 2026-08-22: 2,290 rows, 2,290 distinct keys, 0 duplicates). If it ever
+      // stopped being unique this LEFT JOIN would multiply the quote rows and inflate `n`, which
+      // is the exact failure the sales figure above uses a subquery to avoid.
+      "       COUNT(DISTINCT NULLIF(q.client_match_key,'')) AS employers, " +
+      "       COUNT(DISTINCT CASE WHEN cc.status IS NOT NULL " +
+      "                           THEN q.client_match_key END) AS won, " +
+      "       COUNT(DISTINCT CASE WHEN cc.status = 'active' " +
+      "                           THEN q.client_match_key END) AS kept " +
       "FROM quotes q " +
       BROKER_JOIN + " " +
+      "LEFT JOIN aby_clients cc ON cc.match_key = q.client_match_key " +
       "WHERE 1=1 " + repFilter + sinceFilter +
       " GROUP BY " + AGENCY_EXPR + " ORDER BY n DESC LIMIT 1000").bind(...args).all();
+
+    // CONVERSION FOR A WHOLE FAMILY, COUNTED DISTINCTLY -- NOT SUMMED FROM THE ROWS ABOVE.
+    //
+    // ⭐⭐ SUMMING WOULD DOUBLE-COUNT, and by a measured amount: 37 employers were quoted under
+    // BOTH a parent and one of its children (21 of them under MMA and MHBT, which is exactly what
+    // an acquired book looks like -- the same employer quoted before and after the rename). Adding
+    // MMA's 536 employers to MHBT's would produce a denominator 21 too big and quietly UNDERSTATE
+    // MMA's conversion. A rate that is wrong in a consistent direction is worse than an obviously
+    // broken one, because nothing about it looks wrong.
+    //
+    // So the family total is asked of the database, where COUNT(DISTINCT ...) can see the whole
+    // family at once. Rows without a parent group onto themselves, so every agency appears here.
+    const byFamily = await env.DB.prepare(
+      "SELECT COALESCE(MAX(pa.name), " + AGENCY_EXPR + ") AS family, " +
+      "       COUNT(DISTINCT NULLIF(q.client_match_key,'')) AS employers, " +
+      "       COUNT(DISTINCT CASE WHEN cc.status IS NOT NULL " +
+      "                           THEN q.client_match_key END) AS won, " +
+      "       COUNT(DISTINCT CASE WHEN cc.status = 'active' " +
+      "                           THEN q.client_match_key END) AS kept, " +
+      "       COUNT(*) AS n " +
+      "FROM quotes q " +
+      BROKER_JOIN + " " +
+      "LEFT JOIN aby_clients cc ON cc.match_key = q.client_match_key " +
+      "WHERE 1=1 " + repFilter + sinceFilter +
+      " GROUP BY COALESCE(pa.name, " + AGENCY_EXPR + ")").bind(...args).all();
 
     // 🔴 THE "SHOW: ERIC / NIELS" FILTER HAS TO REACH THIS LINE TOO.
     // It used to count the WHOLE BOOK regardless of who was selected, while the two tables below
@@ -4036,7 +4143,7 @@ async function handleAdminStats(request, env) {
       console.warn('value/aging unavailable:', String(err && err.message || err));
     }
 
-    return jsonResp({ byAgent: byAgent.results || [], byAgency: byAgency.results || [], totals, byStatus, aging, historic, dormant });
+    return jsonResp({ byAgent: byAgent.results || [], byAgency: byAgency.results || [], byFamily: byFamily.results || [], totals, byStatus, aging, historic, dormant });
   } catch (err) {
     // 🔴🔴 ONE FAILING QUERY USED TO BLANK THE WHOLE PAGE, AND SAY NOTHING ABOUT IT.
     // Eric, 2026-08-19: "nothing is filled in on the Brokers & agencies page." The three queries
@@ -4965,6 +5072,19 @@ const MIGRATIONS = [
   { sql: "ALTER TABLE quotes ADD COLUMN state TEXT",            table: "quotes", column: "state" },
   { sql: "ALTER TABLE quotes ADD COLUMN adjustment TEXT",       table: "quotes", column: "adjustment" },
   { sql: "ALTER TABLE quotes ADD COLUMN adjustment_note TEXT",  table: "quotes", column: "adjustment_note" },
+
+  // The stored join key between a quote and a client. See the note at the INSERT in
+  // handleQuoteSave: it exists so the two can be joined in SQL rather than in JavaScript, and it
+  // is maintained by all three write paths that can change `client_name`.
+  { sql: "ALTER TABLE quotes ADD COLUMN client_match_key TEXT",
+    table: "quotes", column: "client_match_key" },
+  { sql: "CREATE INDEX IF NOT EXISTS quotes_client_match_key ON quotes (client_match_key)",
+    index: "quotes_client_match_key" },
+
+  // Termination date for a client whose folder name carried one. Sibling of `effective_date`;
+  // 47 of the 977 termed folders name a date.
+  { sql: "ALTER TABLE aby_clients ADD COLUMN term_date TEXT",
+    table: "aby_clients", column: "term_date" },
   // Added 2026-08-06. `client_id` is the BenefitLab client this quote is for, so a quote
   // no longer has to be matched to an employer by a TYPED company name (F-268).
   { sql: "ALTER TABLE quotes ADD COLUMN client_id TEXT",        table: "quotes", column: "client_id" },
