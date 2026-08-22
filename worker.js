@@ -3878,7 +3878,12 @@ async function handleAdminStats(request, env) {
         " GROUP BY " + AGENCY_EXPR +
         " HAVING n >= 5 AND recent = 0 " +
         "    AND COALESCE(MAX(a.relationship),'') <> 'succeeded' " +
-        " ORDER BY n DESC LIMIT 40").bind(...args).all();
+        // SORTED BY HOW RECENTLY THEY WENT QUIET, NOT BY VOLUME.
+        // Ordering by size put MHBT at the top at 184 quotes -- and MHBT was acquired in 2015,
+        // making the single least actionable row the most prominent one. The calls worth making
+        // are the 12-to-24-month lapses: big enough to matter, recent enough that somebody still
+        // remembers us. Volume is still on the row, so nothing is hidden by the reorder.
+        " ORDER BY days_quiet ASC, n DESC LIMIT 40").bind(...args).all();
       // Attach who to call. Done here rather than on the page so the register has ONE reader
       // and cannot drift between screens.
       // ⭐ The acquisition register now lives in the DATABASE (agencies.parent_id), not in the
