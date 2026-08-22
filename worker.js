@@ -2342,6 +2342,7 @@ ${abyAdminNav('/admin/brokers')}
     <p class="sub">Counted from every quote ever run, including from people who never made an account.</p>
     <div id="byAgency"><p class="muted">Loading...</p></div></div>
   <div class="card"><h2>Quotes by agent</h2>
+    <p class="sub" id="agentNote"></p>
     <div id="byAgent"><p class="muted">Loading...</p></div></div>
 <div class="card"><h2>Quotes by status</h2>
     <p class="sub">2026 onward only &mdash; the back-catalog is counted by year further down. Value is the first year of a quote: setup, plan documents, annual fees and twelve months of any monthly fee.</p>
@@ -2406,7 +2407,7 @@ ${abyAdminNav('/admin/brokers')}
  // places for the blank-handling rule to drift, and that rule is the one that matters.
  // ⭐ The rows are CACHED so re-sorting does not re-query. Reordering what is already on screen
  // must not be able to return a different set than the one being looked at.
- var CACHE={brokers:[],byAgency:[],byAgent:[]}, SORTS={}, OPEN_AG={}, paint=function(){};
+ var CACHE={brokers:[],byAgency:[],byAgent:[]}, SORTS={}, OPEN_AG={}, NAMED_ONLY=true, paint=function(){};
  var TOP_N=25, SHOW_ALL={};
  // ⚠️ THE DEFAULT DIRECTION FOLLOWS THE DEFAULT KEY. Initialising every table ascending put
  // '(no agency)' with 12 quotes above MMA with 36 on first paint -- technically sorted, and the
@@ -2649,6 +2650,12 @@ ${abyAdminNav('/admin/brokers')}
  // TWO CALL SITES, like wireCollapse. A handler attached only inside paint() is missing on the
  // FIRST render, because this page paints once directly before paint is assigned. TRAPS #239,
  // same file, and the reason that entry exists.
+ // TWO CALL SITES, like wireCollapse and wireAgToggles: the first render happens before paint
+ // is assigned, so a handler attached only inside paint() is dead on the page you land on.
+ function wireAgentToggle(){
+   var b = document.getElementById('agentToggle');
+   if (b) b.onclick = function(){ NAMED_ONLY = !NAMED_ONLY; paintByAgent(); };
+ }
  function wireAgToggles(){
    Array.prototype.forEach.call(document.querySelectorAll('.agtog'), function(b){
      b.onclick = function(){
@@ -2870,7 +2877,31 @@ ${abyAdminNav('/admin/brokers')}
      var p = n.split(' ').filter(function(w){ return w; });
      return (p[p.length-1] + ' ' + n).toLowerCase();
    }
-   var agt=sorted('byAgent',CACHE.byAgent,{
+   // Eric: "only if we actually know the agents. It doesn't help to repeat the agencies there
+   // since that makes up most of the list." Measured: 639 of 768 rows are keyed on an agency.
+   // Hidden by DEFAULT, one click away, and the number is said out loud -- an unattributable
+   // quote is a real fact about the book and a list that silently drops 83% of its rows is worse
+   // than one that shows them.
+   var allAgents = CACHE.byAgent || [];
+   var namedAgents = allAgents.filter(function(x){ return x.name || x.email; });
+   var hiddenAgents = allAgents.length - namedAgents.length;
+   var noteEl = document.getElementById('agentNote');
+   if (noteEl) {
+     noteEl.innerHTML = hiddenAgents
+       ? (NAMED_ONLY
+           ? 'Showing the <b>' + namedAgents.length + '</b> agents we can name. '
+             + '<b>' + hiddenAgents + '</b> more rows record an agency but no individual '
+             + '<button type="button" id="agentToggle" style="background:none;border:0;'
+             + 'color:#2f6f4f;font-size:12.5px;cursor:pointer;text-decoration:underline;'
+             + 'padding:0">show them</button>'
+           : 'Showing all <b>' + allAgents.length + '</b> rows, including <b>' + hiddenAgents
+             + '</b> that record an agency but no individual '
+             + '<button type="button" id="agentToggle" style="background:none;border:0;'
+             + 'color:#2f6f4f;font-size:12.5px;cursor:pointer;text-decoration:underline;'
+             + 'padding:0">name only</button>')
+       : '';
+   }
+   var agt=sorted('byAgent', NAMED_ONLY ? namedAgents : allAgents, {
      name:surname,
      email:function(x){return String(x.email||'').toLowerCase()},
      agency:function(x){return String(x.agency||'').toLowerCase()},
@@ -2879,11 +2910,11 @@ ${abyAdminNav('/admin/brokers')}
    },'n');
    document.getElementById('byAgent').innerHTML = agt.length
      ? '<table class="grid"><colgroup>'
-       + '<col style="width:24%"><col style="width:26%"><col style="width:24%">'
-       + '<col style="width:11%"><col style="width:15%">'
+       + '<col style="width:20%"><col style="width:22%"><col style="width:20%">'
+       + '<col style="width:9%"><col style="width:13%"><col style="width:16%">'
        + '</colgroup><thead><tr>'+hc('byAgent','name','Agent')+hc('byAgent','email','Email')
        +hc('byAgent','agency','Agency')+hc('byAgent','n','Quotes','c')
-       +hc('byAgent','last','Last quote')+'</tr></thead><tbody>'
+       +hc('byAgent','last','Last quote')+'<th>Owner</th></tr></thead><tbody>'
        + capRows('byAgent', agt).map(function(x){
            // \u2b50 A ROW IS NAMED BY WHATEVER IT HAS. Most of the imported book carries an agency and
            // no broker name or email, and printing a dash where the name goes made those rows look
@@ -2892,14 +2923,28 @@ ${abyAdminNav('/admin/brokers')}
            var viaAgency = !x.name && !x.email && x.agency;
            return '<tr><td class="wrapcell">'+esc(who)
              +(viaAgency?' <span class="muted" title="This quote records an agency but no individual broker">(agency only)</span>':'')
-             +'</td><td class="wrapcell">'+esc(x.email||'\u2014')+'</td><td class="wrapcell">'+esc(x.agency||'\u2014')+'</td><td class="c">'+x.n+'</td><td class="date">'+day(x.last_quote)+'</td></tr>';
-         }).join('')+moreRow('byAgent', capRows('byAgent', agt).length, agt.length, 5)+'</tbody></table>'
+             +'</td><td class="wrapcell">'+esc(x.email||'\u2014')+'</td><td class="wrapcell">'+esc(x.agency||'\u2014')+'</td><td class="c">'+x.n+'</td><td class="date">'+day(x.last_quote)+'</td>'
+             // ONLY AN AGENT WE HAVE AN EMAIL FOR CAN BE ASSIGNED -- broker_directory is keyed on
+             // it. Showing a control that cannot save is worse than showing none: it looks like
+             // the assignment took and quietly did nothing.
+             // The value shown may be INHERITED from the agency. It is styled differently and
+             // titled so it is obvious which agents have been decided individually -- otherwise a
+             // whole column of inherited values reads as a column of decisions nobody made.
+             +'<td>'+(x.email
+                 ? repSelect('agent', x.email, x.own_rep || '')
+                   + (!x.own_rep && x.rep
+                       ? ' <span class="muted" style="font-size:11px" title="inherited from the agency">via agency</span>'
+                       : '')
+                 : '<span class="muted" title="No email on any of these quotes, so there is nothing to attach an owner to">\u2014</span>')
+             +'</td></tr>';
+         }).join('')+moreRow('byAgent', capRows('byAgent', agt).length, agt.length, 6)+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
    }
+   wireAgentToggle();
    wireSelects();
    wireSort();
    // Re-render the three lists from the cache when a header is clicked.
-   paint=function(){ paintBrokers(); paintByAgency(); paintByAgent(); wireSelects(); wireSort(); wireCollapse(); wireMore(); };
+   paint=function(){ paintBrokers(); paintByAgency(); paintByAgent(); wireSelects(); wireSort(); wireCollapse(); wireMore(); wireAgentToggle(); };
    // ⚠️ BOTH OF THESE MUST BE CALLED HERE AS WELL AS INSIDE paint().
    // The first render happens by calling paintBrokers/paintByAgency/paintByAgent directly,
    // BEFORE paint is assigned -- so anything wired only inside paint() is missing on the
@@ -3514,9 +3559,26 @@ async function handleAdminAssign(request, env) {
   if (rep && rep !== 'eric' && rep !== 'niels' && rep !== 'open') {
     return jsonResp({ error: 'Unknown rep.' }, 400);
   }
-  const table = body.kind === 'agency' ? 'agencies' : 'brokers';
   const id = String(body.id || '');
   if (!id) return jsonResp({ error: 'Which one?' }, 400);
+
+  // An AGENT is keyed on EMAIL, not on an id -- broker_directory's primary key is the address.
+  // Kept as its own branch rather than folded into the line below, because a single statement
+  // parameterised by both table AND key column is the shape that eventually writes to the wrong
+  // one. The `kind` values are closed, so an unknown one is refused rather than defaulted.
+  if (body.kind === 'agent') {
+    const r = await env.DB.prepare(
+      'UPDATE broker_directory SET assigned_rep = ? WHERE lower(trim(email)) = lower(trim(?))'
+    ).bind(rep || null, id).run();
+    // Assert a row was actually affected. An UPDATE that matches nothing resolves happily, and
+    // the screen would keep showing the value the server never stored.
+    if (!r || !r.meta || !r.meta.changes) {
+      return jsonResp({ error: 'No agent with that email.' }, 404);
+    }
+    return jsonResp({ ok: true });
+  }
+
+  const table = body.kind === 'agency' ? 'agencies' : 'brokers';
   await env.DB.prepare(`UPDATE ${table} SET assigned_rep = ? WHERE id = ?`).bind(rep || null, id).run();
   return jsonResp({ ok: true });
 }
@@ -3652,10 +3714,20 @@ async function handleAdminStats(request, env) {
       "       MAX(NULLIF(trim(q.broker_email),'')) AS email, " +
       "       MAX(NULLIF(trim(q.broker_name),'')) AS name, " +
       "       MAX(COALESCE(a.name, NULLIF(trim(q.broker_agency),''))) AS agency, " +
-      "       MAX(b.assigned_rep) AS rep, " +
+      // The agent's OWN owner first, then the agency's, then the registered broker's. An agent
+      // inherits their agency's owner until somebody says otherwise, so a page that has been
+      // assigned at agency level does not read as entirely unassigned at agent level.
+      "       MAX(COALESCE(bd.assigned_rep, a.assigned_rep, b.assigned_rep)) AS rep, " +
+      "       MAX(CASE WHEN bd.email IS NOT NULL THEN 1 ELSE 0 END) AS assignable, " +
+      "       MAX(COALESCE(bd.assigned_rep,'')) AS own_rep, " +
       "       COUNT(*) AS n, MAX(q.created_at) AS last_quote " +
       "FROM quotes q " +
       BROKER_JOIN + " " +
+      // Only an agent we have an EMAIL for can be assigned -- broker_directory is keyed on it.
+      // A name-keyed row ("Niels" and "Niels Andersen" are two groups) has nowhere to store a
+      // value, and the page shows a dash rather than a control that would silently do nothing.
+      "LEFT JOIN broker_directory bd ON lower(trim(bd.email)) = lower(trim(q.broker_email)) " +
+      "  AND trim(coalesce(q.broker_email,'')) <> '' " +
       "WHERE 1=1 " + repFilter + sinceFilter +
       " GROUP BY key ORDER BY n DESC LIMIT 1000").bind(...args).all();
 
@@ -4916,6 +4988,17 @@ const MIGRATIONS = [
   //
   // ⭐ It replaces that constant, which was always going to outgrow source code: Gallagher
   // acquires constantly, and HUB alone contributes three rows.
+  // ---- An owner for an AGENT, 2026-08-22 -----------------------------------------------------
+  // Eric: "could this note be at the agent level? ... If there are specific agents in the agency
+  // that I work with and others that Niels works with".
+  //
+  // assigned_rep ALREADY EXISTED on `brokers` and reached nothing: that table holds REGISTERED
+  // broker accounts and has zero rows. The agents ABY actually knows are in broker_directory,
+  // which is built from the quotes themselves and had no owner column at all.
+  // A field that exists on the empty table and not on the populated one is the same defect as the
+  // Owner column joining through brokers -- built, correct, and unreachable.
+  { sql: "ALTER TABLE broker_directory ADD COLUMN assigned_rep TEXT", table: "broker_directory", column: "assigned_rep" },
+
   { sql: "ALTER TABLE agencies ADD COLUMN parent_id TEXT",         table: "agencies", column: "parent_id" },
   { sql: "ALTER TABLE agencies ADD COLUMN relationship TEXT",      table: "agencies", column: "relationship" },
   { sql: "ALTER TABLE agencies ADD COLUMN relationship_note TEXT", table: "agencies", column: "relationship_note" },
