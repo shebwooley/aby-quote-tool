@@ -2616,7 +2616,9 @@ ${abyAdminNav('/admin/brokers')}
                ', now quotes as <b>' + esc(x.succeeded_by) + '</b></span>'
              : '';
            return '<tr'+(x.succeeded_by?' style="opacity:.62"':'')+'>'
-             +'<td class="wrapcell">'+esc(x.agency_label||'(no agency)')+sold+'</td>'
+             +'<td class="wrapcell">'+esc(x.agency_label||'(no agency)')+sold
+             + (x.contact ? '<br><span class="muted" style="font-size:12px">call '
+                 + esc(x.contact) + '</span>' : '')+'</td>'
              +'<td class="c">'+x.n+'</td><td class="date">'+day(x.last_quote)+'</td>'
              +'<td class="c">'+(x.succeeded_by?'<span class="muted">n/a</span>':quiet)+'</td></tr>';
          }).join('')+'</tbody></table>'
@@ -3352,6 +3354,21 @@ async function handleAdminAssign(request, env) {
 // constantly and Crandall & Associates already mails from @ajg.com, so this will grow; if it
 // passes about ten, promote it to its own table rather than letting a list of business facts live
 // in the source.
+// WHO TO CALL AT AN AGENCY THE LOG HAS NO CONTACT FOR.
+//
+// Eric, 2026-08-22: "the agent for Creative Insurance Concepts is Mike Bilbrey. Also his wife
+// Juanita Bilbrey." Creative Insurance Concepts is the second-largest entry on "agencies that have
+// fallen off" -- 108 quotes across 14 years, quiet 16 months -- and every one of those 108 rows has
+// an EMPTY broker name. So the list could say who has gone quiet but not who to ring, which is
+// most of what makes it useful.
+//
+// ⛔ THE NAMES ARE NOT STAMPED ONTO THE 108 ROWS. Writing Mike Bilbrey onto all of them would
+// assert he personally ran each one, including any his wife ran. The register says who is AT the
+// agency; the rows keep saying what they actually recorded, which is nothing.
+const AGENCY_CONTACTS = {
+  'Creative Insurance Concepts': 'Mike Bilbrey, Juanita Bilbrey',
+};
+
 const SUCCEEDED_BY = {
   'MHBT': { by: 'MMA', when: 'Jun 2015', note: 'acquired by Marsh; quotes moved to MMA from 2018' },
 };
@@ -3544,9 +3561,14 @@ async function handleAdminStats(request, env) {
       // Mark the ones that are not a lapse at all. Done here rather than on the page so the
       // register has ONE reader and cannot drift between screens.
       dormant = (r4.results || []).map(function (d) {
-        var hit = SUCCEEDED_BY[(d.agency_label || '').trim()];
-        return hit ? Object.assign({}, d, { succeeded_by: hit.by, succeeded_when: hit.when,
-                                            succeeded_note: hit.note }) : d;
+        var key = (d.agency_label || '').trim();
+        var hit = SUCCEEDED_BY[key];
+        var who = AGENCY_CONTACTS[key];
+        var out = hit ? Object.assign({}, d, { succeeded_by: hit.by, succeeded_when: hit.when,
+                                               succeeded_note: hit.note })
+                      : Object.assign({}, d);
+        if (who) out.contact = who;
+        return out;
       });
     } catch (err) {
       // Columns may predate the migration. Report nothing rather than a wrong zero.
