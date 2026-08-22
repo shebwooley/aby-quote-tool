@@ -1776,7 +1776,7 @@ async function handleAdminClients(request, env) {
     // case-insensitively, so the screen disagreed with the thing it is a copy of, and somebody
     // looking for a client would conclude it was missing.
     "SELECT id, name, match_key, status, source, note, original_broker, current_broker, " +
-    "       effective_date, products FROM aby_clients ORDER BY name COLLATE NOCASE").all());
+    "       effective_date, term_date, products FROM aby_clients ORDER BY name COLLATE NOCASE").all());
   const q = await attempt('quotes', () => env.DB.prepare(
     "SELECT quote_number, client_name, created_at, status, broker_agency, broker_name " +
     "FROM quotes WHERE client_name IS NOT NULL AND trim(client_name) <> ''").all());
@@ -1814,6 +1814,13 @@ async function handleAdminClients(request, env) {
       name: cl.name,
       status: cl.status,
       note: cl.note || '',
+      termDate: String(cl.term_date || '').slice(0, 10),
+      // ONLY a note that SAYS so means two folders. This read "if there is a note at all", which
+      // was true while the sole note-writer was the duplicate-folder importer -- and then 977
+      // termed clients arrived carrying a provenance note, and every one of them claimed a
+      // duplicate folder it does not have. A flag inferred from a field's EMPTINESS breaks the
+      // moment anything else writes that field.
+      twoFolders: /also filed as/i.test(cl.note || ''),
       quotes: qs.length,
       pending: qs.filter((r) => r.status === 'P').length,
       sold: qs.filter((r) => r.status === 'S').length,
@@ -1842,6 +1849,9 @@ async function handleAdminClients(request, env) {
   const quotedKeys = new Set(qBy.keys());
   out.totals = {
     clients: clients.length,
+    clientsActive: clients.filter((r) => r.status === 'active').length,
+    clientsTermed: clients.filter((r) => r.status === 'termed').length,
+    termedWithDate: clients.filter((r) => r.status === 'termed' && r.term_date).length,
     quotes: quotes.length,
     sales: sales.length,
     clientsQuoted: out.rows.filter((r) => r.quotes > 0).length,
@@ -1849,6 +1859,8 @@ async function handleAdminClients(request, env) {
     pendingButActive: out.rows.filter((r) => r.pendingButActive).length,
     pendingQuotesOnActive: out.rows.reduce((n, r) => n + (r.status === 'active' ? r.pending : 0), 0),
     salesWithNoClient: out.orphanSales.length,
+    salesMatchedToClient: sales.length - out.orphanSales.length,
+    orphanSalesQuoted: out.orphanSales.filter((r) => r.quotes > 0).length,
     quotedNotAClient: [...quotedKeys].filter((k) => !seen.has(k)).length,
   };
   return jsonResp(out);
@@ -3117,7 +3129,8 @@ function adminClientsHTML() {
  .tile span{font-size:12px;color:#5b6b7f}
  .tile.flag{border-color:#f0d9ae;background:#fdf7ec}
  .pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600}
- .pill.act{background:#e4f4ec;color:#1a5c3a}
+ .pill.term{background:#fde8e8;color:#8a1c1c;border-color:#f5c2c2}
+    .pill.act{background:#e4f4ec;color:#1a5c3a}
  .pill.unk{background:#eef2f6;color:#5b6b7f}
  .warn{margin:0 0 14px;padding:10px 14px;border-radius:7px;background:#fdf1e0;border:1px solid #f0d9ae;color:#7a5410;font-size:13px}
  .note{margin:0 0 14px;padding:10px 14px;border-radius:7px;background:#eef4fb;border:1px solid #cddff2;color:#234a77;font-size:13px}
@@ -3131,22 +3144,25 @@ ${abyAdminNav('/admin/clients')}
   <div class="note">
     <b>These are three different records and this page keeps them apart on purpose.</b>
     A <b>quote</b> is a proposal we sent. A <b>sale</b> is something that happened on a date.
-    A <b>client</b> is somebody we serve today. Only 47 of 406 recorded sales appear in the client
-    folder list (52 allowing for spelling variants), and neither termination, a setup delay, nor the
-    kind of product sold explains that gap &mdash; so nothing here is merged, and no employer is
-    ever marked <i>termed</i> just for being absent.
-    <b>197 of the 359 were quoted through this tool and then bought</b>, so they are not strangers
-    to ABY's records &mdash; they are simply not in that folder list.
+    A <b>client</b> is somebody we serve today, active or termed.
+    <span id="gap"></span>
+    The reason is now known: the sold groups sit in a <b>second folder tree</b> we had not seen,
+    which accounts for about 80% of the gap where it has been checked. So nothing here is merged,
+    and no employer is ever marked <i>termed</i> just for being absent from a list.
   </div>
 
   <div class="card">
     <h2>Clients</h2>
-    <p class="sub">From the shared-drive folder list, 2026&#8209;08&#8209;21. Two stretches of the
-      alphabet were never captured (Sab&ndash;Ses and Sys&ndash;Texas&nbsp;C), so this is a floor.</p>
+    <p class="sub">From the shared-drive folder lists &mdash; active and termed, both transcribed
+      from screenshots. The two stretches of the alphabet that were missing (Sab&ndash;Ses and
+      Sys&ndash;Texas&nbsp;C) were filled in on 2026&#8209;08&#8209;22. Still a floor, because a
+      name absent from a screenshot cannot be told from a name that was never there.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
       <input id="q" placeholder="Search a client" style="min-width:260px" oninput="draw()">
       <select id="filter" onchange="draw()">
-        <option value="">All clients</option>
+        <option value="">All clients (active and termed)</option>
+        <option value="active">Active only</option>
+        <option value="termed">Termed only</option>
         <option value="pending">Pending quote, and an active client</option>
         <option value="quoted">Quoted at some point</option>
         <option value="never">Never quoted through the tool</option>
@@ -3183,8 +3199,15 @@ ${abyAdminNav('/admin/clients')}
 
  function tiles(){
   var t=DATA.totals||{};
+  var g=document.getElementById('gap');
+  if(g) g.innerHTML='Only <b>'+(t.salesMatchedToClient||0).toLocaleString()+' of '+
+    (t.sales||0).toLocaleString()+'</b> recorded sales appear in the client folder list, and '+
+    '<b>'+(t.orphanSalesQuoted||0).toLocaleString()+'</b> of the '+
+    (t.salesWithNoClient||0).toLocaleString()+' that do not were quoted through this tool and then '+
+    'bought &mdash; so they are not strangers to ABY&rsquo;s records.';
   var cells=[
-   ['Clients', t.clients, ''],
+   ['Active clients', t.clientsActive, ''],
+   ['Termed clients', t.clientsTermed, ''],
    ['Quoted at some point', t.clientsQuoted, ''],
    ['Never quoted here', t.clientsNeverQuoted, ''],
    ['Pending quotes on an active client', t.pendingQuotesOnActive, 'flag'],
@@ -3202,6 +3225,8 @@ ${abyAdminNav('/admin/clients')}
   var f=document.getElementById('filter').value;
   var rows=(DATA.rows||[]).filter(function(r){
    if(q && r.name.toLowerCase().indexOf(q)<0) return false;
+   if(f==='active') return r.status==='active';
+   if(f==='termed') return r.status==='termed';
    if(f==='pending') return r.pendingButActive;
    if(f==='quoted') return r.quotes>0;
    if(f==='never') return r.quotes===0;
@@ -3213,8 +3238,9 @@ ${abyAdminNav('/admin/clients')}
         '<th class="n">Sold</th><th class="date">Last quote</th><th>Agency</th><th class="n">Sales</th></tr>';
   rows.slice(0,400).forEach(function(r){
    h+='<tr><td>'+esc(r.name)+
-      (r.note?' <span class="muted" title="'+esc(r.note)+'">(2 folders)</span>':'')+'</td>'+
-      '<td><span class="pill '+(r.status==='active'?'act':'unk')+'">'+esc(r.status)+'</span></td>'+
+      (r.twoFolders?' <span class="muted" title="'+esc(r.note)+'">(2 folders)</span>':'')+'</td>'+
+      '<td><span class="pill '+(r.status==='active'?'act':(r.status==='termed'?'term':'unk'))+'">'+
+      esc(r.status)+(r.termDate?' '+esc(r.termDate):'')+'</span></td>'+
       '<td class="n">'+(r.quotes||'')+'</td>'+
       '<td class="n">'+(r.pendingButActive?'<b>'+r.pending+'</b>':(r.pending||''))+'</td>'+
       '<td class="n">'+(r.sold||'')+'</td>'+
