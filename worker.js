@@ -2509,6 +2509,14 @@ ${abyAdminNav('/admin/brokers')}
          +(st.error||st.unavailable[bad[0]]||'unknown');
      } else { warn.style.display='none'; }
    }
+   // THE ORDER OF THESE TWO LINES IS LOAD-BEARING. byAgent used to be assigned 400 lines further
+   // down, just before paintByAgent(). The agency rollup reads CACHE.byAgent to nest the named
+   // agents under their agency -- so on the page you actually LAND on, that index was empty, and
+   // Gallagher (nine named agents, no acquisitions) rendered no expand control at all. It only
+   // appeared once some other action triggered a repaint, which made it look intermittent.
+   // TRAPS #239 in this same file, one layer over: that entry is about HANDLERS wired only inside
+   // paint(); this is the same failure about DATA. The first render is not a repaint.
+   CACHE.byAgent=st.byAgent||[];
    CACHE.byAgency=st.byAgency||[];
    // Share-of-total uses st.totals.quotes, NOT the sum of the rows above.
    // Two reasons, both of which would give a wrong percentage: byAgency is LIMIT 1000,
@@ -2939,7 +2947,7 @@ ${abyAdminNav('/admin/brokers')}
                wholeHistory);
    })();
 
-   CACHE.byAgent=st.byAgent||[];
+   // (CACHE.byAgent is assigned above, before paintByAgency needs it.)
    paintByAgent();
    function paintByAgent(){
    // Eric, 2026-08-22: "When you click to quote by agent, it sorts by first name. Seems like last

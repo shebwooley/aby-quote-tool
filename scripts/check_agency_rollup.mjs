@@ -212,6 +212,19 @@ const RULES = [
     },
   },
   {
+    // The agency rollup reads CACHE.byAgent. If that is assigned AFTER paintByAgency runs, the
+    // agent index is empty on the FIRST render and an agency whose only children are people has
+    // no expand control -- appearing only after some unrelated action repaints. Same shape as
+    // TRAPS #239, about DATA rather than handlers.
+    name: "the agent cache is populated before the agency table paints",
+    holds(src) {
+      const s2 = src || SRC;
+      const assign = s2.indexOf("CACHE.byAgent=st.byAgent");
+      const paint = s2.indexOf("paintByAgency();");
+      return assign !== -1 && paint !== -1 && assign < paint;
+    },
+  },
+  {
     name: "the toggle is wired from TWO call sites, not only inside paint()",
     holds(src) {
       const s = src || SRC;
@@ -306,6 +319,9 @@ const SABOTAGES = [
   // Reproduces the real bug on demand: drop the comma and the SELECT list becomes invalid SQL.
   // A checker whose self-test replays the failure it was written for is one you can still trust
   // in a year.
+  { why: "the agent cache is assigned after the agency table paints",
+    apply: (s) => s.replace("CACHE.byAgent=st.byAgent||[];", "/*moved*/")
+                   .replace("paintByAgent();", "CACHE.byAgent=st.byAgent||[];paintByAgent();") },
   { why: "an agency with only agents loses its toggle",
     apply: (s) => s.replace("(kid.length || hasPeople)", "(kid.length)") },
   { why: "agents stop being listed under their agency",
