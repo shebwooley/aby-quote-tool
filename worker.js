@@ -3324,7 +3324,7 @@ async function handleAdminStats(request, env) {
     // ⚠️ `valued` IS REPORTED ALONGSIDE `n` ON PURPOSE. Value was only added today, so most rows
     // have none, and a total presented without saying how many quotes it is drawn from would read
     // as the whole book. A proportion is not a fact unless its denominator travels with it.
-    let byStatus = [], aging = [];
+    let byStatus = [], aging = [], historic = [];
     try {
       const r1 = await env.DB.prepare(
         // ⚠️ GROUP BY THE EXPRESSION, and qualify every column with q. -- the join below brings
@@ -3344,19 +3344,36 @@ async function handleAdminStats(request, env) {
       // No Response quote is not waiting on anybody, and including them would bury the
       // ones that are. No Response is CLOSED for this purpose even though nobody said no:
       // the point of dispositioning it is that we have stopped waiting.
+      // 🔴 2026 ONWARD ONLY. Eric, 2026-08-22: "On open quotes by age, we shouldn't include
+      // anything from 2025 and before." After the back-catalogue load, 5,834 quotes sat in the
+      // over-90-days bucket and nobody is chasing one of them -- a bucket holding 94% of the rows
+      // says nothing and buries the few that really are overdue.
+      // ⛔ A DISPLAY boundary, not a disposition: no status is rewritten.
       const r2 = await env.DB.prepare(
         "SELECT " + BUCKET_EXPR + " AS bucket, COUNT(*) AS n, " +
         "       COALESCE(SUM(q.first_year_value),0) AS value " +
         "FROM quotes q " + BROKER_JOIN +
-        " WHERE " + STATUS_EXPR + " IN ('P','I') " + repFilter +
-        " GROUP BY " + BUCKET_EXPR).bind(...args).all();
+        " WHERE " + STATUS_EXPR + " IN ('P','I') AND substr(q.created_at,1,4) >= '2026' " +
+        repFilter + " GROUP BY " + BUCKET_EXPR).bind(...args).all();
       aging = r2.results || [];
+
+      // ⭐ The other half of the same instruction: "we should have a historic quotes section that
+      // shows quotes by year, 2025 first."
+      const r3 = await env.DB.prepare(
+        "SELECT substr(q.created_at,1,4) AS yr, COUNT(*) AS n, " +
+        "       SUM(CASE WHEN " + STATUS_EXPR + " = 'S' THEN 1 ELSE 0 END) AS sold, " +
+        "       COUNT(DISTINCT q.client_name) AS employers, " +
+        "       COUNT(DISTINCT q.broker_agency) AS agencies " +
+        "FROM quotes q " + BROKER_JOIN +
+        " WHERE substr(q.created_at,1,4) < '2026' " + repFilter +
+        " GROUP BY yr ORDER BY yr DESC").bind(...args).all();
+      historic = r3.results || [];
     } catch (err) {
       // Columns may predate the migration. Report nothing rather than a wrong zero.
       console.warn('value/aging unavailable:', String(err && err.message || err));
     }
 
-    return jsonResp({ byAgent: byAgent.results || [], byAgency: byAgency.results || [], totals, byStatus, aging });
+    return jsonResp({ byAgent: byAgent.results || [], byAgency: byAgency.results || [], totals, byStatus, aging, historic });
   } catch (err) {
     // 🔴🔴 ONE FAILING QUERY USED TO BLANK THE WHOLE PAGE, AND SAY NOTHING ABOUT IT.
     // Eric, 2026-08-19: "nothing is filled in on the Brokers & agencies page." The three queries
