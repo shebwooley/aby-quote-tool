@@ -544,6 +544,23 @@
       window.__abyQuoteValue = { firstYear: Math.round(fyv * 100) / 100, employees: heads || null };
     } catch (e) { window.__abyQuoteValue = null; }
 
+    // THE PRICED OUTPUT, PUBLISHED FOR THE SAVE (F-368). Same channel as __abyQuoteValue above.
+    //
+    // WHY STORE THE OUTPUT AND NOT JUST THE INPUTS: a shared link RE-RUNS the engine, so it
+    // prices at TODAY's rates while carrying the ORIGINAL quote number. For a quote from last
+    // year that is a document which looks exactly like the one that was sent and is not.
+    // And an ABY price adjustment is applied HERE, in the overlay's patched calculateAll, but is
+    // deliberately never sent to a client -- so a re-run of a discounted quote shows the employer
+    // MORE than they were quoted. Storing what was actually computed answers both.
+    //
+    // ⛔ THE ADJUSTMENT ITSELF STILL NEVER LEAVES THE SERVER. What is stored is the RESULT, which
+    // is the same number already printed on the document the employer holds. A discount is not
+    // recoverable from a price without knowing the list price, and the list price is not on the
+    // page.
+    try {
+      window.__abyResolvedPricing = JSON.parse(JSON.stringify(results));
+    } catch (e) { window.__abyResolvedPricing = null; }
+
 
     var html = ABYQuote.renderer.renderInternal(form, results, quoteNumber, {
       includeAuthorization: true,
@@ -971,6 +988,30 @@
     // ⛔ HIDDEN, NOT REMOVED. generateQuote() reads its values out of these fields, and the
     // download and print handlers read them again afterwards. Removing the form would take the
     // quote with it.
+    // RENDER THE PRICE THAT WAS QUOTED, NOT A FRESH ONE.
+    //
+    // The shared page otherwise re-runs the engine, which prices at TODAY's rates while carrying
+    // the ORIGINAL quote number -- for a quote from last year that is a document which looks
+    // exactly like the one that was sent and is not. It also loses any ABY price adjustment,
+    // because the adjustment lives in the authenticated overlay and is deliberately never sent
+    // to a client, so a discounted quote would show the employer MORE than they were quoted.
+    //
+    // Patching calculateAll is the same technique the ABY overlay uses, and for the same reason:
+    // the figures have to reach every consumer -- the fee cards, the totals and the signature
+    // line all call it separately.
+    // ⚠️ Only when there is something to serve. A quote saved before this column existed has no
+    // stored pricing, and those fall back to re-running, which is the behaviour that existed
+    // before. ⛔ So a MISSING value degrades to the old behaviour rather than to a blank page.
+    if (window.__ABY_SHARED && Array.isArray(window.__ABY_SHARED.resolvedPricing)
+        && window.__ABY_SHARED.resolvedPricing.length) {
+      var storedResults = window.__ABY_SHARED.resolvedPricing;
+      ABYQuote.engine.calculateAll = function () {
+        // A fresh deep copy each call: the renderer and the adjustment path both mutate what
+        // they are handed, so returning the same objects twice would compound their edits.
+        return JSON.parse(JSON.stringify(storedResults));
+      };
+    }
+
     if (window.__ABY_SHARED) {
       var hideWhenShared = ['#quoteForm', '.app-header'];
       hideWhenShared.forEach(function (sel) {

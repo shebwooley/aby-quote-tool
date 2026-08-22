@@ -238,6 +238,7 @@ async function handleSaveQuote(request, env, ctx) {
     state              = 'TX',
     adjustment         = null,
     adjustmentNote     = '',
+    resolvedPricing    = null,
   } = body;
 
   // Attribution is decided on the SERVER from the session cookie, so a broker
@@ -337,6 +338,25 @@ async function handleSaveQuote(request, env, ctx) {
         .bind(Number(firstYearValue) || null, Number(employeeCount) || null, id).run();
     } catch (err) {
       console.warn('value/headcount not stored (columns missing?):', String(err && err.message || err));
+    }
+
+    // THE PRICED OUTPUT, on the same best-effort path and for the same reason: it is a newer
+    // column than the INSERT above, and a quote must save whether or not the migration has run.
+    // A shared link renders from this instead of re-running the engine, which is what lets an
+    // ADJUSTED quote be shared at all -- the discount stays here, only its effect travels.
+    // ⚠️ Capped. It is client-supplied JSON reaching a database, and a priced quote is a few KB;
+    // anything far larger is not a quote.
+    if (resolvedPricing) {
+      try {
+        const rp = JSON.stringify(resolvedPricing);
+        if (rp.length <= 120000) {
+          await env.DB.prepare('UPDATE quotes SET resolved_pricing = ? WHERE id = ?').bind(rp, id).run();
+        } else {
+          console.warn('resolved_pricing not stored: ' + rp.length + ' bytes is too large');
+        }
+      } catch (err) {
+        console.warn('resolved_pricing not stored (column missing?):', String(err && err.message || err));
+      }
     }
 
     if (sourceTag) {
@@ -578,7 +598,7 @@ function newShareToken() {
 async function handleShareQuote(id, env, url) {
   try {
     const q = await env.DB.prepare(
-      'SELECT id, quote_number, share_token, adjustment, state FROM quotes WHERE id = ?'
+      'SELECT id, quote_number, share_token, adjustment, state, resolved_pricing FROM quotes WHERE id = ?'
     ).bind(id).first();
     if (!q) return jsonResp({ error: 'Not found' }, 404);
 
@@ -593,8 +613,13 @@ async function handleShareQuote(id, env, url) {
     // first time somebody discounts a quote and shares it.
     // The real fix is to resolve the PRICE server-side too. Until that exists, refusing is the
     // honest behaviour; a silently wrong number is not.
+    // WHY THE REFUSAL IS CONDITIONAL NOW. A quote saved with its PRICED OUTPUT can be shared
+    // whatever adjustment produced it: the shared page renders the stored figures instead of
+    // re-running the engine, so the employer sees exactly the numbers on their document and the
+    // discount never leaves this server. Only a quote we would have to RE-COMPUTE is refused.
+    const resolved = q.resolved_pricing && String(q.resolved_pricing).trim();
     const adjusted = q.adjustment && String(q.adjustment).trim() && String(q.adjustment) !== 'null';
-    if (adjusted) {
+    if (adjusted && !resolved) {
       return jsonResp({
         error: 'not_shareable_adjusted',
         message: 'This quote carries a price adjustment. A shared link re-prices at standard rates, so the employer would see a higher figure than the quote you sent. Send the file for this one.'
@@ -602,7 +627,7 @@ async function handleShareQuote(id, env, url) {
     }
     // The same shape of mismatch: state is not carried either, so an Outside-Texas quote would
     // re-price at Texas rates.
-    if (q.state && String(q.state) !== 'TX') {
+    if (q.state && String(q.state) !== 'TX' && !resolved) {
       return jsonResp({
         error: 'not_shareable_state',
         message: 'This quote was priced outside Texas, and a shared link re-prices at Texas rates. Send the file for this one.'
@@ -634,7 +659,7 @@ async function serveSharedQuote(token, env, request) {
   const url = new URL(request.url);
   const q = await env.DB.prepare(
     'SELECT quote_number, client_name, effective_date, broker_name, broker_agency, broker_phone, ' +
-    '       broker_email, commission_included, rep_name, products ' +
+    '       broker_email, commission_included, rep_name, products, resolved_pricing ' +
     'FROM quotes WHERE share_token = ?'
   ).bind(token).first();
 
@@ -659,6 +684,21 @@ async function serveSharedQuote(token, env, request) {
     products: q.products || '[]',
     readonly: true
   };
+
+  // THE PRICED OUTPUT AS IT WAS QUOTED, when the quote carries one. The page renders these
+  // figures rather than re-running the engine, which is what stops an old quote being re-priced
+  // at today's rates and what lets a discounted quote be shared at all.
+  // ⛔ These are AMOUNTS, not the adjustment. The same numbers are already on the document the
+  // employer holds, and a discount is not recoverable from a price without the list price.
+  if (q.resolved_pricing) {
+    try {
+      const parsed = JSON.parse(q.resolved_pricing);
+      if (Array.isArray(parsed) && parsed.length) shared.resolvedPricing = parsed;
+    } catch (e) {
+      // Unparseable stored pricing falls back to re-running the engine, which is the behaviour
+      // that existed before this. It must never take the page down.
+    }
+  }
 
   const res = await env.ASSETS.fetch(new Request(new URL('/', url), request));
   let html = await res.text();

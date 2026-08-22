@@ -144,6 +144,10 @@
       // `__abyQuoteValue`). Sent from day one; the worker ignores unknown keys.
       firstYearValue: (window.__abyQuoteValue && window.__abyQuoteValue.firstYear) || null,
       employeeCount:  (window.__abyQuoteValue && window.__abyQuoteValue.employees) || null,
+      // The PRICED OUTPUT, so a shared link can show what was actually quoted rather than
+      // re-running the engine at today's rates. Published by app.js beside __abyQuoteValue.
+      // Sent from day one; the worker ignores unknown keys until the column exists.
+      resolvedPricing: window.__abyResolvedPricing || null,
       products: collectProducts(),
     };
 
