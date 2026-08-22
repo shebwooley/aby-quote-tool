@@ -4112,6 +4112,70 @@ const MIGRATIONS = [
   // and "is this partner worth the effort" is a quarterly question. Without it the only available
   // answer is "ever".
   { sql: "ALTER TABLE brokers ADD COLUMN referred_at TEXT", table: "brokers", column: "referred_at" },
+
+  // -- ABY's own CLIENT list (F-377) ------------------------------------------------------------
+  //
+  // ERIC, 2026-08-22: "I want the ABY client list to be part of the ABY admin."
+  //
+  // WHY THIS IS ITS OWN TABLE AND NOT A FLAG ON quotes OR ON aby_sales. The question was put
+  // directly -- "whether sold groups from quotes is the same record or a different record from
+  // Active Groups" -- and it was settled by MEASUREMENT against live D1, not by preference:
+  //
+  //     can a client exist with NO sale?            YES -- 1,248 of 1,295
+  //     can a sale exist with NO active client?     YES -- 359 of 406
+  //
+  // Either answer alone forces two records. A SALE IS AN EVENT WITH A DATE; A CLIENT IS A STATE
+  // THAT IS TRUE TODAY. So this table is the spine, and quotes and sales stay as dated events
+  // that point AT it. Folding a sale into a client row would turn an employer who buys again in
+  // 2027 into a second client, and would take the originating sale away from a client who terms.
+  //
+  // It is the shape the BenefitLab dashboard already settled on: bl_client carries a STAGE rather
+  // than living in a second table, and a lost client is archived, never deleted.
+  //
+  // BUILT TO GROW, DELIBERATELY. Eric, 2026-08-22: "Later, perhaps we'll get some better lists
+  // that give us even more info like product lines, actual effective date, current broker (if
+  // there was an AOR)." The client record is being RECONSTRUCTED from whatever artifacts exist,
+  // so every new source adds a column. Nothing here is NOT NULL except the name.
+  //
+  // TWO BROKER FIELDS, AND THAT IS THE POINT, NOT DUPLICATION. Eric named the reason himself:
+  // "current broker (if there was an AOR)". The broker on a quote is whoever ran it, frozen at
+  // that date; an Agent of Record change moves the relationship and leaves NO trace in any of
+  // these records. One broker column would quietly show somebody who has not touched the account
+  // in years, with nothing on screen saying so. Same two-questions-two-fields ruling as ran_by
+  // versus client_id in Change L.
+  //
+  // status is 'active' / 'termed' / 'unknown'. It is NOT a boolean, because the honest answer for
+  // most rows today is that nobody knows, and a boolean would have to lie in one direction.
+  // ONLY 12 PERCENT of ABY's recorded sales appear in the folder list this is first loaded from,
+  // and neither termination nor a setup lag explains that gap -- so the folder list proves
+  // ACTIVE, and it does NOT prove TERMED. An absent employer is 'unknown', never 'termed'.
+  //
+  // match_key is the normalised name every join runs on, stored rather than recomputed so the
+  // admin does not derive it per row and so the unique index below can rest on it.
+  { sql: "CREATE TABLE IF NOT EXISTS aby_clients (" +
+         "  id TEXT PRIMARY KEY," +
+         "  name TEXT NOT NULL," +
+         "  match_key TEXT NOT NULL DEFAULT ''," +
+         "  status TEXT NOT NULL DEFAULT 'unknown'," +
+         "  source TEXT NOT NULL DEFAULT ''," +
+         "  original_broker TEXT," +
+         "  original_broker_agency TEXT," +
+         "  current_broker TEXT," +
+         "  current_broker_agency TEXT," +
+         "  aor_changed_at TEXT," +
+         "  effective_date TEXT," +
+         "  effective_date_is_estimate INTEGER DEFAULT 0," +
+         "  products TEXT," +
+         "  account_mgr TEXT," +
+         "  note TEXT," +
+         "  first_seen_at TEXT," +
+         "  updated_at TEXT)",
+    table: "aby_clients", column: "name" },
+  // The name is the only identity these records have, so it must not be loadable twice. The
+  // folder list gets re-imported every time Eric re-screenshots the two missing stretches, and an
+  // importer that can double a client is an importer that silently inflates every count.
+  { sql: "CREATE UNIQUE INDEX IF NOT EXISTS aby_clients_match_key ON aby_clients (match_key)",
+    index: "aby_clients_match_key" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column
