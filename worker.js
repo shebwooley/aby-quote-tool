@@ -508,7 +508,7 @@ async function handleListQuotes(request, env) {
     //
     // They come from aby_sales, NOT from the quotes table, and that is deliberate. 156 of the
     // 406 sales have no quote at all, so writing them into quotes would add 156 to every quote
-    // figure ABY tracks -- the by-agency counts, the totals, the ageing report -- and
+    // figure ABY tracks -- the by-agency counts, the totals, the aging report -- and
     // source_tag exists precisely so history cannot inflate adoption numbers. A sale is not a
     // quote. This shows them where Eric asked without counting them as something they are not.
     //
@@ -2108,7 +2108,7 @@ ${abyAdminNav('/admin/pipeline')}
    // understated count that nobody can see.
    if(unknown.length){
      var m=document.getElementById('qMsg');
-     m.textContent='Not recognised: '+unknown.join(', ')+'. Use names like COBRA, FSA, HSA, POP, ERISA Wrap, ACA, HRA, QTB.';
+     m.textContent='Not recognized: '+unknown.join(', ')+'. Use names like COBRA, FSA, HSA, POP, ERISA Wrap, ACA, HRA, QTB.';
      m.style.display='block'; m.style.background='#fdecec'; m.style.color='#a12622'; return;
    }
    var r=await fetch('/api/admin/quote',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -2327,14 +2327,14 @@ ${abyAdminNav('/admin/brokers')}
   <div class="card"><h2>Quotes by agent</h2>
     <div id="byAgent"><p class="muted">Loading...</p></div></div>
 <div class="card"><h2>Quotes by status</h2>
-    <p class="sub">Value is the first year of a quote: setup, plan documents, annual fees and twelve months of any monthly fee.</p>
+    <p class="sub">2026 onward only &mdash; the back-catalog is counted by year further down. Value is the first year of a quote: setup, plan documents, annual fees and twelve months of any monthly fee.</p>
     <div id="byStatus"><p class="muted">Loading...</p></div></div>
   <div class="card"><h2>Open quotes, by age</h2>
     <p class="sub">Pending and in-process quotes only &mdash; a sold or dead quote is not waiting on
-      anybody &mdash; and 2026 onward only. The back-catalogue is below.</p>
+      anybody &mdash; and 2026 onward only. The back-catalog is below.</p>
     <div id="aging"><p class="muted">Loading...</p></div></div>
   <div class="card"><h2>Historic quotes, by year</h2>
-    <p class="sub">Everything before 2026, newest first. Ageing buckets say nothing across fifteen
+    <p class="sub">Everything before 2026, newest first. Aging buckets say nothing across fifteen
       years; a year count does.</p>
     <div id="historic"><p class="muted">Loading...</p></div></div>
   <div class="card"><h2>Registered brokers</h2>
@@ -3333,10 +3333,17 @@ async function handleAdminStats(request, env) {
         // The OUTPUT name stays `status` -- the page reads x.status, and an alias in SELECT is
         // only a label on the result. The shadowing hazard was in GROUP BY, which now uses the
         // expression, so the alias is safe to keep.
+        // 2026 ONWARD. Eric, 2026-08-22: "On quotes by status we need to remove the historic
+        // count from pending." Pending read 5,967 against a live pipeline of about 370, so the
+        // card described the back-catalogue rather than the book. The WHOLE card is scoped, not
+        // just the Pending row -- a table with one filtered row and four unfiltered ones cannot
+        // be added up, and the subtitle says which scope it is.
+        // The pre-2026 counts are not lost: they are the Historic quotes by year card below.
         "SELECT " + STATUS_EXPR + " AS status, COUNT(*) AS n, " +
         "       SUM(CASE WHEN q.first_year_value IS NOT NULL THEN 1 ELSE 0 END) AS valued, " +
         "       COALESCE(SUM(q.first_year_value),0) AS value " +
-        "FROM quotes q " + BROKER_JOIN + " WHERE 1=1 " + repFilter +
+        "FROM quotes q " + BROKER_JOIN +
+        " WHERE substr(q.created_at,1,4) >= '2026' " + repFilter +
         " GROUP BY " + STATUS_EXPR).bind(...args).all();
       byStatus = r1.results || [];
 
@@ -3453,7 +3460,8 @@ async function statsPerBlock(env, firstError, rep) {
     "SELECT COALESCE(q.status,'P') AS status, COUNT(*) AS n, " +
     "       SUM(CASE WHEN q.first_year_value IS NOT NULL THEN 1 ELSE 0 END) AS valued, " +
     "       COALESCE(SUM(q.first_year_value),0) AS value FROM quotes q" + joinIf +
-    "WHERE 1=1 " + repFilter + " GROUP BY COALESCE(q.status,'P')").bind(...args).all());
+    "WHERE substr(q.created_at,1,4) >= '2026' " + repFilter +
+    " GROUP BY COALESCE(q.status,'P')").bind(...args).all());
   if (st) out.byStatus = st.results || [];
 
   // 🔴 THE AGEING REPORT EXCLUDES THE BACK-CATALOGUE. Eric, 2026-08-22: "On open quotes by age, we
@@ -3476,7 +3484,7 @@ async function statsPerBlock(env, firstError, rep) {
 
   // ⭐ AND THE OTHER HALF OF THE SAME INSTRUCTION: "Instead, we should have a historic quotes
   // section that shows quotes by year, 2025 first." Every quote, every status, one row per year,
-  // newest first -- the ageing buckets make no sense across fifteen years, but a year count does.
+  // newest first -- the aging buckets make no sense across fifteen years, but a year count does.
   const hist = await attempt('historic', () => env.DB.prepare(
     "SELECT substr(q.created_at,1,4) AS yr, COUNT(*) AS n, " +
     "       SUM(CASE WHEN COALESCE(q.status,'P') = 'S' THEN 1 ELSE 0 END) AS sold, " +
