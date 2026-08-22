@@ -55,6 +55,7 @@ export default {
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
     // Referral partners (F-referrals, Eric 2026-08-19)
     if (path === '/api/admin/referrals' && method === 'GET')  return withAuth(request, env, () => handleAdminReferrals(request, env));
+    if (path === '/api/admin/clients' && method === 'GET')  return withAuth(request, env, () => handleAdminClients(request, env));
     if (path === '/api/admin/referral-partner' && method === 'POST') return withAuth(request, env, () => handleReferralPartner(request, env));
     if (path === '/api/admin/referral-contact' && method === 'POST') return withAuth(request, env, () => handleReferralContact(request, env));
     if (path === '/api/admin/broker-referral'  && method === 'POST') return withAuth(request, env, () => handleBrokerReferral(request, env));
@@ -153,6 +154,10 @@ export default {
     }
     if (path === '/admin/rates') {
       return withAuth(request, env, () => new Response(adminRatesHTML(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
+    }
+    if (path === '/admin/clients') {
+      return withAuth(request, env, () => new Response(adminClientsHTML(), {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
     }
     if (path === '/admin' || path === '/admin/') {
@@ -1713,6 +1718,136 @@ async function handleAdminReferrals(request, env) {
   return jsonResp(out);
 }
 
+/**
+ * Fold a company name to the shape both lists can be compared on.
+ *
+ * MUST STAY IN STEP WITH norm() IN benefitlab-notes/aby/agency_names.py, which is what every
+ * offline measurement of these records was made with. The two are stated in the same order so
+ * they can be diffed by eye, the same arrangement as the child-rating rule.
+ *
+ * WHY THIS IS NOT DONE IN SQL, AND IT IS NOT A STYLE PREFERENCE: SQLite cannot fold Inc / LLC /
+ * ampersands / punctuation, and the difference is not marginal. Measured 2026-08-22 against the
+ * live database: a raw lower(name) join matches 91 clients to quotes; this normaliser matches
+ * 123. A SQL join would under-report the overlap by 26 percent and would read as missing data
+ * rather than as a broken join.
+ *
+ * AND WHY IT IS NOT DONE IN THE PAGE'S OWN JAVASCRIPT: the admin pages are built inside template
+ * literals, so a regex written in page script has its backslashes eaten by the outer literal and
+ * arrives as a syntax error. That bug shipped three times in one afternoon. Server side, this is
+ * ordinary code.
+ */
+function normName(s) {
+  return String(s == null ? '' : s)
+    .toLowerCase().trim()
+    .replace(/&/g, ' and ')
+    .replace(/[.,/'"]+/g, ' ')
+    .replace(/\b(inc|llc|ltd|lp|llp|pa|plc|pllc|co|corp|corporation|company|group|the)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * ABY's CLIENT list, joined to the quotes and sales that mention the same employer.
+ *
+ * THE JOIN IS SHOWN, NEVER MERGED, AND THAT IS THE WHOLE DESIGN. Measured 2026-08-22: only 12
+ * percent of ABY's recorded sales appear in the client folder list, and neither termination nor
+ * a setup-and-invoice lag explains that gap (a lag predicts a gradient by age; the miss rate is
+ * flat at 75 to 100 percent across fifteen months). Until somebody can say what the folder list
+ * is actually a list of, writing "not a client" onto 359 sold groups would be asserting
+ * something nobody knows.
+ *
+ * So this endpoint answers three separate questions and keeps them separate:
+ *   - clients we have, and whether we ever quoted them
+ *   - sales with no client folder    -- the unexplained 359
+ *   - quoted employers with no client folder and no sale
+ */
+async function handleAdminClients(request, env) {
+  const out = { totals: {}, rows: [], orphanSales: [], unavailable: {} };
+  const attempt = async (name, run) => {
+    try { return await run(); }
+    catch (err) { out.unavailable[name] = String(err && err.message || err); return null; }
+  };
+
+  const c = await attempt('clients', () => env.DB.prepare(
+    "SELECT id, name, match_key, status, source, note, original_broker, current_broker, " +
+    "       effective_date, products FROM aby_clients ORDER BY name").all());
+  const q = await attempt('quotes', () => env.DB.prepare(
+    "SELECT quote_number, client_name, created_at, status, broker_agency, broker_name " +
+    "FROM quotes WHERE client_name IS NOT NULL AND trim(client_name) <> ''").all());
+  const s = await attempt('sales', () => env.DB.prepare(
+    "SELECT employer, products, announced_at, agency FROM aby_sales " +
+    "WHERE employer IS NOT NULL AND trim(employer) <> ''").all());
+
+  const clients = (c && c.results) || [];
+  const quotes  = (q && q.results) || [];
+  const sales   = (s && s.results) || [];
+
+  const qBy = new Map(), sBy = new Map();
+  for (const r of quotes) {
+    const k = normName(r.client_name);
+    if (!qBy.has(k)) qBy.set(k, []);
+    qBy.get(k).push(r);
+  }
+  for (const r of sales) {
+    const k = normName(r.employer);
+    if (!sBy.has(k)) sBy.set(k, []);
+    sBy.get(k).push(r);
+  }
+
+  const seen = new Set();
+  for (const cl of clients) {
+    // match_key is stored, but fall back to computing it so a row written by some future
+    // importer that forgot the column still joins instead of silently showing zero.
+    const k = cl.match_key || normName(cl.name);
+    seen.add(k);
+    const qs = qBy.get(k) || [];
+    const ss = sBy.get(k) || [];
+    qs.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    out.rows.push({
+      id: cl.id,
+      name: cl.name,
+      status: cl.status,
+      note: cl.note || '',
+      quotes: qs.length,
+      pending: qs.filter((r) => r.status === 'P').length,
+      sold: qs.filter((r) => r.status === 'S').length,
+      lastQuote: qs.length ? String(qs[0].created_at || '').slice(0, 10) : '',
+      agency: qs.length ? (qs[0].broker_agency || '') : (ss.length ? (ss[0].agency || '') : ''),
+      sales: ss.length,
+      soldProducts: ss.map((r) => r.products).filter(Boolean).join('; ').slice(0, 120),
+      // The row Eric can act on: an active client whose quote nobody ever dispositioned.
+      pendingButActive: cl.status === 'active' && qs.some((r) => r.status === 'P'),
+    });
+  }
+
+  // Sales whose employer has no client folder. NOT called "termed" -- see the header.
+  for (const [k, rows] of sBy) {
+    if (seen.has(k)) continue;
+    out.orphanSales.push({
+      employer: rows[0].employer,
+      products: rows.map((r) => r.products).filter(Boolean).join('; ').slice(0, 120),
+      announced: String(rows[0].announced_at || '').slice(0, 10),
+      agency: rows[0].agency || '',
+      quotes: (qBy.get(k) || []).length,
+    });
+  }
+  out.orphanSales.sort((a, b) => String(b.announced).localeCompare(String(a.announced)));
+
+  const quotedKeys = new Set(qBy.keys());
+  out.totals = {
+    clients: clients.length,
+    quotes: quotes.length,
+    sales: sales.length,
+    clientsQuoted: out.rows.filter((r) => r.quotes > 0).length,
+    clientsNeverQuoted: out.rows.filter((r) => r.quotes === 0).length,
+    pendingButActive: out.rows.filter((r) => r.pendingButActive).length,
+    pendingQuotesOnActive: out.rows.reduce((n, r) => n + (r.status === 'active' ? r.pending : 0), 0),
+    salesWithNoClient: out.orphanSales.length,
+    quotedNotAClient: [...quotedKeys].filter((k) => !seen.has(k)).length,
+  };
+  return jsonResp(out);
+}
+
 /** Add or rename a referral partner. */
 async function handleReferralPartner(request, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
@@ -2457,6 +2592,173 @@ ${abyAdminNav('/admin/brokers')}
 // no second copy of the rates to drift out of step.
 // The referral partners page (Eric, 2026-08-19).
 //
+// ABY's CLIENT list -- who we serve, as distinct from who we quoted and who bought (F-377).
+//
+// ERIC, 2026-08-22: "I want the ABY client list to be part of the ABY admin."
+//
+// 🔴🔴 THE SCREEN SHOWS THREE LISTS SIDE BY SIDE AND DELIBERATELY DOES NOT RECONCILE THEM. Measured
+// against live D1: only 47 of 406 recorded sales appear in the client folder list. Neither
+// termination nor a setup-and-invoice lag explains that -- a lag predicts a gradient by age, and
+// the miss rate is flat at 75 to 100 percent across fifteen months. Until somebody can say what
+// the folder list is actually a list of, a merged view would assert that 359 sold groups are not
+// clients, and afterwards nobody could tell which rows were known and which were assumed.
+//
+// ⭐ SO THE THIRD PANEL IS THE POINT, NOT AN APPENDIX: "sales with no client folder" is the open
+// question rendered as a worklist, and it shrinks as the answer arrives.
+//
+// ⚠️ THE COUNTS HERE COME FROM normName(), NOT FROM SQL. A raw lower(name) join finds 91 where the
+// normaliser finds 123. See handleAdminClients.
+function adminClientsHTML() {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Clients — ABY admin</title>
+<style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
+ header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
+ header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85;padding:4px 8px;border-radius:5px} header a:hover{opacity:1;background:rgba(255,255,255,.14)}
+ header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
+ header a.act{background:#2f9e73;opacity:1;font-weight:600}
+ header a.act:hover{background:#37b284}
+ main{max-width:1180px;margin:0 auto;padding:20px}
+ .card{background:#fff;border:1px solid #e3e9f0;border-radius:9px;padding:16px 18px;margin-bottom:16px}
+ h2{margin:0 0 4px;font-size:15px} .sub{margin:0 0 12px;color:#5b6b7f;font-size:13px}
+ table{width:100%;border-collapse:collapse;font-size:14px}
+ th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
+ td{padding:8px 6px;border-bottom:1px solid #eef2f6}
+ td.date,th.date{white-space:nowrap;width:1%}
+ .n{text-align:right} .muted{color:#8a97a8}
+ input,select{padding:6px 8px;border:1px solid #c8d2de;border-radius:6px;font-size:13px}
+ .tiles{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+ .tile{flex:1 1 150px;border:1px solid #e3e9f0;border-radius:8px;padding:10px 12px;background:#fff}
+ .tile b{display:block;font-size:22px;line-height:1.2}
+ .tile span{font-size:12px;color:#5b6b7f}
+ .tile.flag{border-color:#f0d9ae;background:#fdf7ec}
+ .pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600}
+ .pill.act{background:#e4f4ec;color:#1a5c3a}
+ .pill.unk{background:#eef2f6;color:#5b6b7f}
+ .warn{margin:0 0 14px;padding:10px 14px;border-radius:7px;background:#fdf1e0;border:1px solid #f0d9ae;color:#7a5410;font-size:13px}
+ .note{margin:0 0 14px;padding:10px 14px;border-radius:7px;background:#eef4fb;border:1px solid #cddff2;color:#234a77;font-size:13px}
+</style></head><body>
+${abyAdminNav('/admin/clients')}
+<main>
+  <div id="warn" class="warn" style="display:none"></div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="note">
+    <b>These are three different records and this page keeps them apart on purpose.</b>
+    A <b>quote</b> is a proposal we sent. A <b>sale</b> is something that happened on a date.
+    A <b>client</b> is somebody we serve today. Only 47 of 406 recorded sales appear in the client
+    folder list, and neither termination nor a setup delay explains that gap &mdash; so nothing here
+    is merged, and no employer is ever marked <i>termed</i> just for being absent.
+  </div>
+
+  <div class="card">
+    <h2>Clients</h2>
+    <p class="sub">From the shared-drive folder list, 2026&#8209;08&#8209;21. Two stretches of the
+      alphabet were never captured (Sab&ndash;Ses and Sys&ndash;Texas&nbsp;C), so this is a floor.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <input id="q" placeholder="Search a client" style="min-width:260px" oninput="draw()">
+      <select id="filter" onchange="draw()">
+        <option value="">All clients</option>
+        <option value="pending">Pending quote, and an active client</option>
+        <option value="quoted">Quoted at some point</option>
+        <option value="never">Never quoted through the tool</option>
+      </select>
+      <span id="count" class="muted" style="align-self:center"></span>
+    </div>
+    <div id="rows"></div>
+  </div>
+
+  <div class="card">
+    <h2>Sales with no client folder</h2>
+    <p class="sub">The open question, as a list. Somebody bought, and there is no client folder for
+      them. Either the folder list is narrower than &ldquo;our clients&rdquo;, or these are filed
+      somewhere else.</p>
+    <div id="orphans"></div>
+  </div>
+</main>
+<script>
+ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+ function day(s){return s?String(s).slice(0,10):'—'}
+ var DATA={totals:{},rows:[],orphanSales:[]};
+
+ async function load(){
+  var d=await (await fetch('/api/admin/clients')).json().catch(function(){return{}});
+  DATA=d||{};
+  if(d && d.unavailable && Object.keys(d.unavailable).length){
+    var w=document.getElementById('warn');
+    w.style.display='block';
+    w.textContent='Some of this could not be read: '+Object.keys(d.unavailable).join(', ')+
+      '. The numbers below are incomplete, not zero.';
+  }
+  tiles(); draw(); orphans();
+ }
+
+ function tiles(){
+  var t=DATA.totals||{};
+  var cells=[
+   ['Clients', t.clients, ''],
+   ['Quoted at some point', t.clientsQuoted, ''],
+   ['Never quoted here', t.clientsNeverQuoted, ''],
+   ['Pending quotes on an active client', t.pendingQuotesOnActive, 'flag'],
+   ['Sales with no client folder', t.salesWithNoClient, 'flag'],
+   ['Quoted, no client folder', t.quotedNotAClient, '']
+  ];
+  document.getElementById('tiles').innerHTML=cells.map(function(c){
+   return '<div class="tile '+c[2]+'"><b>'+(c[1]==null?'—':Number(c[1]).toLocaleString())+
+          '</b><span>'+c[0]+'</span></div>';
+  }).join('');
+ }
+
+ function draw(){
+  var q=(document.getElementById('q').value||'').toLowerCase().trim();
+  var f=document.getElementById('filter').value;
+  var rows=(DATA.rows||[]).filter(function(r){
+   if(q && r.name.toLowerCase().indexOf(q)<0) return false;
+   if(f==='pending') return r.pendingButActive;
+   if(f==='quoted') return r.quotes>0;
+   if(f==='never') return r.quotes===0;
+   return true;
+  });
+  document.getElementById('count').textContent=rows.length.toLocaleString()+' shown';
+  if(!rows.length){ document.getElementById('rows').innerHTML='<p class="muted">Nothing matches.</p>'; return; }
+  var h='<table><tr><th>Client</th><th>Status</th><th class="n">Quotes</th><th class="n">Pending</th>'+
+        '<th class="n">Sold</th><th class="date">Last quote</th><th>Agency</th><th class="n">Sales</th></tr>';
+  rows.slice(0,400).forEach(function(r){
+   h+='<tr><td>'+esc(r.name)+
+      (r.note?' <span class="muted" title="'+esc(r.note)+'">(2 folders)</span>':'')+'</td>'+
+      '<td><span class="pill '+(r.status==='active'?'act':'unk')+'">'+esc(r.status)+'</span></td>'+
+      '<td class="n">'+(r.quotes||'')+'</td>'+
+      '<td class="n">'+(r.pendingButActive?'<b>'+r.pending+'</b>':(r.pending||''))+'</td>'+
+      '<td class="n">'+(r.sold||'')+'</td>'+
+      '<td class="date">'+(r.lastQuote||'—')+'</td>'+
+      '<td>'+esc(r.agency||'')+'</td>'+
+      '<td class="n">'+(r.sales||'')+'</td></tr>';
+  });
+  h+='</table>';
+  if(rows.length>400) h+='<p class="muted">Showing the first 400 of '+rows.length.toLocaleString()+
+     '. Search to narrow it — nothing is hidden, the list is just long.</p>';
+  document.getElementById('rows').innerHTML=h;
+ }
+
+ function orphans(){
+  var o=DATA.orphanSales||[];
+  if(!o.length){ document.getElementById('orphans').innerHTML='<p class="muted">None.</p>'; return; }
+  var h='<table><tr><th>Employer</th><th class="date">Announced</th><th>Products</th>'+
+        '<th>Agency</th><th class="n">Quotes</th></tr>';
+  o.slice(0,400).forEach(function(r){
+   h+='<tr><td>'+esc(r.employer)+'</td><td class="date">'+day(r.announced)+'</td>'+
+      '<td>'+esc(r.products||'')+'</td><td>'+esc(r.agency||'')+'</td>'+
+      '<td class="n">'+(r.quotes||'')+'</td></tr>';
+  });
+  h+='</table>';
+  if(o.length>400) h+='<p class="muted">Showing the first 400 of '+o.length.toLocaleString()+'.</p>';
+  document.getElementById('orphans').innerHTML=h;
+ }
+
+ load();
+</script></body></html>`;
+}
+
 // ⭐⭐ IT IS A SCOREBOARD, NOT A DIRECTORY. "Show me everyone they referred" is a list; "is this
 // relationship worth the effort" is the question behind it, and only the second justifies the
 // screen. So every partner and rep carries referred / quoting / producing / first-year value.
@@ -3810,6 +4112,9 @@ const ABY_ADMIN_LINKS = [
   { href: '/aby',              label: 'Run a quote',          cls: 'act',
     title: 'Run a quote as ABY, with the internal price adjustments' },
   { href: '/admin',            label: 'Quote log' },
+  // Sits next to the quote log because the two answer adjacent questions -- who we quoted, and
+  // who we actually serve -- and the whole point of F-377 is that those are not the same list.
+  { href: '/admin/clients',    label: 'Clients' },
   { href: '/admin/brokers',    label: 'Brokers &amp; Agencies' },
   { href: '/admin/pipeline',   label: 'Pipeline' },
   { href: '/admin/referrals',  label: 'Referrals' },

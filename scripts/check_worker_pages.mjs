@@ -118,8 +118,12 @@ function scanTemplateText(name, fnSrc) {
 // checker that cannot notice its own blind spot will keep having them.
 // 🆕 `loginHTML` was ALSO never checked -- found by the scope check the moment it existed. It is
 // served on two routes and is the first thing anyone signing in sees.
+// 🆕 `adminClientsHTML` (F-377) was likewise caught by the scope check on the run that first
+// emitted it -- the page was written, the checker said "this checker does not cover", and it
+// refused to pass. Second time that mechanism has paid for itself.
 const PAGES = ["adminHTML", "adminBrokersHTML", "adminRatesHTML", "adminPipelineHTML",
-               "adminReferralsHTML", "brokerPageHTML", "setPasswordPageHTML", "loginHTML"];
+               "adminReferralsHTML", "adminClientsHTML", "brokerPageHTML", "setPasswordPageHTML",
+               "loginHTML"];
 
 // Template-literal constants served verbatim to a browser (not page functions).
 const RAW_LITERALS = ["ABY_INTERNAL_JS"];
