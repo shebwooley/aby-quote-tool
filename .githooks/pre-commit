@@ -41,4 +41,15 @@ if git diff --cached --name-only | grep -q '^worker\.js$'; then
     echo "Run: node scripts/check_worker_pages.mjs"
     exit 1
   fi
+
+  # The rollup BEHAVES, not just parses. The page checker above proves the JavaScript is valid;
+  # this one runs the real grouping against fixtures and asserts a child never vanishes, a parent
+  # count is own-plus-children, and an acquired name stays off the fallen-off list.
+  # A rule with no checker is a preference; a checker with no trigger is a suggestion.
+  if ! node scripts/check_agency_rollup.mjs; then
+    echo ""
+    echo "The agency rollup on /admin/brokers is wrong. Commit refused."
+    echo "Run: node scripts/check_agency_rollup.mjs --self-test"
+    exit 1
+  fi
 fi
