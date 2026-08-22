@@ -2609,9 +2609,16 @@ ${abyAdminNav('/admin/brokers')}
        + dm.map(function(x){
            var yrs = Math.floor((x.days_quiet||0)/365), mos = Math.round(((x.days_quiet||0)%365)/30);
            var quiet = yrs ? (yrs+' yr'+(yrs>1?'s':'')+(mos?' '+mos+' mo':'')) : ((x.days_quiet||0)+' days');
-           return '<tr><td class="wrapcell">'+esc(x.agency_label||'(no agency)')+'</td>'
+           // An acquired agency is NOT a lapse. Saying so on the row is the whole point --
+           // otherwise the biggest number on this list is a call nobody should make.
+           var sold = x.succeeded_by
+             ? ' <span class="muted">&mdash; acquired ' + esc(x.succeeded_when||'') +
+               ', now quotes as <b>' + esc(x.succeeded_by) + '</b></span>'
+             : '';
+           return '<tr'+(x.succeeded_by?' style="opacity:.62"':'')+'>'
+             +'<td class="wrapcell">'+esc(x.agency_label||'(no agency)')+sold+'</td>'
              +'<td class="c">'+x.n+'</td><td class="date">'+day(x.last_quote)+'</td>'
-             +'<td class="c">'+quiet+'</td></tr>';
+             +'<td class="c">'+(x.succeeded_by?'<span class="muted">n/a</span>':quiet)+'</td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">Nobody has fallen off &mdash; every agency with five or more quotes has sent one in the last 12 months.</p>';
 
@@ -2627,7 +2634,11 @@ ${abyAdminNav('/admin/brokers')}
      var ones  = sorted.filter(function(x){ return (x.n||0) === 1; }).length;
      var mid   = sorted.filter(function(x){ return (x.n||0) >= 10 && (x.n||0) <= 49; });
      var midN  = mid.reduce(function(t,x){ return t+(x.n||0); }, 0);
-     var dmN   = dm.reduce(function(t,x){ return t+(x.n||0); }, 0);
+     // Count only the GENUINE lapses. An acquired agency in this total would overstate what
+     // there is to go and recover, which is the one thing this number is for.
+     var live  = dm.filter(function(x){ return !x.succeeded_by; });
+     var acq   = dm.filter(function(x){ return x.succeeded_by; });
+     var dmN   = live.reduce(function(t,x){ return t+(x.n||0); }, 0);
      var el = document.getElementById('insights');
      if (!el) return;
      el.innerHTML =
@@ -2638,10 +2649,15 @@ ${abyAdminNav('/admin/brokers')}
        + Math.round(100*midN/tot) + '%</b>. That is the middle, and it is usually where growth is'
        + ' cheapest &mdash; they already know us.</li>'
        + '<li><b>' + ones + ' agencies</b> have sent exactly one quote, ever.</li>'
-       + (dm.length
-           ? '<li><b>' + dm.length + ' agencies</b> that sent us five or more quotes have gone quiet'
+       + (live.length
+           ? '<li><b>' + live.length + ' agencies</b> that sent us five or more quotes have gone quiet'
              + ' for over a year, worth <b>' + dmN.toLocaleString() + '</b> quotes historically.'
              + ' They are listed below.</li>'
+           : '')
+       + (acq.length
+           ? '<li>' + acq.length + ' more look dormant but were <b>acquired</b> &mdash; '
+             + acq.map(function(x){ return esc(x.agency_label)+' is now '+esc(x.succeeded_by); }).join(', ')
+             + '. Not a call to make.</li>'
            : '')
        + '</ul>';
    })();
@@ -3317,6 +3333,29 @@ async function handleAdminAssign(request, env) {
  */
 // The agency an aggregate row belongs to. ⭐ ONE definition used by BOTH the query and its
 // GROUP BY, because those two disagreeing is exactly the bug this replaced.
+// AGENCIES THAT WERE ACQUIRED, AND ARE THEREFORE NOT A LAPSED RELATIONSHIP.
+//
+// Eric found the news story on 2026-08-22: Marsh acquired MHBT in June 2015. MHBT was the LARGEST
+// entry on "agencies that have fallen off" -- 184 quotes, silent eight years -- and it is not a
+// relationship to circle back with. It is the same relationship trading under today's name.
+//
+// 🔴 THE QUOTES ARE NOT REWRITTEN AND MUST NOT BE. A 2013 quote really was MHBT; relabelling it MMA
+// would put MMA in the log four years before it existed here. Eric's own rule says the same thing
+// about branches: "We do want the branches kept."
+//
+// ⭐ THE DATA DATES THE REBRAND MORE PRECISELY THAN THE ACQUISITION DOES, which is worth knowing
+// because the two are different events: MHBT ran 2011-03 to 2017-12 and MMA starts 2017-04, so the
+// brands overlapped for about two years after the deal and the handover completed at the end of
+// 2017. There is even a transitional row written "MMA; MHBT" on 2017-08-30.
+//
+// ⚠️ A CONSTANT, NOT A TABLE, ON PURPOSE -- there is one confirmed entry. Gallagher acquires
+// constantly and Crandall & Associates already mails from @ajg.com, so this will grow; if it
+// passes about ten, promote it to its own table rather than letting a list of business facts live
+// in the source.
+const SUCCEEDED_BY = {
+  'MHBT': { by: 'MMA', when: 'Jun 2015', note: 'acquired by Marsh; quotes moved to MMA from 2018' },
+};
+
 const AGENCY_EXPR = "COALESCE(a.name, NULLIF(trim(q.broker_agency),''), '(no agency)')";
 
 async function handleAdminStats(request, env) {
@@ -3502,7 +3541,13 @@ async function handleAdminStats(request, env) {
         " GROUP BY " + AGENCY_EXPR +
         " HAVING n >= 5 AND recent = 0 " +
         " ORDER BY n DESC LIMIT 40").bind(...args).all();
-      dormant = r4.results || [];
+      // Mark the ones that are not a lapse at all. Done here rather than on the page so the
+      // register has ONE reader and cannot drift between screens.
+      dormant = (r4.results || []).map(function (d) {
+        var hit = SUCCEEDED_BY[(d.agency_label || '').trim()];
+        return hit ? Object.assign({}, d, { succeeded_by: hit.by, succeeded_when: hit.when,
+                                            succeeded_note: hit.note }) : d;
+      });
     } catch (err) {
       // Columns may predate the migration. Report nothing rather than a wrong zero.
       console.warn('value/aging unavailable:', String(err && err.message || err));
