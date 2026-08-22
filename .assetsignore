@@ -57,10 +57,50 @@ agencies.txt
 README.md
 *.md
 
+# --- the DEAD root-level duplicates ------------------------------------------------------------
+#
+# 2026-08-22. These were left published on 2026-08-21 with the note "work out which are dead and
+# remove them deliberately". That has now been done, BY MEASUREMENT rather than by reading:
+#
+#   - fetched the LIVE https://abyquotes.com/ and listed every src= and href= it emits.
+#     It loads assets/css/*, assets/js/*, assets/js/data/*, assets/js/lib/* -- and from the ROOT,
+#     exactly one file: save-hook.js.
+#   - july-2026.html, the only other page, references NO root-level script or stylesheet at all.
+#   - grepped every .html in the repo for a root-relative reference to any of the six. None.
+#
+# So these six are served to the public and loaded by nothing.
+#
+# WHY UN-PUBLISH RATHER THAN DELETE: un-publishing is one line and is undone by deleting one line,
+# and it closes the exposure now. Deleting them from the repo is a separate, larger decision --
+# it also removes the DECOY TRAP, where an edit to a root file changes nothing and reads as "the
+# edit did not work" rather than "the edit went somewhere nothing reads" -- and it is left for
+# Eric to approve rather than done unattended.
+#
+# 🔴 save-hook.js IS NOT IN THIS LIST AND MUST NOT BE ADDED. index.html loads it from the root.
+# ⚠️ reps.js is PUBLIC BY DESIGN, but the copy the page loads is assets/js/data/reps.js. The ROOT
+#    copy is a stale duplicate, so un-publishing it removes an out-of-date rep list, not the tool's.
+# 🔴🔴 THE LEADING SLASH IS LOAD-BEARING AND ITS ABSENCE TOOK THE TOOL DOWN.
+# .assetsignore is gitignore SYNTAX: a bare `app.js` matches AT ANY DEPTH, so it also matched
+# assets/js/app.js, assets/js/data/pricing.js, assets/js/data/reps.js, assets/js/lib/renderer.js,
+# assets/js/lib/utils.js and assets/css/quote.css. Deployed 2026-08-22 and every script on the
+# public quote tool went 404 -- the page still returned 200 and rendered, which is exactly what
+# this kind of outage looks like from the outside. `/app.js` anchors to the ROOT only.
+# ⭐ AND IT WAS FOUND IN ONE MINUTE ONLY BECAUSE THE VERIFICATION FETCHED THE ASSETS THE PAGE
+# ACTUALLY LOADS, NOT JUST "/" -- a 200 on the page says nothing about the scripts inside it.
+/app.js
+/pricing.js
+/renderer.js
+/utils.js
+/quote.css
+/reps.js
+
+# --- scratch output from the checkers ----------------------------------------------------------
+# scripts/check_worker_pages.mjs writes _s_<pageName>_0.js beside the repo root when it extracts a
+# page to parse it. They are gitignored, so they never reach GitHub -- but `assets.directory` is
+# "." and wrangler uploads the WORKING TREE, so running a checker immediately before a deploy
+# would publish them. Measured 404 today; listed so it stays that way by rule and not by luck.
+/_s_*.js
+
 # NOTE ON WHAT IS DELIBERATELY STILL PUBLISHED:
-#   index.html, july-2026.html, aby-logo.png and everything under assets/ are the tool itself.
-#   The root-level copies (app.js, pricing.js, renderer.js, reps.js, save-hook.js, utils.js,
-#   quote.css) look like older duplicates of files now under assets/, and are LEFT ALONE here on
-#   purpose: this change is a security stop, and quietly un-publishing a file the page might still
-#   load would turn it into an outage. Work out which are dead and remove them deliberately.
-#   reps.js in particular is PUBLIC BY DESIGN -- it is the outside-broker rep list.
+#   index.html, july-2026.html, aby-logo.png, save-hook.js and everything under assets/.
+#   Those are the tool itself.

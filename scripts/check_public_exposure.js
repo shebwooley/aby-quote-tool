@@ -45,12 +45,53 @@ const FORBIDDEN = [
 // or a network with no route returns "not 200" for everything, and every FORBIDDEN row would pass.
 // A checker that cannot tell "correctly hidden" from "nothing answered" is the one that reports all
 // clear the day the site is broken.
+//
+// 🔴🔴 AND ON 2026-08-22 THAT NEARLY WAS NOT ENOUGH. Six DEAD root-level duplicates were
+// un-published by adding `app.js`, `pricing.js`, `renderer.js`, `utils.js`, `quote.css` and
+// `reps.js` to `.assetsignore`. That file is GITIGNORE SYNTAX -- a bare name matches AT ANY DEPTH
+// -- so those patterns also matched `assets/js/app.js`, `assets/js/data/pricing.js`,
+// `assets/js/data/reps.js`, `assets/js/lib/renderer.js`, `assets/js/lib/utils.js` and
+// `assets/css/quote.css`. **Every script on the public quote tool went 404, while `/` still
+// returned 200 and rendered.** A leading `/` anchors to the root and was the whole fix.
+// ⭐⭐ THIS LIST WOULD HAVE CAUGHT IT -- three of its four entries went 404 -- AND IT WAS NOT RUN
+// BEFORE THE DEPLOY. So the answer is not only "run it", it is "make the control impossible to
+// under-specify": the list below is now a FLOOR, and the real control is DERIVED from the page.
 const REQUIRED = [
   ["/", "the tool itself"],
   ["/assets/js/app.js", "the app JavaScript"],
   ["/assets/css/app.css", "the stylesheet"],
   ["/assets/js/data/reps.js", "the rep list -- PUBLIC BY DESIGN, see SOURCE-OF-TRUTH"],
 ];
+
+/**
+ * Every same-origin script and stylesheet that `/` actually references.
+ *
+ * ⭐ A DERIVED CONTROL CANNOT GO STALE: an asset added to the page is covered the same day, and
+ * nobody has to remember to list it here. That is the difference between this and the four above.
+ * ⛔ It returns [] on any failure, and the caller treats a SHORT list as a failure rather than a
+ * pass -- an empty control is exactly the vacuous green this whole file exists to prevent.
+ */
+async function derivedControls() {
+  try {
+    const r = await fetch(HOST + "/", { redirect: "manual" });
+    if (r.status !== 200) return [];
+    const html = await r.text();
+    const seen = new Set();
+    const out = [];
+    for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) {
+      const v = m[1];
+      if (/^(https?:)?\/\//.test(v) || v.startsWith("data:") || v.startsWith("#")) continue;
+      if (!/\.(js|css)$/.test(v)) continue;
+      const p = v.startsWith("/") ? v : "/" + v;
+      if (seen.has(p)) continue;
+      seen.add(p);
+      out.push([p, "referenced by the live page"]);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
 
 async function status(path) {
   try {
@@ -76,7 +117,24 @@ async function status(path) {
   }
 
   console.log("\nmust STILL be served (the positive control)");
-  for (const [p, why] of REQUIRED) {
+  const derived = await derivedControls();
+  // Merge, de-duplicated, floor first. A derived list that came back empty or implausibly short
+  // means the page did not load or its markup changed shape -- that is a FAILURE, never a pass.
+  const seen = new Set();
+  const controls = [];
+  for (const [p, why] of [...REQUIRED, ...derived]) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    controls.push([p, why]);
+  }
+  const MIN_DERIVED = 6;   // the page has referenced 12 for months; 6 is a generous floor
+  if (derived.length < MIN_DERIVED) {
+    unreachable++;
+    console.log(`  MISSING  --  only ${derived.length} asset(s) could be read off the live page ` +
+                `(expected at least ${MIN_DERIVED}).`);
+    console.log("          ^ the page did not load, or its markup changed shape. Not a pass.");
+  }
+  for (const [p, why] of controls) {
     const s = await status(p);
     const bad = s !== 200;
     if (bad) unreachable++;
