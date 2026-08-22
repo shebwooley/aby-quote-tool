@@ -3490,7 +3490,15 @@ async function handleAdminStats(request, env) {
         "       MAX(q.created_at) AS last_quote, " +
         "       SUM(CASE WHEN q.created_at >= datetime('now','-365 days') THEN 1 ELSE 0 END) AS recent, " +
         "       CAST(julianday('now') - julianday(MAX(q.created_at)) AS INTEGER) AS days_quiet " +
-        "FROM quotes q " + BROKER_JOIN + " WHERE 1=1 " + repFilter +
+        // 🔴 AGENCY_EXPR references a.name, so the AGENCIES join has to be here too.
+        // BROKER_JOIN alone brings in `brokers b` and nothing else, so the first version of
+        // this query referenced an unresolved column, threw, and left the card empty -- while
+        // byStatus, aging and historic all rendered, because they are assigned before it.
+        // An empty card and a broken card look identical, which is why the direct query was
+        // run against D1 to prove the SQL itself was sound before looking at the worker.
+        "FROM quotes q " + BROKER_JOIN +
+        " LEFT JOIN agencies a ON a.id = b.agency_id " +
+        " WHERE 1=1 " + repFilter +
         " GROUP BY " + AGENCY_EXPR +
         " HAVING n >= 5 AND recent = 0 " +
         " ORDER BY n DESC LIMIT 40").bind(...args).all();
