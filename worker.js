@@ -2624,7 +2624,12 @@ ${abyAdminNav('/admin/brokers')}
      // that have more than one - it looks funny. Unless you can put it in the margin instead so
      // the text lines up." It is absolutely positioned inside the cell's left padding, and EVERY
      // row reserves that padding, so a row with no caret starts at the same x as one with.
-     var caret = (!child && !ownRow && kid.length)
+     // THE CARET MUST APPEAR FOR AGENTS TOO, NOT ONLY FOR CHILD AGENCIES.
+     // Gallagher has NINE named agents and no acquisitions, so with the caret gated on child
+     // agencies alone its agents were built, correct, and unreachable -- there was no control to
+     // open them with. Same for USI, Crandall, Combined Benefits and Lifetime.
+     var hasPeople = (!child && !ownRow) ? agentsFor(x).length > 0 : false;
+     var caret = (!child && !ownRow && (kid.length || hasPeople))
        ? '<button type="button" class="agtog" data-ag="'+esc(x.agency_label||'')+'" '
          + 'style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:none;'
          + 'border:0;cursor:pointer;color:#2f6f4f;font-size:12px;line-height:1;padding:2px">'
@@ -2642,6 +2647,9 @@ ${abyAdminNav('/admin/brokers')}
        // the COMBINED total, and this is the number that explains it.
        tag = ' <span class="muted" style="font-size:12px">('+(kid.length+1)+')</span>';
      }
+     // ⛔ No badge when an agency has only AGENTS beneath it -- "(1)" would be explaining a
+     // combined total that is not combined with anything, and the caret already says there is
+     // something to open.
      var sales = Number(x.sales||0)
        ? ('<strong>'+x.sales+'</strong>'+(Number(x.sales||0)>Number(x.n||0)
            ? ' <span title="more sales than quotes on file" style="color:#a0574f">*</span>' : ''))
@@ -2673,7 +2681,9 @@ ${abyAdminNav('/admin/brokers')}
              // The parent's OWN quotes come first, so the combined headline above is the sum of
              // the rows below it and nobody has to subtract to find out what MMA itself did.
              // A synthesised parent has no quotes of its own and contributes no row.
-             if (Number(x.n||0) > 0) out += agRow(x, false, true);
+             if (Number(x.n||0) > 0 && (kids[x.agency_label]||[]).length) {
+               out += agRow(x, false, true);
+             }
              var list = (kids[x.agency_label]||[]).slice();
              list.sort(function(a,b){ return Number(b.n||0)-Number(a.n||0); });
              out += list.map(function(k){ return agRow(k, true, false); }).join('');

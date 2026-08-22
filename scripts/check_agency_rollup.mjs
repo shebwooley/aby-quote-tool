@@ -199,6 +199,19 @@ const RULES = [
     },
   },
   {
+    // 🔴 GALLAGHER HAS NINE NAMED AGENTS AND NO ACQUISITIONS. With the caret gated on child
+    // agencies alone, its agents were built, correct and UNREACHABLE -- no control existed to
+    // open them. Found by looking at the page, not by any rule that existed at the time.
+    name: "an agency with agents but no child agencies still gets a toggle",
+    holds(src) {
+      // ⚠️ Assert on the toggle's OWN data attribute, not on a window sliced forward from the
+      // agency name -- the caret is rendered BEFORE the name in the cell, so a forward slice
+      // could never see it and the first version of this rule reported its sabotage MISSED.
+      const h = run(FIXTURE, {}, src).html;
+      return h.includes('data-ag="USI"');
+    },
+  },
+  {
     name: "the toggle is wired from TWO call sites, not only inside paint()",
     holds(src) {
       const s = src || SRC;
@@ -293,6 +306,8 @@ const SABOTAGES = [
   // Reproduces the real bug on demand: drop the comma and the SELECT list becomes invalid SQL.
   // A checker whose self-test replays the failure it was written for is one you can still trust
   // in a year.
+  { why: "an agency with only agents loses its toggle",
+    apply: (s) => s.replace("(kid.length || hasPeople)", "(kid.length)") },
   { why: "agents stop being listed under their agency",
     apply: (s) => s.replace("var ppl = agentsFor(x);", "var ppl = [];") },
   { why: "an agent at a child agency stops rolling up to the parent",
