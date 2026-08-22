@@ -2287,6 +2287,20 @@ function adminBrokersHTML() {
  .card.shut .sub,.card.shut>div,.card.shut>table,.card.shut>p:not(.sub){display:none}
  .card h2 .cnt{margin-left:auto;font-size:12px;font-weight:400;color:#8a97a8} .muted{color:#8a97a8}
  .n{text-align:right;font-variant-numeric:tabular-nums}
+ /* Eric, 2026-08-22: "the agency name has way too much space and all the other info is crammed
+    into tiny columns... for the number counts maybe center them in their column under a centered
+    heading", and on Quotes by agency "the agents number [is] way to the right".
+    CAUSE: these tables declared no column widths, so the browser gave the long free-text column
+    everything it asked for and squeezed the rest. The right-align class then pushed each number to
+    the far edge of its own narrow column, parking it against the next column -- which is why a
+    count ended up sitting beside a date it has nothing to do with.
+    FIX: fixed layout with a declared colgroup, and counts CENTRED under centred headings, so a
+    number sits in the middle of its own space instead of on a boundary. */
+ table.grid{table-layout:fixed;width:100%}
+ table.grid td,table.grid th{overflow:hidden;text-overflow:ellipsis}
+ table.grid td.wrapcell{white-space:normal;overflow-wrap:anywhere;text-overflow:clip}
+ .c{text-align:center;font-variant-numeric:tabular-nums}
+ th.c{text-align:center}
  .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
  .filters button{background:#fff;border:1px solid #c8d2de;border-radius:6px;padding:7px 13px;cursor:pointer;font-size:14px}
  .filters button.on{background:#143c73;color:#fff;border-color:#143c73}
@@ -2490,13 +2504,16 @@ ${abyAdminNav('/admin/brokers')}
      last:function(x){return String(x.last_quote||'')}
    },'n');
    document.getElementById('byAgency').innerHTML = ag.length
-     ? '<table><thead><tr>'+hc('byAgency','agency','Agency')+hc('byAgency','n','Quotes','n')
-       +hc('byAgency','share','Share','n')
-       +hc('byAgency','sales','Sales','n')
-       +hc('byAgency','agents','Agents','n')+hc('byAgency','last','Last quote')
+     ? '<table class="grid"><colgroup>'
+       + '<col style="width:32%"><col style="width:9%"><col style="width:9%">'
+       + '<col style="width:9%"><col style="width:9%"><col style="width:14%"><col style="width:18%">'
+       + '</colgroup><thead><tr>'+hc('byAgency','agency','Agency')+hc('byAgency','n','Quotes','c')
+       +hc('byAgency','share','Share','c')
+       +hc('byAgency','sales','Sales','c')
+       +hc('byAgency','agents','Agents','c')+hc('byAgency','last','Last quote')
        +'<th>Owner</th></tr></thead><tbody>'
        + capRows('byAgency', ag).map(function(x){
-           return '<tr><td>'+esc(x.agency_label||x.agency||'(no agency)')+'</td><td class="n">'+x.n+'</td><td class="n">'+pctOfTotal(x.n)+'</td><td class="n">'+(Number(x.sales||0)?('<strong>'+x.sales+'</strong>'+(Number(x.sales||0)>Number(x.n||0)?' <span title="more sales than quotes on file" style="color:#a0574f">*</span>':'')):'—')+'</td><td class="n">'+x.agents+'</td><td class="date">'+day(x.last_quote)+'</td>'
+           return '<tr><td class="wrapcell">'+esc(x.agency_label||x.agency||'(no agency)')+'</td><td class="c">'+x.n+'</td><td class="c">'+pctOfTotal(x.n)+'</td><td class="c">'+(Number(x.sales||0)?('<strong>'+x.sales+'</strong>'+(Number(x.sales||0)>Number(x.n||0)?' <span title="more sales than quotes on file" style="color:#a0574f">*</span>':'')):'—')+'</td><td class="c">'+x.agents+'</td><td class="date">'+day(x.last_quote)+'</td>'
              +'<td>'+(x.agency_id?repSelect('agency',x.agency_id,x.rep):'<span class="muted">\u2014</span>')+'</td></tr>';
          }).join('')+moreRow('byAgency', capRows('byAgency', ag).length, ag.length, 5)+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
@@ -2524,16 +2541,31 @@ ${abyAdminNav('/admin/brokers')}
    CACHE.byAgent=st.byAgent||[];
    paintByAgent();
    function paintByAgent(){
+   // Eric, 2026-08-22: "When you click to quote by agent, it sorts by first name. Seems like last
+   // name would be better." Sorted on the LAST word of the name, with the whole name as the
+   // tie-break so two Smiths stay in a stable order.
+   // A row with no name at all falls back to whatever it is labelled by (email, or the agency),
+   // because that is what the cell actually shows -- a sort keyed on a field the cell does not
+   // display is how a table comes to look wrongly ordered to the person reading it.
+   function surname(x){
+     var n = String(x.name||'').trim();
+     if(!n) return String(x.email||x.agency||'').toLowerCase();
+     var p = n.split(' ').filter(function(w){ return w; });
+     return (p[p.length-1] + ' ' + n).toLowerCase();
+   }
    var agt=sorted('byAgent',CACHE.byAgent,{
-     name:function(x){return String(x.name||'').toLowerCase()},
+     name:surname,
      email:function(x){return String(x.email||'').toLowerCase()},
      agency:function(x){return String(x.agency||'').toLowerCase()},
      n:function(x){return Number(x.n||0)},
      last:function(x){return String(x.last_quote||'')}
    },'n');
    document.getElementById('byAgent').innerHTML = agt.length
-     ? '<table><thead><tr>'+hc('byAgent','name','Agent')+hc('byAgent','email','Email')
-       +hc('byAgent','agency','Agency')+hc('byAgent','n','Quotes','n')
+     ? '<table class="grid"><colgroup>'
+       + '<col style="width:24%"><col style="width:26%"><col style="width:24%">'
+       + '<col style="width:11%"><col style="width:15%">'
+       + '</colgroup><thead><tr>'+hc('byAgent','name','Agent')+hc('byAgent','email','Email')
+       +hc('byAgent','agency','Agency')+hc('byAgent','n','Quotes','c')
        +hc('byAgent','last','Last quote')+'</tr></thead><tbody>'
        + capRows('byAgent', agt).map(function(x){
            // \u2b50 A ROW IS NAMED BY WHATEVER IT HAS. Most of the imported book carries an agency and
@@ -2541,9 +2573,9 @@ ${abyAdminNav('/admin/brokers')}
            // like broken data rather than what they are: a quote we know the agency for.
            var who = x.name || x.email || (x.agency ? x.agency : '') || 'Not stated';
            var viaAgency = !x.name && !x.email && x.agency;
-           return '<tr><td>'+esc(who)
+           return '<tr><td class="wrapcell">'+esc(who)
              +(viaAgency?' <span class="muted" title="This quote records an agency but no individual broker">(agency only)</span>':'')
-             +'</td><td>'+esc(x.email||'\u2014')+'</td><td>'+esc(x.agency||'\u2014')+'</td><td class="n">'+x.n+'</td><td class="date">'+day(x.last_quote)+'</td></tr>';
+             +'</td><td class="wrapcell">'+esc(x.email||'\u2014')+'</td><td class="wrapcell">'+esc(x.agency||'\u2014')+'</td><td class="c">'+x.n+'</td><td class="date">'+day(x.last_quote)+'</td></tr>';
          }).join('')+moreRow('byAgent', capRows('byAgent', agt).length, agt.length, 5)+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
    }
@@ -4915,6 +4947,11 @@ tbody tr.data-row.expanded td{background:#f0f8f2;border-top-color:#d4ead9}
 .date-time{font-size:.78rem;color:#999}
 .muted{color:#aaa;font-style:italic}
 .nowrap{white-space:nowrap}
+/* The Rep column holds multi-person values like "Gerard/Mark, Kandice/Joe" on the sold rows that
+   come from aby_sales. The table is table-layout:fixed, so without this the text runs straight out
+   of the column and over the Products chips -- which is what Eric photographed on 2026-08-22.
+   Wrapping makes the row slightly taller and keeps every name, which is the honest trade. */
+td.repcell{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
 /* EDIT IN PLACE. ⭐ It must read as TEXT until touched -- a table full of visible input boxes is
    the look Eric objected to in the panel, and putting it in every row would be worse. The outline
    appears on hover so the affordance is discoverable without being permanent. */
@@ -5059,6 +5096,12 @@ ${abyAdminNav('/admin')}
     <option value="direct">Broker - direct link</option>
     <option value="broker">Broker (either)</option>
   </select>
+  <!-- Only visible on the Historic tab. Eric asked for the year drop-down to live there, and it
+       is populated from the DATA rather than a hardcoded range, so the back-catalogue's real span
+       (2008 onward) shows up without anybody remembering to widen a list. -->
+  <select id="histYear" style="display:none;padding:.4rem .5rem;border:1px solid #ddd;border-radius:6px;font-size:.85rem">
+    <option value="">All years</option>
+  </select>
 </div>
 <div class="tabs">
   <button class="tab active" data-status="P">Pending</button>
@@ -5078,6 +5121,19 @@ ${abyAdminNav('/admin')}
        The tab goes in at the SAME TIME as the status, because the In process row above is
        what happens when it does not. -->
   <button class="tab" data-status="N">No Response</button>
+  <!-- HISTORIC. Eric, 2026-08-22, after the 2009-2023 back-catalogue landed: "I don't think
+       pending is the appropriate place for anything before 2026. I'm thinking historic would be
+       better and have the year drop-down there."
+       He is right, and the numbers make it obvious: 5,768 of 6,153 quotes are pre-2026, so
+       Pending read 5,967 while the live pipeline is about 370. A tab whose count is 94% history
+       answers no question anybody has.
+       🔴🔴 IT IS A VIEW, NOT A STATUS, AND THAT DISTINCTION IS LOAD-BEARING. Writing an 'H' into
+       the status column would be DISPOSITIONING THE BACK-BOOK BY DATE -- the exact thing Eric stopped on
+       2026-08-21 ("don't automatically disposition them by date just yet"), because it would make
+       a guess indistinguishable from a real answer. These quotes keep status 'P', which honestly
+       means "nobody knows". Historic only changes WHERE YOU LOOK, and it is reversible by
+       deleting this button. -->
+  <button class="tab" data-view="historic">Historic</button>
   <button class="tab" data-view="commitments" id="commitmentsTab" style="margin-left:auto">Commitments</button>
 </div>
 <main>
@@ -5149,6 +5205,10 @@ ${abyAdminNav('/admin')}
 let quotes = [];
 let expandedId = null;
 let activeTab = 'P';
+// Historic is a VIEW, never a status. See the tab's comment: writing a status would be
+// dispositioning the back-book by date, which Eric stopped for good reasons.
+let historicView = false;
+const HISTORIC_BEFORE = '2026';   // Eric: "anything before 2026". One string, one place to change.
 let ranByFilter = '';
 let repFilter = '';
 document.addEventListener('DOMContentLoaded', function(){
@@ -5489,6 +5549,36 @@ function effectiveOptions(current) {
   return out;
 }
 
+/**
+ * The Rep cell.
+ *
+ * 🔴 IT USED TO TAKE THE FIRST SPACE-SEPARATED WORD, WHICH IS RIGHT FOR EXACTLY ONE SHAPE OF VALUE.
+ * "Eric Johnson" -> "Eric" is what it was for. Everything else broke:
+ *   - "(no rep folder)" rendered as the word "(no"     -- Eric, 2026-08-22: "there are a bunch
+ *     that say (no and that's it". 89 rows.
+ *   - "Gerard/Mark, Kandice/Joe" rendered as "Gerard/Mark," and ran out of the column.
+ *
+ * ⭐ A PARENTHESISED VALUE IS A PLACEHOLDER, NOT A PERSON. "(no rep folder)" records that the
+ * 2009-2011 and 2014 source trees have no rep layer at all -- real provenance, but not somebody's
+ * name, so it has no business in a column of names. It renders as the same em dash the column
+ * already uses for an empty rep, which is what Eric suggested.
+ * ⭐ A MULTI-PERSON VALUE KEEPS EVERY NAME. Truncating "Gerard/Mark, Kandice/Joe" to its first
+ * word does not shorten a name, it names the wrong people. The full value is kept and the cell is
+ * allowed to wrap; only a genuine "First Last" is shortened to the first name.
+ */
+function repCell(v) {
+  var s = String(v == null ? '' : v).trim();
+  if (!s || s.charAt(0) === '(') return '<span class="muted">—</span>';
+  // A plain two-word personal name shortens to the first name, as before. Anything carrying a
+  // separator is a list of people and is shown whole.
+  if (/[,;/&]/.test(s)) return esc(s);
+  // ⚠️ NO BACKSLASH: this function lives inside adminHTML's template literal, which eats a lone
+  // one, so a whitespace class here would arrive at the browser broken. Splitting on a space and
+  // dropping the empties does the same job with no escape at all. TRAPS #248.
+  var parts = s.split(' ').filter(function(x){ return x; });
+  return esc(parts.length === 2 ? parts[0] : s);
+}
+
 function effectiveLabel(v) {
   var s = String(v == null ? '' : v).trim();
   if (!s) return '';
@@ -5496,6 +5586,31 @@ function effectiveLabel(v) {
   if (!m) return s;
   var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return MON[+m[2] - 1] + ' ' + (+m[3]) + ', ' + m[1];
+}
+
+/**
+ * The Effective cell, with the year problem handled honestly.
+ *
+ * 🔴 ERIC, 2026-08-22, on a sold row: "It just has a month not a month and year." He is right, and
+ * it is not a formatting bug -- it is what the source says. 298 of the 308 sold rows carry an
+ * effective date the ANNOUNCEMENT EMAIL worded loosely: "October 1", "Sep 2026 or later". There is
+ * no year in the data to format.
+ *
+ * ⛔ SO THE YEAR IS NOT INVENTED. "October 1" announced in September 2025 is almost certainly
+ * 1 Oct 2025; announced in November it could as easily be 2026, and picking one would write a
+ * guess into a column people read as fact.
+ * ⭐ INSTEAD THE ANNOUNCEMENT DATE IS SHOWN BESIDE IT, MUTED AND LABELLED. That gives the reader
+ * exactly what they need to date the row, while making it plain which half is recorded and which
+ * half they are inferring. Same principle as the estimate flag on the client record.
+ */
+function effectiveCell(q) {
+  var s = String(q.effective_date == null ? '' : q.effective_date).trim();
+  if (!s) return '';
+  var label = esc(effectiveLabel(s));
+  if (/[0-9]{4}/.test(s)) return label;          // it already carries a year
+  var yr = String(q.created_at || '').slice(0, 4);
+  if (!yr) return label;
+  return label + ' <span class="muted" style="font-size:11px">announced ' + esc(yr) + '</span>';
 }
 
 // Sorting. ⭐ The comparators read the SAME values the cells render, so what you see is what you
@@ -5531,7 +5646,19 @@ function render() {
   syncRepFilter();
   syncSortIndicators();
   const filtered = sortQuotes(quotes.filter(function(q){
-    if ((q.status || 'P') !== activeTab) return false;
+    var yr = String(q.created_at || '').slice(0, 4);
+    if (historicView) {
+      // Everything before 2026, whatever its status -- a 2014 quote marked Sold is still history.
+      if (!(yr && yr < HISTORIC_BEFORE)) return false;
+      var pick = document.getElementById('histYear').value;
+      if (pick && yr !== pick) return false;
+    } else {
+      // ⭐ AND THE OTHER HALF OF THE CHANGE, WHICH IS THE POINT OF IT: the working tabs now EXCLUDE
+      // history. Without this, Pending still reads 5,967 and moving the old rows to their own tab
+      // would have achieved nothing.
+      if (yr && yr < HISTORIC_BEFORE) return false;
+      if ((q.status || 'P') !== activeTab) return false;
+    }
     if (ranByFilter && !originMatches(q, ranByFilter)) return false;
     // Eric, 2026-08-18: "Or filter based on rep." Matched on the WHOLE stored name, never the
     // first word the Rep column happens to display -- two reps called Chris would otherwise
@@ -5540,13 +5667,41 @@ function render() {
     return true;
   }));
 
+  // ⚠️ THE TAB COUNTS MUST EXCLUDE HISTORY TOO, or Pending still says 5,967 while showing 370.
+  // A count that disagrees with the list under it is worse than no count.
+  var live = quotes.filter(function(q){
+    var y = String(q.created_at || '').slice(0, 4);
+    return !(y && y < HISTORIC_BEFORE);
+  });
   ['P','S','D'].forEach(function(s) {
     var btn = document.querySelector('.tab[data-status="' + s + '"]');
     if (!btn) return;
-    var n = quotes.filter(function(q){ return (q.status || 'P') === s; }).length;
+    var n = live.filter(function(q){ return (q.status || 'P') === s; }).length;
     var label = {P:'Pending',I:'In process',S:'Sold',D:'Dead',N:'No Response'}[s];
     btn.innerHTML = label + (n ? ' <span class="tab-count">' + n + '</span>' : '');
   });
+
+  var histRows = quotes.filter(function(q){
+    var y = String(q.created_at || '').slice(0, 4);
+    return y && y < HISTORIC_BEFORE;
+  });
+  var hb = document.querySelector('.tab[data-view="historic"]');
+  if (hb) hb.innerHTML = 'Historic' +
+    (histRows.length ? ' <span class="tab-count">' + histRows.length + '</span>' : '');
+
+  // Populate the year list once, from the data.
+  var hy = document.getElementById('histYear');
+  if (hy && hy.options.length <= 1) {
+    var years = {};
+    histRows.forEach(function(q){ years[String(q.created_at || '').slice(0, 4)] = 1; });
+    Object.keys(years).sort().reverse().forEach(function(y){
+      if (!y) return;
+      var o = document.createElement('option');
+      o.value = y; o.textContent = y;
+      hy.appendChild(o);
+    });
+    hy.addEventListener('change', function(){ expandedId = null; render(); });
+  }
 
   // "When we're keeping track, we need to account for that" -- so the count is a BREAKDOWN,
   // not a total. A single number cannot answer "are brokers actually using the dashboard?",
@@ -5663,10 +5818,10 @@ function render() {
       '<td><span class="qnum" title="Run ' + esc(when.date) +
         (when.time ? ' at ' + esc(when.time) : '') + '">' +
         (esc(q.quote_number) || '—') + '</span></td>' +
-      '<td class="nowrap">' + (esc(effectiveLabel(q.effective_date)) || '<span class="muted">—</span>') + '</td>' +
+      '<td class="nowrap">' + (effectiveCell(q) || '<span class="muted">—</span>') + '</td>' +
       '<td>' + inplace('client_name', q.client_name, 'not stated') + '</td>' +
       '<td>' + brokerCell + '</td>' +
-      '<td>' + (q.rep_name ? esc(q.rep_name.split(' ')[0]) : '<span class="muted">—</span>') + '</td>' +
+      '<td class="repcell">' + repCell(q.rep_name) + '</td>' +
       '<td><div style="display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start">' + chipHtml + '</div></td>' +
       '<td>' +
         // Three-way origin in the column that already existed, rather than a new column --
@@ -6146,7 +6301,10 @@ document.querySelectorAll('.tab').forEach(function(btn) {
       document.querySelector('.table-wrap').style.display = 'block';
       document.getElementById('commitments-wrap').style.display = 'none';
       document.getElementById('search').style.display = '';
-      activeTab = this.dataset.status;
+      // Historic is a VIEW over the same rows, not a status -- see the tab's own comment.
+      historicView = (this.dataset.view === 'historic');
+      document.getElementById('histYear').style.display = historicView ? '' : 'none';
+      if (!historicView) activeTab = this.dataset.status;
       expandedId = null;
       render();
     }
