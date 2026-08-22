@@ -2709,7 +2709,13 @@ ${abyAdminNav('/admin/brokers')}
        + '<thead><tr><th>Agency</th><th class="c">Quotes ever</th>'
        + '<th class="date">Last quote</th><th class="c">Quiet for</th></tr></thead><tbody>'
        + dm.map(function(x){
-           var yrs = Math.floor((x.days_quiet||0)/365), mos = Math.round(((x.days_quiet||0)%365)/30);
+           // 🔴 THIS PRINTED "2 yrs 12 mo" AND "3 yrs 12 mo" ON THE LIVE PAGE.
+           // Years and months were computed independently -- floor(days/365) alongside
+           // round((days%365)/30) -- so a remainder near 355 days rounded up into a twelfth
+           // month that should have rolled into the year. Derive TOTAL months once and divide,
+           // so the two halves cannot disagree with each other.
+           var totMos = Math.round((x.days_quiet||0)/30.44);
+           var yrs = Math.floor(totMos/12), mos = totMos%12;
            var quiet = yrs ? (yrs+' yr'+(yrs>1?'s':'')+(mos?' '+mos+' mo':'')) : ((x.days_quiet||0)+' days');
            // ⛔ AN ACQUIRED NAME NEVER REACHES THIS LIST ANY MORE -- the query excludes
            // relationship = 'succeeded' outright. Eric: "we don't need to see MHBT on a dormant
@@ -3659,6 +3665,22 @@ const AGENCY_JOIN =
 // The quote is the only thing every row has, so it is what the book is counted by.
 const AGENCY_EXPR = "COALESCE(NULLIF(trim(q.broker_agency),''), '(no agency)')";
 
+// 🔴 VALUES IN THE AGENCY COLUMN THAT ARE NOT FIRMS, so the fallen-off list does not put a filing
+// convention on a call-back list. Seen live: "(no agency folder)" sat near the top at 135 quotes,
+// with "Independent", "Independent Broker" and "Existing Client" below it. None of them is
+// somebody you can ring.
+// ⛔ AN EXACT LIST, NEVER A KEYWORD MATCH. A real agency can contain any of these words --
+// "Independent Insurance Group" is a plausible firm and must not be swallowed by "Independent".
+// ⚠️ PEOPLE'S NAMES ARE DELIBERATELY NOT HERE. "Byron Bavousett" and "Brian Kleve" look like
+// placeholders and are probably one-person agencies, which is Eric's call and not a pattern's.
+// ⭐ This only filters the FALLEN-OFF card. The agency table still counts every one of them,
+// because an unattributable quote is a real fact about the book.
+const NOT_A_FIRM_SQL =
+  "('(no agency)','(no agency folder)','(loose file - no agency folder)'," +
+  "'(loose file – no agency folder)','(not stated)','no brokers','no broker'," +
+  "'existing client','independent','independent broker','direct','unknown','none'," +
+  "'niels','niels direct','eric','aby')";
+
 async function handleAdminStats(request, env) {
   const rep = (new URL(request.url).searchParams.get('rep') || '').trim().toLowerCase();
   // ⚠️ READS THE AGENCY'S OWNER FIRST. It used to read only b.assigned_rep, and with zero
@@ -3885,6 +3907,7 @@ async function handleAdminStats(request, env) {
         " GROUP BY " + AGENCY_EXPR +
         " HAVING n >= 5 AND recent = 0 " +
         "    AND COALESCE(MAX(a.relationship),'') <> 'succeeded' " +
+        "    AND lower(" + AGENCY_EXPR + ") NOT IN " + NOT_A_FIRM_SQL + " " +
         // SORTED BY HOW RECENTLY THEY WENT QUIET, NOT BY VOLUME.
         // Ordering by size put MHBT at the top at 184 quotes -- and MHBT was acquired in 2015,
         // making the single least actionable row the most prominent one. The calls worth making
