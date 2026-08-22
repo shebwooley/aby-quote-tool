@@ -2578,6 +2578,28 @@ ${abyAdminNav('/admin/brokers')}
      if (!x.parent_name) return;
      (kids[x.parent_name] = kids[x.parent_name] || []).push(x);
    });
+   // The AGENTS we can name, indexed by the agency string on their quotes. Built from the same
+   // cache the agent table uses, so the two can never disagree about who works where.
+   var agentsBy = {};
+   (CACHE.byAgent||[]).forEach(function(p){
+     if (!(p.name || p.email)) return;          // an agency-keyed row is not a person
+     var k = String(p.agency||'').trim();
+     if (!k) return;
+     (agentsBy[k] = agentsBy[k] || []).push(p);
+   });
+   // Every agent at an agency OR at any name beneath it. An agent filed under MHBT works for MMA
+   // now, and making somebody look that up by hand is the same subtraction Eric objected to.
+   function agentsFor(x){
+     var names = [x.agency_label||x.agency||''];
+     (kids[x.agency_label||x.agency]||[]).forEach(function(k){
+       names.push(k.agency_label||k.agency||'');
+     });
+     var out = [];
+     names.forEach(function(n){ (agentsBy[n]||[]).forEach(function(p){ out.push(p); }); });
+     out.sort(function(a,b){ return Number(b.n||0)-Number(a.n||0); });
+     return out;
+   }
+
    var tops = ag.filter(function(x){ return !x.parent_name; });
    Object.keys(kids).forEach(function(pn){
      if (!tops.some(function(t){ return (t.agency_label||t.agency) === pn; })) {
@@ -2655,6 +2677,31 @@ ${abyAdminNav('/admin/brokers')}
              var list = (kids[x.agency_label]||[]).slice();
              list.sort(function(a,b){ return Number(b.n||0)-Number(a.n||0); });
              out += list.map(function(k){ return agRow(k, true, false); }).join('');
+             // Then the people. ⚠️ These counts are a SUBSET of the agency total and are labelled
+             // so, because most quotes carry no individual at all -- a reader who tried to add
+             // them up would find a hole and think something was missing.
+             var ppl = agentsFor(x);
+             if (ppl.length) {
+               out += '<tr style="background:#f4f7f5"><td colspan="7" style="padding:6px 22px;'
+                 + 'font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:#6b7b72">'
+                 + 'Agents we can name here &mdash; ' + ppl.length
+                 + ' of the ' + (x.agents||0) + ' who have quoted</td></tr>';
+               out += ppl.map(function(p){
+                 return '<tr style="background:#f9fbfa">'
+                   + '<td class="wrapcell" style="padding-left:54px">'
+                   + esc(p.name || p.email || '(unnamed)')
+                   + (p.email ? ' <span class="muted" style="font-size:11.5px">'+esc(p.email)+'</span>' : '')
+                   + '</td>'
+                   + '<td class="c">'+Number(p.n||0)+'</td>'
+                   + '<td class="c"><span class="muted">&mdash;</span></td>'
+                   + '<td class="c"><span class="muted">&mdash;</span></td>'
+                   + '<td class="c"><span class="muted">&mdash;</span></td>'
+                   + '<td class="date">'+(p.last_quote?day(p.last_quote):'&mdash;')+'</td>'
+                   + '<td>'+(p.email
+                       ? repSelect('agent', p.email, p.own_rep || '')
+                       : '<span class="muted">&mdash;</span>')+'</td></tr>';
+               }).join('');
+             }
            }
            return out;
          }).join('')+moreRow('byAgency', shown.length, tops.length, 7)+'</tbody></table>'

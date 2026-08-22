@@ -53,6 +53,9 @@ function run(rows, open, src) {
   const { rollup, agRowSrc, loop } = buildHarness(src || SRC);
   const prelude = `
     var ag = ROWS, OPEN_AG = OPEN;
+    // The rollup reads CACHE.byAgent to nest the named agents under their agency. Stubbed from
+    // the fixture so the harness exercises the real grouping rather than an empty list.
+    var CACHE = { byAgent: AGENTS };
     function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){
       return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
     function pctOfTotal(n){ return String(n) + '%'; }
@@ -66,14 +69,24 @@ ${agRowSrc}
     var shown = tops;
     var html = ${loop};
     return { tops: tops, kids: kids, rolled: rolled, html: html };`;
-  const fn = new Function("ROWS", "OPEN", body);
-  return fn(rows, open || {});
+  const fn = new Function("ROWS", "OPEN", "AGENTS", body);
+  return fn(rows, open || {}, AGENT_FIXTURE);
 }
 
 // ---- fixtures ---------------------------------------------------------------------------------
 // Shaped on the REAL data: MMA with MHBT beneath it, HUB with three children of both kinds, and
 // a parent that has never quoted. A tidy fixture where every parent has its own quotes would pass
 // whether or not rule 5 held (TRAPS #252 -- feed it the inputs that make it say the most).
+// Named agents, some at a CHILD agency on purpose: an agent filed under MHBT must surface under
+// MMA, or somebody has to look up the parent by hand -- the same subtraction Eric objected to.
+const AGENT_FIXTURE = [
+  { name: "Travis Sartain", email: "travis@marshmma.com", agency: "MMA", n: 3, last_quote: "2026-08-06" },
+  { name: "Old Hand", email: "old@mhbt.com", agency: "MHBT", n: 2, last_quote: "2016-01-01" },
+  { name: "Someone Else", email: "s@usi.com", agency: "USI", n: 1, last_quote: "2026-01-01" },
+  // ⛔ An agency-keyed row with no person on it. It must NOT appear as an agent.
+  { name: "", email: "", agency: "MMA", n: 99, last_quote: "2026-01-01" },
+];
+
 const FIXTURE = [
   { agency_label: "MMA", n: 743, agents: 6, sales: 3, last_quote: "2026-08-06", agency_id: "id-mma" },
   { agency_label: "MHBT", n: 184, agents: 2, sales: 0, last_quote: "2017-12-21",
@@ -156,6 +169,33 @@ const RULES = [
       // MMA rolls to 927 and must outrank USI's 335, which it does not on its own 743 alone
       // being compared after a child is removed -- the ordering has to use the combined figure.
       return r.tops[0].agency_label === "MMA" && r.tops[1].agency_label === "USI";
+    },
+  },
+  {
+    // Eric: "list the agents under the agencies - just toggle ... you would see the agents that we
+    // know are affiliated with their quote count."
+    name: "expanding an agency lists the agents we can name",
+    holds(src) {
+      const h = run(FIXTURE, { MMA: true }, src).html;
+      return h.includes("Travis Sartain") && h.includes("Agents we can name here");
+    },
+  },
+  {
+    // ⭐ An agent filed under a CHILD name belongs to the parent now. Without this, somebody has
+    // to look up which agency MHBT became -- the same subtraction Eric objected to on the counts.
+    name: "an agent at a child agency surfaces under the parent",
+    holds(src) {
+      const h = run(FIXTURE, { MMA: true }, src).html;
+      return h.includes("Old Hand");
+    },
+  },
+  {
+    // ⛔ 639 of 768 rows in the agent table are keyed on an AGENCY, not a person. Repeating the
+    // agency's own name inside its own drop-down is the noise Eric asked to be rid of.
+    name: "an agency-keyed row is never listed as an agent",
+    holds(src) {
+      const h = run(FIXTURE, { MMA: true }, src).html;
+      return !h.includes("(unnamed)") && !h.includes(">99<");
     },
   },
   {
@@ -253,6 +293,12 @@ const SABOTAGES = [
   // Reproduces the real bug on demand: drop the comma and the SELECT list becomes invalid SQL.
   // A checker whose self-test replays the failure it was written for is one you can still trust
   // in a year.
+  { why: "agents stop being listed under their agency",
+    apply: (s) => s.replace("var ppl = agentsFor(x);", "var ppl = [];") },
+  { why: "an agent at a child agency stops rolling up to the parent",
+    apply: (s) => s.replace("names.push(k.agency_label||k.agency||'');", "void k;") },
+  { why: "agency-keyed rows leak into the agent list",
+    apply: (s) => s.replace("if (!(p.name || p.email)) return;", "") },
   { why: "the comma after days_quiet goes missing again",
     apply: (s) => s.replace("AS INTEGER) AS days_quiet, ", "AS INTEGER) AS days_quiet ") },
 ];
