@@ -1769,8 +1769,14 @@ async function handleAdminClients(request, env) {
   };
 
   const c = await attempt('clients', () => env.DB.prepare(
+    // COLLATE NOCASE, and it is not cosmetic. SQLite's default is BINARY, which sorts every
+    // capital letter before every lower-case one -- so ACT, AFV, AMP, ATTCCC, AVAD, AVODAH and
+    // AXISCADES all landed ABOVE "Abba Staffing". Measured on the rendered page: 386 of 400 rows
+    // were out of the order a human reads. The shared-drive folder list this is loaded from sorts
+    // case-insensitively, so the screen disagreed with the thing it is a copy of, and somebody
+    // looking for a client would conclude it was missing.
     "SELECT id, name, match_key, status, source, note, original_broker, current_broker, " +
-    "       effective_date, products FROM aby_clients ORDER BY name").all());
+    "       effective_date, products FROM aby_clients ORDER BY name COLLATE NOCASE").all());
   const q = await attempt('quotes', () => env.DB.prepare(
     "SELECT quote_number, client_name, created_at, status, broker_agency, broker_name " +
     "FROM quotes WHERE client_name IS NOT NULL AND trim(client_name) <> ''").all());
@@ -2647,8 +2653,11 @@ ${abyAdminNav('/admin/clients')}
     <b>These are three different records and this page keeps them apart on purpose.</b>
     A <b>quote</b> is a proposal we sent. A <b>sale</b> is something that happened on a date.
     A <b>client</b> is somebody we serve today. Only 47 of 406 recorded sales appear in the client
-    folder list, and neither termination nor a setup delay explains that gap &mdash; so nothing here
-    is merged, and no employer is ever marked <i>termed</i> just for being absent.
+    folder list (52 allowing for spelling variants), and neither termination, a setup delay, nor the
+    kind of product sold explains that gap &mdash; so nothing here is merged, and no employer is
+    ever marked <i>termed</i> just for being absent.
+    <b>197 of the 359 were quoted through this tool and then bought</b>, so they are not strangers
+    to ABY's records &mdash; they are simply not in that folder list.
   </div>
 
   <div class="card">
