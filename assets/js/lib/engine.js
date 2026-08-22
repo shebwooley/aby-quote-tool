@@ -57,6 +57,9 @@ ABYQuote.engine = (function () {
     for (var i = 0; i < monthlyTiers.length; i++) {
       var tier = monthlyTiers[i];
       var max = tier.maxCount;
+      // The bottom of this band is one past the previous band's cap. The first band starts at
+      // zero. `max` of null means the band is open-ended at the top.
+      var lo = (i === 0) ? 0 : ((monthlyTiers[i - 1].maxCount || 0) + 1);
       if (max == null || count <= max) {
         if (tier.type === 'flat') {
           return {
@@ -64,7 +67,12 @@ ABYQuote.engine = (function () {
             tierLabel: tier.label || '',
             breakdown: ABYQuote.utils.money(tier.amount) + ' per month',
             count: count,
-            _m: { kind: 'flat', rate: tier.amount, min: 0, count: count }
+            // lo/hi are the BAND this count was priced in. F-367 needs them: an employer
+            // changing the headcount on a shared quote may only be re-priced at the agreed
+            // rate while they stay inside it, and the shared page has no way to work that out
+            // otherwise -- the public rate table is split by STATE and by rate book, and the
+            // adjusted rate is not in either. Carried here so the answer travels with the price.
+            _m: { kind: 'flat', rate: tier.amount, min: 0, count: count, lo: lo, hi: max }
           };
         }
         // PPPM tier: rate × count, but not less than minMonthly
@@ -80,7 +88,7 @@ ABYQuote.engine = (function () {
           tierLabel: tier.label || '',
           breakdown: explanation,
           count: count,
-          _m: { kind: 'pppm', rate: tier.amount, min: min, count: count }
+          _m: { kind: 'pppm', rate: tier.amount, min: min, count: count, lo: lo, hi: max }
         };
       }
     }

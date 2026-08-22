@@ -87,6 +87,9 @@ export default {
     // The SHARED QUOTE LINK (F-368). Public and unauthenticated by design -- an employer has no
     // account and must not need one to read a quote addressed to them. The token is the whole
     // credential, which is why it is 128 bits of randomness rather than the quote number.
+    if (/^\/q\/[a-z2-9]{16}\/count$/.test(path) && method === 'POST') {
+      return handleEmployerCount(path.split('/')[2], request, env);
+    }
     if (/^\/q\/[a-z2-9]{16}$/.test(path) && method === 'GET') {
       return serveSharedQuote(path.slice(3), env, request);
     }
@@ -340,25 +343,6 @@ async function handleSaveQuote(request, env, ctx) {
       console.warn('value/headcount not stored (columns missing?):', String(err && err.message || err));
     }
 
-    // THE PRICED OUTPUT, on the same best-effort path and for the same reason: it is a newer
-    // column than the INSERT above, and a quote must save whether or not the migration has run.
-    // A shared link renders from this instead of re-running the engine, which is what lets an
-    // ADJUSTED quote be shared at all -- the discount stays here, only its effect travels.
-    // ⚠️ Capped. It is client-supplied JSON reaching a database, and a priced quote is a few KB;
-    // anything far larger is not a quote.
-    if (resolvedPricing) {
-      try {
-        const rp = JSON.stringify(resolvedPricing);
-        if (rp.length <= 120000) {
-          await env.DB.prepare('UPDATE quotes SET resolved_pricing = ? WHERE id = ?').bind(rp, id).run();
-        } else {
-          console.warn('resolved_pricing not stored: ' + rp.length + ' bytes is too large');
-        }
-      } catch (err) {
-        console.warn('resolved_pricing not stored (column missing?):', String(err && err.message || err));
-      }
-    }
-
     if (sourceTag) {
       try {
         await env.DB.prepare('UPDATE quotes SET source_tag = ? WHERE id = ?')
@@ -395,6 +379,28 @@ async function handleSaveQuote(request, env, ctx) {
     } catch (err) {
       console.error('DB update failed:', err);
       return jsonResp({ error: 'Failed to save quote' }, 500);
+    }
+  }
+
+  // THE PRICED OUTPUT. Best-effort, on the same footing as source_tag and first_year_value:
+  // a newer column than the INSERT, so a quote must save whether or not the migration has run.
+  // A shared link renders from this instead of re-running the engine, which is what lets an
+  // ADJUSTED quote be shared at all -- the discount stays here, only its effect travels.
+  //
+  // 🔴 OUTSIDE THE INSERT BRANCH, DELIBERATELY. It started inside it, so re-opening a saved
+  // quote -- the no-op path -- never refreshed the stored price, and an old quote could never
+  // acquire one at all. Both are exactly the cases a shared link is most likely to be used on.
+  // ⚠️ Capped: client-supplied JSON reaching a database, and a priced quote is a few KB.
+  if (resolvedPricing && rowId) {
+    try {
+      const rp = JSON.stringify(resolvedPricing);
+      if (rp.length <= 120000) {
+        await env.DB.prepare('UPDATE quotes SET resolved_pricing = ? WHERE id = ?').bind(rp, rowId).run();
+      } else {
+        console.warn('resolved_pricing not stored: ' + rp.length + ' bytes is too large');
+      }
+    } catch (err) {
+      console.warn('resolved_pricing not stored (column missing?):', String(err && err.message || err));
     }
   }
 
@@ -653,6 +659,68 @@ async function handleShareQuote(id, env, url) {
     console.error('handleShareQuote failed:', err);
     return jsonResp({ error: String(err) }, 500);
   }
+}
+
+// --- The employer corrects the headcount on a shared quote (F-367) ------------
+//
+// Eric, 2026-08-21: "I didn't know the number of forms, so I entered 20 on each. The broker will
+// need to come back to me with the real number and I'll need to revise the quote. What if the
+// employer could just make that adjustment and have the new total compute automatically?"
+//
+// HIS THREE RULINGS SHAPE THIS ENTIRELY:
+//   1. The quote BODY stays ABY's quote. The employer's number and its price appear at the
+//      SIGNATURE LINE -- "what they sign is what they asserted", so a screenshot can never come
+//      back at a price ABY never gave.
+//   2. A price adjustment SURVIVES a count change, at the agreed rate.
+//   3. ABY gets told. "A silently changed number is WORSE than today."
+//
+// THIS ENDPOINT IS ONLY RULING 3. The re-pricing happens in the reader's browser from the
+// stored rate, because it has to feel instant while they are typing. This records what they
+// said, so ABY can see it even if they never sign.
+//
+// PUBLIC, AND THE TOKEN IS THE WHOLE CREDENTIAL. That is acceptable for the same reason the
+// page itself is: 128 bits of randomness, and the only thing it can do is annotate the ONE
+// quote it belongs to. It CANNOT change the quote, the price, or ABY's own count -- those stay
+// exactly as quoted, which is ruling 1 expressed in the schema rather than in the UI.
+async function handleEmployerCount(token, request, env) {
+  let body;
+  try { body = await request.json(); }
+  catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+
+  const q = await env.DB.prepare('SELECT id, quote_number FROM quotes WHERE share_token = ?')
+    .bind(token).first();
+  // Same silence as the page itself: an unknown token must not become a way to ask whether a
+  // token exists.
+  if (!q) return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+
+  // Accept a small map of productId -> count and nothing else. It is unauthenticated input
+  // heading for a database, so it is rebuilt rather than stored as received.
+  const incoming = (body && typeof body.counts === 'object' && body.counts) || {};
+  const counts = {};
+  let kept = 0;
+  for (const key of Object.keys(incoming)) {
+    if (kept >= 20) break;
+    if (!/^[a-zA-Z0-9_-]{1,40}$/.test(key)) continue;
+    const n = Number(incoming[key]);
+    // A headcount is a whole number and cannot be negative. 100000 is far past any group ABY
+    // administers and is here to bound the field, not to express a business rule.
+    if (!Number.isFinite(n) || n < 0 || n > 100000 || Math.floor(n) !== n) continue;
+    counts[key] = n;
+    kept++;
+  }
+  if (!kept) return jsonResp({ error: 'No usable counts' }, 400);
+
+  try {
+    await env.DB.prepare('UPDATE quotes SET employer_counts = ?, employer_counts_at = ? WHERE id = ?')
+      .bind(JSON.stringify(counts), new Date().toISOString(), q.id).run();
+  } catch (err) {
+    // The columns are newer than the table. Recording is best-effort in exactly the way the
+    // save path is: it must never stop an employer using the page.
+    console.warn('employer_counts not stored (columns missing?):', String(err && err.message || err));
+    return jsonResp({ ok: false, recorded: false });
+  }
+
+  return jsonResp({ ok: true, recorded: true });
 }
 
 async function serveSharedQuote(token, env, request) {

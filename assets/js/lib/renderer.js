@@ -500,6 +500,13 @@ ABYQuote.renderer = (function () {
       if (cn) parts.push(cn.replace(/\.$/, ''));
       return parts.join('  |  ');
     }
+    // 🔴 CAPTURED UNDER A DIFFERENT NAME BECAUSE THE CALLBACK BELOW SHADOWS `opts`.
+    // The multi-package branch declares its own `var opts = g.results.map(...)` for the <option>
+    // list, and `var` is FUNCTION-scoped and hoisted -- so `opts` refers to that local
+    // everywhere in the callback, including in branches where it was never assigned. Reading
+    // `opts.anything` in the single-result branch therefore threw on `undefined`, which took the
+    // whole authorization page and the entire quote with it.
+    var pageOpts = opts;
     var picker = groups.map(function (g, i) {
       var meta = findProduct(g.productId);
       var name = meta ? (meta.shortName || meta.name) : g.productId;
@@ -520,8 +527,35 @@ ABYQuote.renderer = (function () {
         var fs2 = feeSummary(g.results[0], meta);
         if (fs2) desc = '<div class="opt-desc">' + esc(fs2) + '</div>';
       }
+      // THE EMPLOYER'S OWN COUNT, at the signature line and nowhere else (F-367).
+      // Eric: "if they change it on the quote that number should appear near the bottom in the
+      // signature line ... when they sign the part of the form saying they want to move forward,
+      // it will show the pricing there (and the per employee amount)."
+      // ⛔ THE QUOTE BODY ABOVE DOES NOT MOVE. What ABY quoted stays what ABY quoted; this is
+      // the employer ASSERTING a number, which is why it belongs where they sign. A screenshot
+      // of the body can never come back at a price ABY never gave.
+      var countBox = '';
+      var one = (g.results.length === 1) ? g.results[0] : null;
+      var cMeta = one && one.monthlyFee && one.monthlyFee._m;
+      if (pageOpts.employerEditableCounts && one && cMeta && cMeta.count != null) {
+        var noun = (findProduct(g.productId) || {}).countLabel || 'participants';
+        countBox =
+          '<div class="emp-count no-print" data-product="' + esc(g.productId) + '"' +
+               ' data-rate="' + esc(String(cMeta.rate || 0)) + '"' +
+               ' data-min="' + esc(String(cMeta.min || 0)) + '"' +
+               ' data-kind="' + esc(String(cMeta.kind || 'pppm')) + '"' +
+               ' data-quoted="' + esc(String(cMeta.count)) + '"' +
+               ' data-lo="' + esc(cMeta.lo == null ? '' : String(cMeta.lo)) + '"' +
+               ' data-hi="' + esc(cMeta.hi == null ? '' : String(cMeta.hi)) + '"' +
+               ' data-noun="' + esc(noun) + '">' +
+            '<label>If your actual number of ' + esc(noun) + ' is different, enter it here' +
+              '<input type="number" min="0" step="1" class="emp-count-input" value="' + esc(String(cMeta.count)) + '">' +
+            '</label>' +
+            '<div class="emp-count-out" aria-live="polite"></div>' +
+          '</div>';
+      }
       return '<div class="opt-row"><input type="checkbox" class="opt-check" data-label="' + esc(name) + '" checked>' +
-        '<div class="opt-main"><div class="opt-title">' + esc(name) + '</div>' + desc + tier + '</div></div>';
+        '<div class="opt-main"><div class="opt-title">' + esc(name) + '</div>' + desc + tier + countBox + '</div></div>';
     }).join('\n');
 
     function field(label, fname, val, full, type) {

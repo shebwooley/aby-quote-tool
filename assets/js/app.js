@@ -562,9 +562,20 @@
     } catch (e) { window.__abyResolvedPricing = null; }
 
 
-    var html = ABYQuote.renderer.renderInternal(form, results, quoteNumber, {
+    // 🔴 A SHARED PAGE GETS THE CLIENT RENDER, NOT THE INTERNAL ONE.
+    // renderInternal sets includeWarnings, which emits a box headed "Internal notes (hidden in
+    // print / client file)" -- and a shared link was showing it to the EMPLOYER on screen. It
+    // carries lines like "No-commission rates not yet provided for this product, quote shows
+    // commissioned rates as a placeholder", which is ABY talking to itself.
+    // ⚠️ IT SURVIVED AN EXPOSURE AUDIT ON THE SAME DAY, because every sample quote used to check
+    // the link had complete inputs and therefore no warnings, so the box rendered EMPTY. The
+    // leak was in a branch no test input reached. A quote with no participant count reaches it.
+    var forEmployer = !!window.__ABY_SHARED;
+    var renderFn = forEmployer ? ABYQuote.renderer.renderForClient : ABYQuote.renderer.renderInternal;
+    var html = renderFn(form, results, quoteNumber, {
       includeAuthorization: true,
       clientId: window.__abyClientId || '',
+      employerEditableCounts: forEmployer,
     });
 
     outputEl.innerHTML =
@@ -576,6 +587,9 @@
       '<div class="quote">' + html + '</div>';
 
     if (typeof abyInitSignDate === 'function') abyInitSignDate();
+
+    // The employer's count control only exists on a shared page, and only after this render.
+    if (forEmployer) wireEmployerCounts(outputEl);
 
     var printBtn = document.getElementById('printBtn');
     if (printBtn) printBtn.addEventListener('click', function () { window.print(); });
@@ -776,6 +790,116 @@
       // dashboard's logo, if one came over, wins.
       if (b.logoDataUrl && !carriedBrokerLogoUrl) accountLogoDataUrl = b.logoDataUrl;
     }).catch(function () { /* no account, or offline -- the form is unaffected */ });
+  }
+
+  // --- The employer's own headcount, at the signature line (F-367) -------------
+  //
+  // RE-PRICES AT THE RATE THEY WERE QUOTED, NOT THE STANDARD ONE. That is Eric's ruling: "if we
+  // lower the per employee fee ... it would survive if they adjust the number of employees (as
+  // long as it's in the same tier)". The stored pricing carries that rate, so a discounted quote
+  // stays discounted when the number moves.
+  //
+  // ⛔ AND IT REFUSES TO PRICE A COUNT THAT LEAVES THE TIER. Eric's own words for that case are
+  // "it will adjust based on our modified pricing for that tier" -- and the page cannot know
+  // what ABY's modified pricing for a DIFFERENT tier is, because the adjustment deliberately
+  // never leaves the server. Guessing would put a number on screen that ABY never set, which is
+  // the one outcome worse than not answering. So it says the number changes and ABY will confirm.
+  // ⚠️ THAT IS CONSERVATIVE FOR AN UNADJUSTED QUOTE TOO, where the public rate table would give
+  // the right answer. Uniform on purpose: the alternative is telling the employer, implicitly,
+  // whether their quote was discounted.
+  function wireEmployerCounts(root) {
+    var boxes = root.querySelectorAll('.emp-count');
+    if (!boxes.length) return;
+
+    // USE THE HOUSE FORMATTERS. Rolling a local one printed the agreed rate as "$2.7" and the
+    // recomputed fee as "$210.6" -- the same defect fixed in the ABY overlay hours earlier, made
+    // again three files away. utils already draws the distinction the document needs:
+    // money() shows cents only when there are any, moneyExact() always shows two and its own
+    // comment says it is "used for PPPM rates like $4.50".
+    var money = ABYQuote.utils.money;
+    var rateMoney = ABYQuote.utils.moneyExact;
+
+    var pending = null;
+    function record() {
+      var counts = {};
+      Array.prototype.forEach.call(boxes, function (b) {
+        var v = Number(b.querySelector('.emp-count-input').value);
+        if (Number.isFinite(v) && v >= 0 && v !== Number(b.dataset.quoted)) counts[b.dataset.product] = v;
+      });
+      if (!Object.keys(counts).length) return;
+      var path = window.location.pathname.replace(/\/$/, '') + '/count';
+      // Best effort and deliberately silent. Telling ABY is ruling 3, but a failure to record
+      // must not sit on the employer's screen as an error about something that is not their
+      // problem -- and the number rides with the authorization anyway when they sign.
+      fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ counts: counts }),
+        keepalive: true,
+      }).catch(function () {});
+    }
+
+    Array.prototype.forEach.call(boxes, function (box) {
+      var input = box.querySelector('.emp-count-input');
+      var out = box.querySelector('.emp-count-out');
+      var quoted = Number(box.dataset.quoted);
+      var rate = Number(box.dataset.rate);
+      var min = Number(box.dataset.min) || 0;
+      var kind = box.dataset.kind;
+      var lo = box.dataset.lo === '' ? null : Number(box.dataset.lo);
+      var hi = box.dataset.hi === '' ? null : Number(box.dataset.hi);
+      var noun = box.dataset.noun;
+      var productId = box.dataset.product;
+
+      function update() {
+        var n = Number(input.value);
+        if (!Number.isFinite(n) || n < 0 || input.value === '') { out.textContent = ''; return; }
+        if (n === quoted) { out.textContent = ''; return; }
+
+        // IN THE SAME BAND? The bounds travel with the price (engine `_m.lo` / `_m.hi`), which
+        // is the only way to know: the public rate table is split by STATE and by rate book,
+        // and an agreed rate is in neither. An open-ended top band has hi === null.
+        // ⛔ A quote priced before the bounds existed has neither, and defers to ABY rather
+        // than guessing -- a missing bound must not read as "same band".
+        var haveBand = (lo !== null && lo !== undefined);
+        var sameTier = haveBand && n >= lo && (hi === null || hi === undefined || n <= hi);
+
+        // Say BOTH numbers, always. The employer asserted one; ABY quoted the other; the page
+        // never pretends the second did not happen.
+        var both = 'You entered ' + n + ' ' + noun + '. ABY quoted ' + quoted + '.';
+
+        if (!sameTier) {
+          out.className = 'emp-count-out changed';
+          out.textContent = both + ' This moves you outside the band this quote was priced in, so'
+            + ' the monthly fee will change. ABY will confirm the figure -- submit below and they'
+            + ' will be told.';
+          record();
+          return;
+        }
+        // A FLAT band charges the same figure across the whole band, so the fee does not move.
+        // Saying so is better than silently showing an unchanged number, which reads as a
+        // control that did nothing.
+        if (kind === 'flat') {
+          out.className = 'emp-count-out changed';
+          out.textContent = both + ' That is still within the same band, so your monthly '
+            + 'administration fee is unchanged at ' + money(rate) + ' per month.';
+          record();
+          return;
+        }
+        var monthly = Math.max(rate * n, min);
+        monthly = Math.round(monthly * 100) / 100;
+        out.className = 'emp-count-out changed';
+        out.textContent = both + ' At the same rate of ' + rateMoney(rate) + ' per participant per month, your monthly administration fee would be ' + money(monthly) + '.'
+          + (min > 0 && rate * n < min ? ' (The ' + money(min) + ' monthly minimum applies.)' : '');
+        record();
+      }
+
+      input.addEventListener('input', function () {
+        if (pending) clearTimeout(pending);
+        pending = setTimeout(update, 400);
+      });
+      input.addEventListener('change', update);
+    });
   }
 
   function prePopulateFromRerun() {
