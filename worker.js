@@ -497,7 +497,81 @@ async function handleListQuotes(request, env) {
     const totalRow = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM quotes ${whereSql}`
     ).bind(...args).first();
-    return jsonResp({ quotes: result.results || [], total: (totalRow && totalRow.n) || 0,
+    // SALES WITH NO QUOTE, SHOWN IN THE SOLD TAB (Eric, 2026-08-21): "it would be worth adding
+    // the other sold ones to the sold tab with the sold products and just putting no quote in
+    // the quote number field and then we can update it if we find the quote."
+    //
+    // They come from aby_sales, NOT from the quotes table, and that is deliberate. 156 of the
+    // 406 sales have no quote at all, so writing them into quotes would add 156 to every quote
+    // figure ABY tracks -- the by-agency counts, the totals, the ageing report -- and
+    // source_tag exists precisely so history cannot inflate adoption numbers. A sale is not a
+    // quote. This shows them where Eric asked without counting them as something they are not.
+    //
+    // THE TABS FILTER IN THE BROWSER, so a row carrying status 'S' lands in the Sold tab by
+    // itself. Nothing here has to know which tab is open.
+    //
+    // "we can update it if we find the quote" is already supported: aby_sales.quote_id links a
+    // sale to a quote, and a linked sale drops out of this list automatically.
+    // Eric's own reason for expecting more of them: "Several of my quotes are not yet in
+    // there" -- the quote log is incomplete, so a missing quote is not evidence of no quote.
+    let salesOnly = [];
+    if (!q && !year && !ranByFilter && !stateFilter && offset === 0) {
+      try {
+        const sres = await env.DB.prepare(
+          'SELECT id, employer, agency, broker_contact, products, effective_date, announced_at, ' +
+          '       account_mgr, note, quote_match ' +
+          'FROM aby_sales WHERE quote_id IS NULL ORDER BY announced_at DESC LIMIT 500'
+        ).all();
+        salesOnly = (sres.results || []).map(function (r) {
+          var contact = String(r.broker_contact || '').split(';')[0];
+          var name = contact.replace(/<[^>]*>/g, '').trim();
+          var mail = (contact.match(/<([^>]+)>/) || [])[1] || '';
+          return {
+            id: 'sale-' + r.id,
+            // The field Eric named. It is not a quote number because there is no quote.
+            // NOT ALL UNLINKED SALES ARE QUOTE-LESS. 155 genuinely have no quote in the log;
+            // the other 69 DO have one that is simply not linked yet, because the employer had
+            // more than one open quote and picking for them would be a guess. Calling both
+            // 'no quote' would overstate the first group and hide a job on the second.
+            quote_number: (String(r.quote_match || '') === 'No quote found') ? 'no quote' : 'quote not linked',
+            created_at: r.announced_at || '',
+            client_name: r.employer || '',
+            effective_date: r.effective_date || '',
+            broker_name: name,
+            broker_agency: r.agency || '',
+            broker_phone: '',
+            broker_email: mail,
+            rep_name: r.account_mgr || '',
+            rep_phone: '',
+            rep_email: '',
+            commission_included: null,
+            // The sold products as the EMAIL stated them, carried in their own field. Not the
+            // product-id JSON a quote has -- there is no quote that produced one, and inventing
+            // ids would make these rows match product searches they have no business matching.
+            products: '[]',
+            sold_products: r.products || '',
+            status: 'S',
+            ran_by: 'ABY',
+            state: 'TX',
+            adjustment: null,
+            adjustment_note: '',
+            client_id: null,
+            source_tag: 'sale-no-quote',
+            notes: r.note || '',
+            direct: 0,
+            is_sale_without_quote: true,
+            quote_match: r.quote_match || '',
+          };
+        });
+      } catch (err) {
+        // The table is newer than this handler. A missing table must not take the log down.
+        console.warn('aby_sales not readable:', String(err && err.message || err));
+      }
+    }
+
+    return jsonResp({ quotes: (result.results || []).concat(salesOnly),
+                      total: (totalRow && totalRow.n) || 0,
+                      salesWithoutQuote: salesOnly.length,
                       limit: limit, offset: offset });
   } catch (err) {
     console.error('handleListQuotes failed:', err);
@@ -2270,16 +2344,18 @@ ${abyAdminNav('/admin/brokers')}
      agency:function(x){return String(x.agency_label||x.agency||'').toLowerCase()},
      n:function(x){return Number(x.n||0)},
      share:function(x){return Number(x.n||0)},
+     sales:function(x){return Number(x.sales||0)},
      agents:function(x){return Number(x.agents||0)},
      last:function(x){return String(x.last_quote||'')}
    },'n');
    document.getElementById('byAgency').innerHTML = ag.length
      ? '<table><thead><tr>'+hc('byAgency','agency','Agency')+hc('byAgency','n','Quotes','n')
        +hc('byAgency','share','Share','n')
+       +hc('byAgency','sales','Sales','n')
        +hc('byAgency','agents','Agents','n')+hc('byAgency','last','Last quote')
        +'<th>Owner</th></tr></thead><tbody>'
        + capRows('byAgency', ag).map(function(x){
-           return '<tr><td>'+esc(x.agency_label||x.agency||'(no agency)')+'</td><td class="n">'+x.n+'</td><td class="n">'+pctOfTotal(x.n)+'</td><td class="n">'+x.agents+'</td><td class="date">'+day(x.last_quote)+'</td>'
+           return '<tr><td>'+esc(x.agency_label||x.agency||'(no agency)')+'</td><td class="n">'+x.n+'</td><td class="n">'+pctOfTotal(x.n)+'</td><td class="n">'+(Number(x.sales||0)?('<strong>'+x.sales+'</strong>'+(Number(x.sales||0)>Number(x.n||0)?' <span title="more sales than quotes on file" style="color:#a0574f">*</span>':'')):'—')+'</td><td class="n">'+x.agents+'</td><td class="date">'+day(x.last_quote)+'</td>'
              +'<td>'+(x.agency_id?repSelect('agency',x.agency_id,x.rep):'<span class="muted">\u2014</span>')+'</td></tr>';
          }).join('')+moreRow('byAgency', capRows('byAgency', ag).length, ag.length, 5)+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
@@ -2853,7 +2929,15 @@ async function handleAdminStats(request, env) {
       // the agent list can no longer disagree about what an agent is.
       "       COUNT(DISTINCT COALESCE(NULLIF(lower(trim(q.broker_email)),''), " +
       "                               NULLIF(lower(trim(q.broker_name)),''))) AS agents, " +
-      "       MAX(q.created_at) AS last_quote " +
+      "       MAX(q.created_at) AS last_quote, " +
+      // SALES, NOT QUOTES, AND FROM THEIR OWN TABLE. Eric, 2026-08-21: "We have been tracking
+      // number of quotes from each agent and agency. Perhaps we should track number of sales
+      // as well."
+      // ⛔ A correlated subquery on aby_sales, NOT a join: a join would multiply the quote rows
+      // by the sales rows and silently inflate the very count this table exists to report.
+      // ⚠️ 156 of the 406 sales have no quote at all, so an agency can show sales with a low
+      // quote count -- that is the finding, not an error.
+      "       (SELECT COUNT(*) FROM aby_sales sx WHERE sx.agency = " + AGENCY_EXPR + ") AS sales " +
       "FROM quotes q " +
       "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> '' " +
       "LEFT JOIN agencies a ON a.id = b.agency_id " +
@@ -5126,7 +5210,13 @@ function render() {
   }
   tbody.innerHTML = '';
   for (const q of filtered) {
-    const products = parseProducts(q.products);
+    // A SALE WITH NO QUOTE carries the products as the EMAIL worded them, in its own field,
+    // because there is no quote-shaped product list behind it. Rendered as plain labels so the
+    // row reads like the others without pretending to be one.
+    const products = q.is_sale_without_quote
+      ? String(q.sold_products || '').split(/[,&/]| and /).map(function (t) { return t.trim(); })
+          .filter(Boolean)
+      : parseProducts(q.products);
     const when     = createdParts(q);
     const isExp    = expandedId === q.id;
 
