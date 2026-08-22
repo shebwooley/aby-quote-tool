@@ -2330,8 +2330,13 @@ ${abyAdminNav('/admin/brokers')}
     <p class="sub">Value is the first year of a quote: setup, plan documents, annual fees and twelve months of any monthly fee.</p>
     <div id="byStatus"><p class="muted">Loading...</p></div></div>
   <div class="card"><h2>Open quotes, by age</h2>
-    <p class="sub">Pending and in-process quotes only &mdash; a sold or dead quote is not waiting on anybody.</p>
+    <p class="sub">Pending and in-process quotes only &mdash; a sold or dead quote is not waiting on
+      anybody &mdash; and 2026 onward only. The back-catalogue is below.</p>
     <div id="aging"><p class="muted">Loading...</p></div></div>
+  <div class="card"><h2>Historic quotes, by year</h2>
+    <p class="sub">Everything before 2026, newest first. Ageing buckets say nothing across fifteen
+      years; a year count does.</p>
+    <div id="historic"><p class="muted">Loading...</p></div></div>
   <div class="card"><h2>Registered brokers</h2>
     <p class="sub">Everyone with an ABY account. Assign each one to whoever owns the relationship.</p>
     <div id="brokers"><p class="muted">Loading...</p></div></div>
@@ -2538,6 +2543,22 @@ ${abyAdminNav('/admin/brokers')}
            return '<tr><td>'+AL[k]+'</td><td class="n">'+x.n+'</td><td class="n">'+money(x.value)+'</td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">No open quotes.</p>';
+
+   // Historic quotes by year, newest first. Counts are centred under centred headings, same as
+   // the two tables above, and the widths are declared so nothing drifts to a column edge.
+   var hy = st.historic || [];
+   document.getElementById('historic').innerHTML = hy.length
+     ? '<table class="grid"><colgroup><col style="width:16%"><col style="width:21%">'
+       + '<col style="width:21%"><col style="width:21%"><col style="width:21%"></colgroup>'
+       + '<thead><tr><th>Year</th><th class="c">Quotes</th><th class="c">Sold</th>'
+       + '<th class="c">Employers</th><th class="c">Agencies</th></tr></thead><tbody>'
+       + hy.map(function(x){
+           return '<tr><td>'+esc(x.yr||'—')+'</td><td class="c">'+x.n+'</td>'
+             +'<td class="c">'+(Number(x.sold||0)||'—')+'</td>'
+             +'<td class="c">'+x.employers+'</td><td class="c">'+x.agencies+'</td></tr>';
+         }).join('')+'</tbody></table>'
+     : '<p class="muted">Nothing before 2026.</p>';
+
    CACHE.byAgent=st.byAgent||[];
    paintByAgent();
    function paintByAgent(){
@@ -3361,7 +3382,7 @@ async function handleAdminStats(request, env) {
  * its own still answers most of the question.
  */
 async function statsPerBlock(env, firstError, rep) {
-  const out = { byAgent: [], byAgency: [], byStatus: [], aging: [], totals: null,
+  const out = { byAgent: [], byAgency: [], byStatus: [], aging: [], historic: [], totals: null,
                 unavailable: {}, error: firstError };
 
   // 🔴 THE REP FILTER HAS TO SURVIVE THE FALLBACK, OR IT LIES.
@@ -3418,15 +3439,35 @@ async function statsPerBlock(env, firstError, rep) {
     "WHERE 1=1 " + repFilter + " GROUP BY COALESCE(q.status,'P')").bind(...args).all());
   if (st) out.byStatus = st.results || [];
 
+  // 🔴 THE AGEING REPORT EXCLUDES THE BACK-CATALOGUE. Eric, 2026-08-22: "On open quotes by age, we
+  // shouldn't include anything from 2025 and before." He is right and the reason is that the
+  // report answers "what is waiting on somebody" -- after the 2009-2023 load, 5,905 quotes were
+  // sitting in the "over 90 days" bucket, none of which anybody is chasing. One bucket holding 94%
+  // of the rows tells you nothing, and it buries the handful that ARE overdue.
+  // ⛔ The cut-off is a DISPLAY boundary, exactly like the Historic tab -- no status is rewritten,
+  // so nothing here disposes of a quote by date.
   const ag = await attempt('aging', () => env.DB.prepare(
     "SELECT CASE " +
     "  WHEN q.created_at >= datetime('now','-7 days')  THEN 'week' " +
     "  WHEN q.created_at >= datetime('now','-30 days') THEN 'month' " +
     "  WHEN q.created_at >= datetime('now','-90 days') THEN 'quarter' " +
     "  ELSE 'older' END AS bucket, COUNT(*) AS n, COALESCE(SUM(q.first_year_value),0) AS value " +
-    "FROM quotes q" + joinIf + "WHERE COALESCE(q.status,'P') IN ('P','I') " + repFilter +
+    "FROM quotes q" + joinIf + "WHERE COALESCE(q.status,'P') IN ('P','I') " +
+    "  AND substr(q.created_at,1,4) >= '2026' " + repFilter +
     " GROUP BY bucket").bind(...args).all());
   if (ag) out.aging = ag.results || [];
+
+  // ⭐ AND THE OTHER HALF OF THE SAME INSTRUCTION: "Instead, we should have a historic quotes
+  // section that shows quotes by year, 2025 first." Every quote, every status, one row per year,
+  // newest first -- the ageing buckets make no sense across fifteen years, but a year count does.
+  const hist = await attempt('historic', () => env.DB.prepare(
+    "SELECT substr(q.created_at,1,4) AS yr, COUNT(*) AS n, " +
+    "       SUM(CASE WHEN COALESCE(q.status,'P') = 'S' THEN 1 ELSE 0 END) AS sold, " +
+    "       COUNT(DISTINCT q.client_name) AS employers, " +
+    "       COUNT(DISTINCT q.broker_agency) AS agencies " +
+    "FROM quotes q" + joinIf + "WHERE substr(q.created_at,1,4) < '2026' " + repFilter +
+    " GROUP BY yr ORDER BY yr DESC").bind(...args).all());
+  if (hist) out.historic = hist.results || [];
 
   return jsonResp(out);
 }
