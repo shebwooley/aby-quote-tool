@@ -39,7 +39,7 @@ function slice(startMark, endMark, src) {
 
 function buildHarness(src) {
   const rollup = slice("var kids = {};", "var shown = capRows", src);
-  const agRowSrc = slice("function agRow(x, child){", "\n   var shown", src);
+  const agRowSrc = slice("function agRow(x, child, ownRow){", "\n   var shown", src);
   // ⭐⭐ THE ROW LOOP IS SLICED OUT OF THE PAGE TOO, and that is not fussiness.
   // The first version of this file wrote its own copy of the expand condition, so the sabotage
   // "children render even when collapsed" edited the page and the checker went on evaluating its
@@ -278,14 +278,22 @@ function main() {
         bad++;
         continue;
       }
+      // 🔴🔴 A RULE ONLY COUNTS AS CATCHING A SABOTAGE IF IT WAS GREEN BEFORE AND IS RED AFTER.
+      // The first version counted any red rule, and on 2026-08-22 that reported all seven
+      // sabotages "caught" while eight rules were red for a completely unrelated reason: the
+      // function signature had changed and their shared anchor no longer matched, so the harness
+      // was broken and every sabotage looked detected. A self-test that passes because the
+      // harness is broken is the exact failure this file exists to prevent (TRAPS #148).
       let reddened = 0;
       for (const r of RULES) {
-        let ok = false;
-        try { ok = r.holds(broken); } catch { ok = false; }
-        if (!ok) reddened++;
+        let before = false, after = false;
+        try { before = r.holds(SRC); } catch { before = false; }
+        if (!before) continue;                 // already red -- it can prove nothing here
+        try { after = r.holds(broken); } catch { after = false; }
+        if (!after) reddened++;
       }
       console.log((reddened ? "  caught  " : "  MISSED  ") + s.why
-        + (reddened ? "  (" + reddened + " rule(s) red)" : ""));
+        + (reddened ? "  (" + reddened + " rule(s) went green->red)" : ""));
       if (!reddened) bad++;
     }
   }

@@ -2592,31 +2592,41 @@ ${abyAdminNav('/admin/brokers')}
    // Re-sort on the ROLLED total, or a parent sits below firms it now outranks.
    tops.sort(function(a,b){ return rolled(b)-rolled(a); });
 
-   function agRow(x, child){
+   function agRow(x, child, ownRow){
      var kid = kids[x.agency_label||x.agency] || [];
-     var tot = child ? Number(x.n||0) : rolled(x);
-     var caret = '';
-     if (!child && kid.length) {
-       caret = '<button type="button" class="agtog" data-ag="'+esc(x.agency_label||'')+'" '
-         + 'style="background:none;border:0;cursor:pointer;color:#2f6f4f;font-size:12px;'
-         + 'padding:0 6px 0 0">'+(OPEN_AG[x.agency_label]?'\u25be':'\u25b8')+'</button>';
-     } else if (child) {
-       caret = '<span style="display:inline-block;width:16px"></span>';
-     }
+     // ownRow is the PARENT listed inside its own drop-down, showing what it quoted under its own
+     // bare name. Eric: "MMA has quoted over 700 just under the MMA name but we don't show that -
+     // we have to subtract to get it."
+     var tot = (child || ownRow) ? Number(x.n||0) : rolled(x);
+     // THE CARET LIVES IN THE MARGIN. Eric: "I don't like the arrow to the left of the agencies
+     // that have more than one - it looks funny. Unless you can put it in the margin instead so
+     // the text lines up." It is absolutely positioned inside the cell's left padding, and EVERY
+     // row reserves that padding, so a row with no caret starts at the same x as one with.
+     var caret = (!child && !ownRow && kid.length)
+       ? '<button type="button" class="agtog" data-ag="'+esc(x.agency_label||'')+'" '
+         + 'style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:none;'
+         + 'border:0;cursor:pointer;color:#2f6f4f;font-size:12px;line-height:1;padding:2px">'
+         + (OPEN_AG[x.agency_label]?'\u25be':'\u25b8')+'</button>'
+       : '';
      var tag = '';
-     if (child) {
+     if (ownRow) {
+       tag = ' <span class="muted" style="font-size:12px">under this name</span>';
+     } else if (child) {
        tag = (x.relationship === 'succeeded')
          ? ' <span class="muted" style="font-size:12px">acquired</span>'
          : ' <span class="muted" style="font-size:12px">division</span>';
      } else if (kid.length) {
-       tag = ' <span class="muted" style="font-size:12px">+'+kid.length+'</span>';
+       // (N) = how many NAMES sit under this heading, counting this one. The headline beside it is
+       // the COMBINED total, and this is the number that explains it.
+       tag = ' <span class="muted" style="font-size:12px">('+(kid.length+1)+')</span>';
      }
      var sales = Number(x.sales||0)
        ? ('<strong>'+x.sales+'</strong>'+(Number(x.sales||0)>Number(x.n||0)
            ? ' <span title="more sales than quotes on file" style="color:#a0574f">*</span>' : ''))
        : '\u2014';
-     return '<tr'+(child?' style="background:#fafbfa"':'')+'>'
-       + '<td class="wrapcell"'+(child?' style="padding-left:22px"':'')+'>'+caret
+     var indent = (child || ownRow) ? 38 : 22;
+     return '<tr'+((child||ownRow)?' style="background:#fafbfa"':'')+'>'
+       + '<td class="wrapcell" style="position:relative;padding-left:'+indent+'px">'+caret
        + esc(x.agency_label||x.agency||'(no agency)')+tag+'</td>'
        + '<td class="c">'+tot+'</td>'
        + '<td class="c">'+pctOfTotal(tot)+'</td>'
@@ -2636,11 +2646,15 @@ ${abyAdminNav('/admin/brokers')}
        +hc('byAgency','agents','Agents','c')+hc('byAgency','last','Last quote')
        +'<th>Owner</th></tr></thead><tbody>'
        + shown.map(function(x){
-           var out = agRow(x, false);
+           var out = agRow(x, false, false);
            if (OPEN_AG[x.agency_label]) {
+             // The parent's OWN quotes come first, so the combined headline above is the sum of
+             // the rows below it and nobody has to subtract to find out what MMA itself did.
+             // A synthesised parent has no quotes of its own and contributes no row.
+             if (Number(x.n||0) > 0) out += agRow(x, false, true);
              var list = (kids[x.agency_label]||[]).slice();
              list.sort(function(a,b){ return Number(b.n||0)-Number(a.n||0); });
-             out += list.map(function(k){ return agRow(k, true); }).join('');
+             out += list.map(function(k){ return agRow(k, true, false); }).join('');
            }
            return out;
          }).join('')+moreRow('byAgency', shown.length, tops.length, 7)+'</tbody></table>'
