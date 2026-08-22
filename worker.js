@@ -2326,6 +2326,9 @@ ${abyAdminNav('/admin/brokers')}
     <button data-rep="" class="on">Everyone</button>
     <button data-rep="eric">Eric</button>
     <button data-rep="niels">Niels</button>
+    <!-- Up for grabs. The point of marking an agency "open" is being able to pull the list back
+         out afterwards, so the filter ships with the value rather than after it. -->
+    <button data-rep="open">Open</button>
     <span class="muted" id="totals" style="margin-left:auto;font-size:13px"></span>
   </div>
   <!-- Shown only when a section could not be read. See the note beside statsPerBlock: a page that
@@ -2374,9 +2377,18 @@ ${abyAdminNav('/admin/brokers')}
  // The Since dropdown reloads the same way the rep buttons do -- one code path, so the two
  // filters cannot end up applying to different sets.
  (function(){ var e=document.getElementById('fSince'); if(e) e.onchange=load; })();
+ // \u2b50\u2b50 FOUR VALUES, AND BLANK vs OPEN IS THE ONE THAT MATTERS. Eric, 2026-08-22: "we could look
+ // at all the others and figure out whether they need to be assigned or we can put open on them
+ // - where they're up for grabs."
+ // \ud83d\udd34 BLANK MEANS NOBODY HAS LOOKED AT THIS YET. OPEN MEANS SOMEBODY LOOKED AND DECIDED IT IS
+ // UP FOR GRABS. Those are different facts and collapsing them loses the whole audit: a list of
+ // 600 blanks tells you nothing, while "570 open, 30 unreviewed" tells you where the work is.
+ // \u26a0\ufe0f This is the same rule the platform already applies to a compliance answer -- null means
+ // "not yet", never "no" -- and to a renewal cycle column. Do not default anything to 'open'.
+ var REP_LABELS={'':'\u2014','eric':'Eric','niels':'Niels','open':'Open'};
  function repSelect(kind,id,cur){
-   var o=['','eric','niels'].map(function(v){
-     return '<option value="'+v+'"'+((cur||'')===v?' selected':'')+'>'+(v===''?'\u2014':(v==='eric'?'Eric':'Niels'))+'</option>';
+   var o=['','eric','niels','open'].map(function(v){
+     return '<option value="'+v+'"'+((cur||'')===v?' selected':'')+'>'+REP_LABELS[v]+'</option>';
    }).join('');
    return '<select data-kind="'+kind+'" data-id="'+esc(id)+'">'+o+'</select>';
  }
@@ -3400,7 +3412,11 @@ async function handleAdminAssign(request, env) {
   const rep = String(body.rep || '').trim().toLowerCase();
   // '' clears the assignment, which has to stay possible -- an unassigned broker is a real state
   // and "assign to somebody to make the warning go away" is how a list stops meaning anything.
-  if (rep && rep !== 'eric' && rep !== 'niels') return jsonResp({ error: 'Unknown rep.' }, 400);
+  // 'open' is a real assignment meaning UP FOR GRABS -- somebody looked and decided nobody owns
+  // it yet. It is deliberately not the same as '' (nobody has looked). See repSelect.
+  if (rep && rep !== 'eric' && rep !== 'niels' && rep !== 'open') {
+    return jsonResp({ error: 'Unknown rep.' }, 400);
+  }
   const table = body.kind === 'agency' ? 'agencies' : 'brokers';
   const id = String(body.id || '');
   if (!id) return jsonResp({ error: 'Which one?' }, 400);
@@ -3455,11 +3471,37 @@ const SUCCEEDED_BY = {
   'MHBT': { by: 'MMA', when: 'Jun 2015', note: 'acquired by Marsh; quotes moved to MMA from 2018' },
 };
 
-const AGENCY_EXPR = "COALESCE(a.name, NULLIF(trim(q.broker_agency),''), '(no agency)')";
+// 🔴🔴 THE OWNER COLUMN WAS A DASH ON EVERY SINGLE ROW, AND THE REP FILTER MATCHED NOTHING.
+// Eric, 2026-08-22: "It's called Owner on the Brokers & Agencies page and they all have dashes."
+//
+// THE CAUSE: the agencies table was reachable ONLY through brokers --
+//     LEFT JOIN brokers b ON b.email = q.broker_email
+//     LEFT JOIN agencies a ON a.id = b.agency_id
+// and the brokers table holds ZERO rows, because no broker has ever registered an account. So
+// a.id was NULL on all 6,153 quotes: the Owner cell fell through to its dash for every agency
+// INCLUDING the 57 that have a record and an owner already set, and
+// "Show: Eric / Niels" returned an empty page rather than a filtered one.
+//
+// ⭐⭐ THE FIX IS TO JOIN ON THE KEY THE QUOTE ACTUALLY CARRIES -- the agency NAME. Every quote
+// has one; almost none has a registered broker behind it. Routing a lookup through a table that
+// is empty by design is how a working feature reads as unpopulated data.
+// ⚠️ Same shape as TRAPS #230: valid SQL, no error, a plausible-looking screen, wrong answer.
+const AGENCY_JOIN =
+  "LEFT JOIN agencies a ON lower(trim(a.name)) = lower(trim(q.broker_agency)) " +
+  "AND trim(coalesce(q.broker_agency,'')) <> '' ";
+
+// ⛔ GROUPING STAYS ON THE QUOTE'S OWN NAME, deliberately, and no longer prefers a.name.
+// With the join above, a.name is the SAME name matched case-insensitively -- so preferring it
+// would let a record spelled "HUB" and a quote spelled "Hub" land in two different groups.
+// The quote is the only thing every row has, so it is what the book is counted by.
+const AGENCY_EXPR = "COALESCE(NULLIF(trim(q.broker_agency),''), '(no agency)')";
 
 async function handleAdminStats(request, env) {
   const rep = (new URL(request.url).searchParams.get('rep') || '').trim().toLowerCase();
-  const repFilter = rep ? "AND lower(COALESCE(b.assigned_rep,'')) = ?" : '';
+  // ⚠️ READS THE AGENCY'S OWNER FIRST. It used to read only b.assigned_rep, and with zero
+  // broker rows that is always NULL -- so picking Eric or Niels returned an EMPTY page rather
+  // than a filtered one, which reads as "neither of us owns anything".
+  const repFilter = rep ? "AND lower(COALESCE(a.assigned_rep, b.assigned_rep,'')) = ?" : '';
 
   // SINCE. Eric, 2026-08-22: "maybe a filter where we could choose to see number of quotes/sales
   // since a specific date? Like 1/1/26, last 12 months, 1/1/25 for example."
@@ -3506,7 +3548,7 @@ async function handleAdminStats(request, env) {
       "       COUNT(*) AS n, MAX(q.created_at) AS last_quote " +
       "FROM quotes q " +
       "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> '' " +
-      "LEFT JOIN agencies a ON a.id = b.agency_id " +
+      AGENCY_JOIN +
       "WHERE 1=1 " + repFilter + sinceFilter +
       " GROUP BY key ORDER BY n DESC LIMIT 1000").bind(...args).all();
 
@@ -3540,7 +3582,7 @@ async function handleAdminStats(request, env) {
       "       (SELECT COUNT(*) FROM aby_sales sx WHERE sx.agency = " + AGENCY_EXPR + ") AS sales " +
       "FROM quotes q " +
       "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> '' " +
-      "LEFT JOIN agencies a ON a.id = b.agency_id " +
+      AGENCY_JOIN +
       "WHERE 1=1 " + repFilter + sinceFilter +
       " GROUP BY " + AGENCY_EXPR + " ORDER BY n DESC LIMIT 1000").bind(...args).all();
 
@@ -3628,14 +3670,19 @@ async function handleAdminStats(request, env) {
         "       MAX(q.created_at) AS last_quote, " +
         "       SUM(CASE WHEN q.created_at >= datetime('now','-365 days') THEN 1 ELSE 0 END) AS recent, " +
         "       CAST(julianday('now') - julianday(MAX(q.created_at)) AS INTEGER) AS days_quiet " +
-        // 🔴 AGENCY_EXPR references a.name, so the AGENCIES join has to be here too.
+        // 🔴 THE AGENCIES JOIN HAS TO BE HERE TOO -- repFilter now reads a.assigned_rep.
         // BROKER_JOIN alone brings in `brokers b` and nothing else, so the first version of
         // this query referenced an unresolved column, threw, and left the card empty -- while
         // byStatus, aging and historic all rendered, because they are assigned before it.
         // An empty card and a broken card look identical, which is why the direct query was
         // run against D1 to prove the SQL itself was sound before looking at the worker.
-        "FROM quotes q " + BROKER_JOIN +
-        " LEFT JOIN agencies a ON a.id = b.agency_id " +
+        // ⭐⭐ AND IT USES THE SAME AGENCY_JOIN AS THE PRIMARY PATH, ON PURPOSE. This is the
+        // DEGRADED path: it only runs once the main query has already failed, which is exactly
+        // when nobody is watching. Left joining through brokers here while the primary joins by
+        // name would mean that on a bad day the page answers a different question and still
+        // looks right. TRAPS #233 -- a fallback that answers a different question than the thing
+        // it replaces is a second bug waiting for the day the first one fires.
+        "FROM quotes q " + BROKER_JOIN + AGENCY_JOIN +
         " WHERE 1=1 " + repFilter +
         " GROUP BY " + AGENCY_EXPR +
         " HAVING n >= 5 AND recent = 0 " +
@@ -3695,8 +3742,18 @@ async function statsPerBlock(env, firstError, rep) {
   // ⭐ So the filter is applied here too. It needs the brokers join, which is one of the things
   // that may be broken -- and that is the right trade: a section that cannot honour the filter
   // reports itself unavailable, section by section, rather than answering a different question.
-  const repFilter = rep ? "AND lower(COALESCE(b.assigned_rep,'')) = ?" : '';
-  const joinIf    = rep ? " LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> '' " : ' ';
+  // ⚠️ READS THE AGENCY'S OWNER FIRST. It used to read only b.assigned_rep, and with zero
+  // broker rows that is always NULL -- so picking Eric or Niels returned an EMPTY page rather
+  // than a filtered one, which reads as "neither of us owns anything".
+  const repFilter = rep ? "AND lower(COALESCE(a.assigned_rep, b.assigned_rep,'')) = ?" : '';
+  // 🔴 THE AGENCY JOIN IS PART OF THIS, NOT OPTIONAL. repFilter reads a.assigned_rep, so a
+  // join that brings in only `brokers` leaves `a` unresolved and every query in the DEGRADED
+  // path throws -- turning a partly-working page into a blank one, on the day the main path has
+  // already failed. Caught before deploy by asking what repFilter references, not by running it.
+  const joinIf    = rep
+    ? " LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> '' "
+      + " LEFT JOIN agencies a ON lower(trim(a.name)) = lower(trim(q.broker_agency)) AND trim(coalesce(q.broker_agency,'')) <> '' "
+    : ' ';
   const args      = rep ? [rep] : [];
   const attempt = async (name, run) => {
     try { return await run(); }
