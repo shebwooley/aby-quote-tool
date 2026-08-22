@@ -2406,7 +2406,7 @@ ${abyAdminNav('/admin/brokers')}
  // places for the blank-handling rule to drift, and that rule is the one that matters.
  // ⭐ The rows are CACHED so re-sorting does not re-query. Reordering what is already on screen
  // must not be able to return a different set than the one being looked at.
- var CACHE={brokers:[],byAgency:[],byAgent:[]}, SORTS={}, paint=function(){};
+ var CACHE={brokers:[],byAgency:[],byAgent:[]}, SORTS={}, OPEN_AG={}, paint=function(){};
  var TOP_N=25, SHOW_ALL={};
  // ⚠️ THE DEFAULT DIRECTION FOLLOWS THE DEFAULT KEY. Initialising every table ascending put
  // '(no agency)' with 12 quotes above MMA with 36 on first paint -- technically sorted, and the
@@ -2560,7 +2560,72 @@ ${abyAdminNav('/admin/brokers')}
      agents:function(x){return Number(x.agents||0)},
      last:function(x){return String(x.last_quote||'')}
    },'n');
-   document.getElementById('byAgency').innerHTML = ag.length
+   // THE ROLLUP. Eric, 2026-08-22: "when an agency is acquired, I think we should have their
+   // quotes under the other agency in a drop down. For instance, MMA would have the MMA and MHBT
+   // quote count combined in the big view, when you hit the drop down, you would see MMA and its
+   // quote count and MHBT and its quote count."
+   //
+   // A child NEVER appears at the top level. Its quotes are added to the parent's headline and it
+   // is listed inside the drop-down with its own count. The quotes themselves are untouched: a
+   // 2013 quote still says MHBT, and this is a display-time grouping, never a rewrite.
+   //
+   // A PARENT MAY HAVE NO QUOTES OF ITS OWN. If somebody links a child to a firm that has never
+   // quoted, the parent has no row here, so one is synthesised rather than letting the child
+   // vanish from the table. A row that silently disappears is the worst outcome of a regrouping.
+   var kids = {};
+   ag.forEach(function(x){
+     if (!x.parent_name) return;
+     (kids[x.parent_name] = kids[x.parent_name] || []).push(x);
+   });
+   var tops = ag.filter(function(x){ return !x.parent_name; });
+   Object.keys(kids).forEach(function(pn){
+     if (!tops.some(function(t){ return (t.agency_label||t.agency) === pn; })) {
+       tops.push({ agency_label: pn, n: 0, sales: 0, agents: 0, last_quote: '', synthetic: true });
+     }
+   });
+   function rolled(x){
+     var own = Number(x.n||0);
+     var k = kids[x.agency_label||x.agency] || [];
+     return own + k.reduce(function(t,c){ return t+Number(c.n||0); }, 0);
+   }
+   // Re-sort on the ROLLED total, or a parent sits below firms it now outranks.
+   tops.sort(function(a,b){ return rolled(b)-rolled(a); });
+
+   function agRow(x, child){
+     var kid = kids[x.agency_label||x.agency] || [];
+     var tot = child ? Number(x.n||0) : rolled(x);
+     var caret = '';
+     if (!child && kid.length) {
+       caret = '<button type="button" class="agtog" data-ag="'+esc(x.agency_label||'')+'" '
+         + 'style="background:none;border:0;cursor:pointer;color:#2f6f4f;font-size:12px;'
+         + 'padding:0 6px 0 0">'+(OPEN_AG[x.agency_label]?'\u25be':'\u25b8')+'</button>';
+     } else if (child) {
+       caret = '<span style="display:inline-block;width:16px"></span>';
+     }
+     var tag = '';
+     if (child) {
+       tag = (x.relationship === 'succeeded')
+         ? ' <span class="muted" style="font-size:12px">acquired</span>'
+         : ' <span class="muted" style="font-size:12px">division</span>';
+     } else if (kid.length) {
+       tag = ' <span class="muted" style="font-size:12px">+'+kid.length+'</span>';
+     }
+     var sales = Number(x.sales||0)
+       ? ('<strong>'+x.sales+'</strong>'+(Number(x.sales||0)>Number(x.n||0)
+           ? ' <span title="more sales than quotes on file" style="color:#a0574f">*</span>' : ''))
+       : '\u2014';
+     return '<tr'+(child?' style="background:#fafbfa"':'')+'>'
+       + '<td class="wrapcell"'+(child?' style="padding-left:22px"':'')+'>'+caret
+       + esc(x.agency_label||x.agency||'(no agency)')+tag+'</td>'
+       + '<td class="c">'+tot+'</td>'
+       + '<td class="c">'+pctOfTotal(tot)+'</td>'
+       + '<td class="c">'+sales+'</td><td class="c">'+(x.agents||0)+'</td>'
+       + '<td class="date">'+(x.last_quote?day(x.last_quote):'\u2014')+'</td>'
+       + '<td>'+(x.agency_id?repSelect('agency',x.agency_id,x.rep):'<span class="muted">\u2014</span>')+'</td></tr>';
+   }
+
+   var shown = capRows('byAgency', tops);
+   document.getElementById('byAgency').innerHTML = tops.length
      ? '<table class="grid"><colgroup>'
        + '<col style="width:32%"><col style="width:9%"><col style="width:9%">'
        + '<col style="width:9%"><col style="width:9%"><col style="width:14%"><col style="width:18%">'
@@ -2569,12 +2634,30 @@ ${abyAdminNav('/admin/brokers')}
        +hc('byAgency','sales','Sales','c')
        +hc('byAgency','agents','Agents','c')+hc('byAgency','last','Last quote')
        +'<th>Owner</th></tr></thead><tbody>'
-       + capRows('byAgency', ag).map(function(x){
-           return '<tr><td class="wrapcell">'+esc(x.agency_label||x.agency||'(no agency)')+'</td><td class="c">'+x.n+'</td><td class="c">'+pctOfTotal(x.n)+'</td><td class="c">'+(Number(x.sales||0)?('<strong>'+x.sales+'</strong>'+(Number(x.sales||0)>Number(x.n||0)?' <span title="more sales than quotes on file" style="color:#a0574f">*</span>':'')):'—')+'</td><td class="c">'+x.agents+'</td><td class="date">'+day(x.last_quote)+'</td>'
-             +'<td>'+(x.agency_id?repSelect('agency',x.agency_id,x.rep):'<span class="muted">\u2014</span>')+'</td></tr>';
-         }).join('')+moreRow('byAgency', capRows('byAgency', ag).length, ag.length, 5)+'</tbody></table>'
+       + shown.map(function(x){
+           var out = agRow(x, false);
+           if (OPEN_AG[x.agency_label]) {
+             var list = (kids[x.agency_label]||[]).slice();
+             list.sort(function(a,b){ return Number(b.n||0)-Number(a.n||0); });
+             out += list.map(function(k){ return agRow(k, true); }).join('');
+           }
+           return out;
+         }).join('')+moreRow('byAgency', shown.length, tops.length, 7)+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
+   wireAgToggles();
    }
+ // TWO CALL SITES, like wireCollapse. A handler attached only inside paint() is missing on the
+ // FIRST render, because this page paints once directly before paint is assigned. TRAPS #239,
+ // same file, and the reason that entry exists.
+ function wireAgToggles(){
+   Array.prototype.forEach.call(document.querySelectorAll('.agtog'), function(b){
+     b.onclick = function(){
+       var k = b.getAttribute('data-ag');
+       OPEN_AG[k] = !OPEN_AG[k];
+       paintByAgency();
+     };
+   });
+ }
    var SL={P:'Pending',I:'In process',S:'Sold',D:'Dead',N:'No Response'};
    function money(v){return v?('$'+Number(v).toLocaleString('en-US',{maximumFractionDigits:0})):'\u2014'}
    var bs=st.byStatus||[];
@@ -2621,18 +2704,22 @@ ${abyAdminNav('/admin/brokers')}
        + dm.map(function(x){
            var yrs = Math.floor((x.days_quiet||0)/365), mos = Math.round(((x.days_quiet||0)%365)/30);
            var quiet = yrs ? (yrs+' yr'+(yrs>1?'s':'')+(mos?' '+mos+' mo':'')) : ((x.days_quiet||0)+' days');
-           // An acquired agency is NOT a lapse. Saying so on the row is the whole point --
-           // otherwise the biggest number on this list is a call nobody should make.
-           var sold = x.succeeded_by
-             ? ' <span class="muted">&mdash; acquired ' + esc(x.succeeded_when||'') +
-               ', now quotes as <b>' + esc(x.succeeded_by) + '</b></span>'
+           // ⛔ AN ACQUIRED NAME NEVER REACHES THIS LIST ANY MORE -- the query excludes
+           // relationship = 'succeeded' outright. Eric: "we don't need to see MHBT on a dormant
+           // list, even if grayed out." The old greyed-out row and its "acquired, now quotes as"
+           // caption are gone with it, rather than left as a branch no input can reach.
+           // ⭐ A DIVISION still arrives here and SHOULD: it is still trading, so somebody can
+           // ring it. The caption says which parent it belongs to so the row is not mistaken for
+           // an independent firm that went quiet.
+           var under = x.parent_name
+             ? ' <span class="muted">&mdash; part of <b>' + esc(x.parent_name) + '</b></span>'
              : '';
-           return '<tr'+(x.succeeded_by?' style="opacity:.62"':'')+'>'
-             +'<td class="wrapcell">'+esc(x.agency_label||'(no agency)')+sold
+           return '<tr>'
+             +'<td class="wrapcell">'+esc(x.agency_label||'(no agency)')+under
              + (x.contact ? '<br><span class="muted" style="font-size:12px">call '
                  + esc(x.contact) + '</span>' : '')+'</td>'
              +'<td class="c">'+x.n+'</td><td class="date">'+day(x.last_quote)+'</td>'
-             +'<td class="c">'+(x.succeeded_by?'<span class="muted">n/a</span>':quiet)+'</td></tr>';
+             +'<td class="c">'+quiet+'</td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">Nobody has fallen off &mdash; every agency with five or more quotes has sent one in the last 12 months.</p>';
 
@@ -2650,9 +2737,13 @@ ${abyAdminNav('/admin/brokers')}
      var midN  = mid.reduce(function(t,x){ return t+(x.n||0); }, 0);
      // Count only the GENUINE lapses. An acquired agency in this total would overstate what
      // there is to go and recover, which is the one thing this number is for.
-     var live  = dm.filter(function(x){ return !x.succeeded_by; });
-     var acq   = dm.filter(function(x){ return x.succeeded_by; });
+     // ⭐ THE DORMANT LIST NO LONGER CONTAINS ACQUIRED NAMES AT ALL -- the query excludes them --
+     // so live is simply the list. The acquired count comes from the agency table instead,
+     // which is where the register now lives.
+     var live  = dm;
      var dmN   = live.reduce(function(t,x){ return t+(x.n||0); }, 0);
+     var acq   = ag.filter(function(x){ return x.relationship === 'succeeded'; });
+     var divs  = ag.filter(function(x){ return x.relationship === 'division'; });
      var el = document.getElementById('insights');
      if (!el) return;
 
@@ -2733,9 +2824,15 @@ ${abyAdminNav('/admin/brokers')}
               + ' They are listed below.')
          : ''),
        (acq.length
-         ? li(acq.length + ' more look dormant but were <b>acquired</b> &mdash; '
-              + acq.map(function(x){ return esc(x.agency_label)+' is now '+esc(x.succeeded_by); }).join(', ')
-              + '. Not a call to make.')
+         ? li('<b>' + acq.length + ' names</b> in the log belong to firms that were '
+              + '<b>acquired</b> and are counted under their buyer, not as lapses &mdash; '
+              + acq.map(function(x){ return esc(x.agency_label)+' is now '+esc(x.parent_name||''); }).join(', ')
+              + '.')
+         : ''),
+       (divs.length
+         ? li('<b>' + divs.length + ' names</b> are <b>divisions or branch offices</b> of a bigger'
+              + ' firm. They roll up into the parent above, and they stay on the fallen-off list'
+              + ' on their own merits because somebody can still ring them.')
          : '')
      ].filter(function(s){ return s; }).join('');
 
@@ -2846,7 +2943,7 @@ ${abyAdminNav('/admin/brokers')}
 </script></body></html>`;
 }
 
-// The rate viewer. Reads the SAME `pricing.js` the quote tool uses, loaded as a script, so there is
+// The rate viewer. Reads the SAME pricing.js the quote tool uses, loaded as a script, so there is
 // no second copy of the rates to drift out of step.
 // The referral partners page (Eric, 2026-08-19).
 //
@@ -3488,7 +3585,11 @@ const SUCCEEDED_BY = {
 // ⚠️ Same shape as TRAPS #230: valid SQL, no error, a plausible-looking screen, wrong answer.
 const AGENCY_JOIN =
   "LEFT JOIN agencies a ON lower(trim(a.name)) = lower(trim(q.broker_agency)) " +
-  "AND trim(coalesce(q.broker_agency,'')) <> '' ";
+  "AND trim(coalesce(q.broker_agency,'')) <> '' " +
+  // The PARENT of that agency, for the acquisition and division rollup. One hop only -- the
+  // seeding script asserts no parent is itself a child, so a chain cannot form and this join
+  // cannot silently truncate one.
+  "LEFT JOIN agencies pa ON pa.id = a.parent_id ";
 
 // ⛔ GROUPING STAYS ON THE QUOTE'S OWN NAME, deliberately, and no longer prefers a.name.
 // With the join above, a.name is the SAME name matched case-insensitively -- so preferring it
@@ -3515,7 +3616,14 @@ async function handleAdminStats(request, env) {
   const sinceFilter = since ? " AND substr(q.created_at,1,10) >= '" + since + "' " : '';
     // Declared once so every section filters on the SAME definition of "whose quote this is",
     // and so no query has to repeat an expression it might repeat differently.
-    const BROKER_JOIN = "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> ''";
+    // 🔴🔴 THE AGENCY JOIN IS PART OF THIS CONSTANT, NOT BOLTED ON PER QUERY.
+    // repFilter reads a.assigned_rep. When the agency join lived at each call site, FOUR queries
+    // that take repFilter did not have it -- byStatus, the ageing buckets, the historic-by-year
+    // card and the totals -- and every one would have thrown on an unresolved column the moment
+    // somebody picked Eric or Niels, blanking most of the page.
+    // ⭐ Found by grepping every prepare() that mentions repFilter and asking which brought `a`
+    // into scope, rather than by clicking the filter and hoping. Grep the consumers.
+    const BROKER_JOIN = "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> '' " + AGENCY_JOIN;
     const STATUS_EXPR = "COALESCE(q.status,'P')";
     const BUCKET_EXPR = "CASE " +
       "  WHEN q.created_at >= datetime('now','-7 days')  THEN 'week' " +
@@ -3547,8 +3655,7 @@ async function handleAdminStats(request, env) {
       "       MAX(b.assigned_rep) AS rep, " +
       "       COUNT(*) AS n, MAX(q.created_at) AS last_quote " +
       "FROM quotes q " +
-      "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> '' " +
-      AGENCY_JOIN +
+      BROKER_JOIN + " " +
       "WHERE 1=1 " + repFilter + sinceFilter +
       " GROUP BY key ORDER BY n DESC LIMIT 1000").bind(...args).all();
 
@@ -3566,6 +3673,11 @@ async function handleAdminStats(request, env) {
       // layer down.
       "SELECT " + AGENCY_EXPR + " AS agency_label, MAX(a.id) AS agency_id, " +
       "       MAX(COALESCE(a.assigned_rep, b.assigned_rep)) AS rep, " +
+      // The rollup: who this agency sits under, and on what terms. `succeeded` means the name is
+      // dead (MHBT under MMA); `division` means it is still trading (HUB Fort Worth under HUB).
+      // The page combines the counts and the drop-down shows each name separately.
+      "       MAX(a.parent_id) AS parent_id, MAX(pa.name) AS parent_name, " +
+      "       MAX(a.relationship) AS relationship, MAX(a.relationship_note) AS relationship_note, " +
       "       COUNT(*) AS n, " +
       // ⚠️ Counts distinct identities the same way the agent table groups them, so "6 agents" and
       // the agent list can no longer disagree about what an agent is.
@@ -3581,8 +3693,7 @@ async function handleAdminStats(request, env) {
       // quote count -- that is the finding, not an error.
       "       (SELECT COUNT(*) FROM aby_sales sx WHERE sx.agency = " + AGENCY_EXPR + ") AS sales " +
       "FROM quotes q " +
-      "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> '' " +
-      AGENCY_JOIN +
+      BROKER_JOIN + " " +
       "WHERE 1=1 " + repFilter + sinceFilter +
       " GROUP BY " + AGENCY_EXPR + " ORDER BY n DESC LIMIT 1000").bind(...args).all();
 
@@ -3670,32 +3781,41 @@ async function handleAdminStats(request, env) {
         "       MAX(q.created_at) AS last_quote, " +
         "       SUM(CASE WHEN q.created_at >= datetime('now','-365 days') THEN 1 ELSE 0 END) AS recent, " +
         "       CAST(julianday('now') - julianday(MAX(q.created_at)) AS INTEGER) AS days_quiet " +
-        // 🔴 THE AGENCIES JOIN HAS TO BE HERE TOO -- repFilter now reads a.assigned_rep.
+        // 🔴 BROKER_JOIN NOW CARRIES THE AGENCIES JOIN WITH IT, which is what makes this safe.
         // BROKER_JOIN alone brings in `brokers b` and nothing else, so the first version of
         // this query referenced an unresolved column, threw, and left the card empty -- while
         // byStatus, aging and historic all rendered, because they are assigned before it.
         // An empty card and a broken card look identical, which is why the direct query was
         // run against D1 to prove the SQL itself was sound before looking at the worker.
-        // ⭐⭐ AND IT USES THE SAME AGENCY_JOIN AS THE PRIMARY PATH, ON PURPOSE. This is the
+        // ⭐⭐ IT USES THE SAME JOIN AS THE PRIMARY PATH, ON PURPOSE. This is the
         // DEGRADED path: it only runs once the main query has already failed, which is exactly
         // when nobody is watching. Left joining through brokers here while the primary joins by
         // name would mean that on a bad day the page answers a different question and still
         // looks right. TRAPS #233 -- a fallback that answers a different question than the thing
         // it replaces is a second bug waiting for the day the first one fires.
-        "FROM quotes q " + BROKER_JOIN + AGENCY_JOIN +
+        "       MAX(a.relationship) AS relationship, MAX(pa.name) AS parent_name, " +
+        "       MAX(a.relationship_note) AS relationship_note " +
+        "FROM quotes q " + BROKER_JOIN +
         " WHERE 1=1 " + repFilter +
+        // 🔴🔴 AN ACQUIRED NAME IS NOT A LAPSED RELATIONSHIP AND IS EXCLUDED OUTRIGHT.
+        // Eric, 2026-08-22: "9 years after they've stopped using the name, we don't need to see
+        // MHBT on a dormant list, even if grayed out. MHBT is no longer doing business as MHBT."
+        // ⭐ ONLY `succeeded` is excluded. A `division` -- HUB Wellspring, USI - OH -- is still
+        // trading and is somebody you can actually ring, so it STAYS on the list on its own
+        // merits. That distinction is the whole reason `relationship` exists beside `parent_id`.
         " GROUP BY " + AGENCY_EXPR +
         " HAVING n >= 5 AND recent = 0 " +
+        "    AND COALESCE(MAX(a.relationship),'') <> 'succeeded' " +
         " ORDER BY n DESC LIMIT 40").bind(...args).all();
-      // Mark the ones that are not a lapse at all. Done here rather than on the page so the
-      // register has ONE reader and cannot drift between screens.
+      // Attach who to call. Done here rather than on the page so the register has ONE reader
+      // and cannot drift between screens.
+      // ⭐ The acquisition register now lives in the DATABASE (agencies.parent_id), not in the
+      // SUCCEEDED_BY constant -- Eric's own note said a constant would not survive past about ten
+      // entries, and HUB alone contributed three.
       dormant = (r4.results || []).map(function (d) {
         var key = (d.agency_label || '').trim();
-        var hit = SUCCEEDED_BY[key];
         var who = AGENCY_CONTACTS[key];
-        var out = hit ? Object.assign({}, d, { succeeded_by: hit.by, succeeded_when: hit.when,
-                                               succeeded_note: hit.note })
-                      : Object.assign({}, d);
+        var out = Object.assign({}, d);
         if (who) out.contact = who;
         return out;
       });
@@ -4771,6 +4891,34 @@ const MIGRATIONS = [
   { sql: "ALTER TABLE agencies ADD COLUMN priority TEXT", table: "agencies", column: "priority" },
   { sql: "ALTER TABLE brokers  ADD COLUMN notes TEXT",    table: "brokers",  column: "notes" },
   { sql: "ALTER TABLE agencies ADD COLUMN notes TEXT",    table: "agencies", column: "notes" },
+
+  // ── Parent agencies, acquisitions and divisions (Eric, 2026-08-22) ──────────────────────────
+  //
+  // "When an agency is acquired, I think we should have their quotes under the other agency in a
+  // drop down. For instance, MMA would have the MMA and MHBT quote count combined in the big view
+  // ... Because 9 years after they've stopped using the name, we don't need to see MHBT on a
+  // dormant list, even if grayed out. MHBT is no longer doing business as MHBT. But there are
+  // others where they truly are separate divisions ... For instance, HUB."
+  //
+  // 🔴🔴 THOSE TWO CASES LOOK IDENTICAL IN A PARENT-CHILD TABLE AND MUST BEHAVE IN OPPOSITE WAYS.
+  // That is the whole reason `relationship` exists beside `parent_id`:
+  //
+  //   succeeded  the child name is DEAD. MHBT -> MMA. It rolls up, it shows in the drop-down with
+  //              its own historical count, and it must NEVER appear on the fallen-off list --
+  //              there is nobody left to ring. It cannot hold a rep or a contact.
+  //   division   the child is ALIVE. HUB Fort Worth, HUB Wellspring, USI - OH, OneDigital - TX.
+  //              It rolls up AND stays on the fallen-off list on its own merits, because it is a
+  //              real relationship somebody can call, with its own owner.
+  //
+  // ⛔ THE QUOTES ARE NEVER REWRITTEN. A 2013 quote really was MHBT, and relabelling it MMA would
+  // put MMA in the log four years before it appears there at all. This is a DISPLAY-TIME parent,
+  // not a data rewrite -- the same rule the SUCCEEDED_BY constant already followed.
+  //
+  // ⭐ It replaces that constant, which was always going to outgrow source code: Gallagher
+  // acquires constantly, and HUB alone contributes three rows.
+  { sql: "ALTER TABLE agencies ADD COLUMN parent_id TEXT",         table: "agencies", column: "parent_id" },
+  { sql: "ALTER TABLE agencies ADD COLUMN relationship TEXT",      table: "agencies", column: "relationship" },
+  { sql: "ALTER TABLE agencies ADD COLUMN relationship_note TEXT", table: "agencies", column: "relationship_note" },
 
   // ── When the employer signed (Eric, 2026-08-18) ─────────────────────────────────────────────
   //
