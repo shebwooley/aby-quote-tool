@@ -4760,6 +4760,16 @@ function jsonResp(data, status = 200) {
     headers: {
       'Content-Type':                'application/json',
       'Access-Control-Allow-Origin': '*',
+      // no-store, AND IT IS NOT A TIDY-UP. Every admin PAGE already sends no-store, but the JSON
+      // those pages actually read sent no cache headers at all -- so the shell arrived fresh and
+      // the numbers inside it were whatever the browser had kept.
+      // FOUND 2026-08-22: "Quotes by status" went on reporting 5,967 Pending through two deploys
+      // that had demonstrably changed the query, and a cache-busting query string on the PAGE did
+      // not help, because it was the /api/ response being reused. A deploy that looks like it did
+      // not work is the most expensive kind -- the next move is to change the code again.
+      // Do not "optimise" this away: these endpoints serve live business data to one operator, so
+      // there is nothing to gain by caching them and a wrong number to lose.
+      'Cache-Control':               'no-store',
     },
   });
 }
