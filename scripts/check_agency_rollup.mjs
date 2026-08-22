@@ -168,12 +168,66 @@ const RULES = [
     },
   },
   {
+    // 🔴🔴 THE RULE THAT WOULD HAVE CAUGHT THE ONE BUG THAT REACHED PRODUCTION TODAY.
+    // A missing comma after "AS days_quiet" made the SELECT list read
+    //     ... AS days_quiet MAX(a.relationship) AS relationship
+    // which is a syntax error, so the query threw, the try/catch swallowed it, and the card
+    // rendered "Nobody has fallen off" over a hundred dormant agencies. No error on the page.
+    // ⭐ THE TELL IS GENERAL: in a SELECT list split on commas, a fragment containing TWO
+    // " AS " is a fragment where a comma is missing. Cheap, and it needs no database.
+    name: "no missing comma in the fallen-off SELECT list",
+    holds(src) {
+      const s = src || SRC;
+      const i = s.indexOf("const r4");
+      if (i === -1) return false;
+      const seg = s.slice(i, s.indexOf("FROM quotes q", i));
+      // Recover the SQL from the concatenated string literals, dropping // comment lines.
+      const sql = seg
+        .split("\n")
+        .filter((l) => !l.trim().startsWith("//"))
+        .join("\n")
+        .split('"')
+        .filter((_, n) => n % 2 === 1)
+        .join("");
+      const list = sql.replace(/^\s*SELECT\s+/i, "");
+      // Split on commas that are not inside parentheses.
+      const parts = [];
+      let depth = 0, cur = "";
+      for (const ch of list) {
+        if (ch === "(") depth++;
+        else if (ch === ")") depth--;
+        if (ch === "," && depth === 0) { parts.push(cur); cur = ""; } else cur += ch;
+      }
+      parts.push(cur);
+      // ⚠️ COUNT " AS " ONLY AT DEPTH ZERO. The first version of this rule counted it anywhere in
+      // the fragment and reported a FALSE POSITIVE on the very line it was written for:
+      // CAST(julianday(...) AS INTEGER) AS days_quiet legitimately has two, one inside the CAST.
+      // TRAPS #24 -- a new checker's first run is evidence about the CHECKER, not about the code.
+      const outerAs = (p) => {
+        let d = 0, out = "";
+        for (const ch of p) {
+          if (ch === "(") d++;
+          else if (ch === ")") d--;
+          else if (d === 0) out += ch;
+        }
+        return (out.match(/\sAS\s/gi) || []).length;
+      };
+      return parts.every((p) => outerAs(p) <= 1);
+    },
+  },
+  {
     name: "the fallen-off query excludes acquired names but keeps divisions",
     holds(src) {
       const s = src || SRC;
       const i = s.indexOf("const r4");
       if (i === -1) return false;
-      const seg = s.slice(i, i + 2600);
+      // ⚠️ SLICE TO THE END OF THE STATEMENT, NOT A FIXED NUMBER OF CHARACTERS. This read
+      // s.slice(i, i + 2600) and went red the moment a comment was added above the HAVING --
+      // reporting the rule broken when only the file had grown. TRAPS #172: a fixed-width window
+      // is not a parser, and it always fails on the thing furthest from the anchor.
+      const end = s.indexOf(".bind(", i);
+      if (end === -1) return false;
+      const seg = s.slice(i, end);
       return seg.includes("<> 'succeeded'") && !seg.includes("<> 'division'");
     },
   },
@@ -196,6 +250,11 @@ const SABOTAGES = [
                             "void pn;") },
   { why: "the fallen-off list stops excluding acquired names",
     apply: (s) => s.replace("AND COALESCE(MAX(a.relationship),'') <> 'succeeded' ", "") },
+  // Reproduces the real bug on demand: drop the comma and the SELECT list becomes invalid SQL.
+  // A checker whose self-test replays the failure it was written for is one you can still trust
+  // in a year.
+  { why: "the comma after days_quiet goes missing again",
+    apply: (s) => s.replace("AS INTEGER) AS days_quiet, ", "AS INTEGER) AS days_quiet ") },
 ];
 
 function main() {

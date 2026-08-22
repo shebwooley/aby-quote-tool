@@ -2890,12 +2890,12 @@ ${abyAdminNav('/admin/brokers')}
      noteEl.innerHTML = hiddenAgents
        ? (NAMED_ONLY
            ? 'Showing the <b>' + namedAgents.length + '</b> agents we can name. '
-             + '<b>' + hiddenAgents + '</b> more rows record an agency but no individual '
+             + '<b>' + hiddenAgents + '</b> more rows record an agency but no individual. '
              + '<button type="button" id="agentToggle" style="background:none;border:0;'
              + 'color:#2f6f4f;font-size:12.5px;cursor:pointer;text-decoration:underline;'
              + 'padding:0">show them</button>'
            : 'Showing all <b>' + allAgents.length + '</b> rows, including <b>' + hiddenAgents
-             + '</b> that record an agency but no individual '
+             + '</b> that record an agency but no individual. '
              + '<button type="button" id="agentToggle" style="background:none;border:0;'
              + 'color:#2f6f4f;font-size:12.5px;cursor:pointer;text-decoration:underline;'
              + 'padding:0">name only</button>')
@@ -3852,7 +3852,14 @@ async function handleAdminStats(request, env) {
         "SELECT " + AGENCY_EXPR + " AS agency_label, COUNT(*) AS n, " +
         "       MAX(q.created_at) AS last_quote, " +
         "       SUM(CASE WHEN q.created_at >= datetime('now','-365 days') THEN 1 ELSE 0 END) AS recent, " +
-        "       CAST(julianday('now') - julianday(MAX(q.created_at)) AS INTEGER) AS days_quiet " +
+        // 🔴🔴 THE COMMA AT THE END OF THIS LINE IS LOAD-BEARING AND WAS MISSING FOR ONE DEPLOY.
+        // Without it the SELECT list read "... AS days_quiet MAX(a.relationship) AS relationship",
+        // which is a SQL syntax error -- so this whole query threw, the try/catch swallowed it,
+        // and the fallen-off card rendered its EMPTY-STATE message: "Nobody has fallen off." A
+        // hundred dormant agencies, reported as none, with no error anywhere on the page.
+        // ⭐ Ten checker rules passed, because they read the source instead of running the SQL.
+        // Only opening the page found it. check_agency_rollup.mjs now parses this SELECT list.
+        "       CAST(julianday('now') - julianday(MAX(q.created_at)) AS INTEGER) AS days_quiet, " +
         // 🔴 BROKER_JOIN NOW CARRIES THE AGENCIES JOIN WITH IT, which is what makes this safe.
         // BROKER_JOIN alone brings in `brokers b` and nothing else, so the first version of
         // this query referenced an unresolved column, threw, and left the card empty -- while
