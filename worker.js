@@ -93,6 +93,15 @@ export default {
     if (/^\/q\/[a-z2-9]{16}$/.test(path) && method === 'GET') {
       return serveSharedQuote(path.slice(3), env, request);
     }
+    // BOTH LOOKUPS ARE ADMIN ONLY. Each answers a question about ABY's book -- who a broker is,
+    // and which agencies ABY works with. On a public endpoint either would be a harvesting
+    // surface, and Eric's ask was about quotes ABY runs, so nothing is lost by gating them.
+    if (path === '/api/broker-lookup' && method === 'GET') {
+      return withAuth(request, env, () => handleBrokerLookup(url, env));
+    }
+    if (path === '/api/agency-lookup' && method === 'GET') {
+      return withAuth(request, env, () => handleAgencyLookup(url, env));
+    }
     // Minting one is ADMIN ONLY. Anyone who could mint a token could publish any quote.
     if (/^\/api\/quotes\/[^/]+\/share$/.test(path) && method === 'POST') {
       return withAuth(request, env, () => handleShareQuote(path.split('/')[3], env, url));
@@ -404,6 +413,10 @@ async function handleSaveQuote(request, env, ctx) {
     }
   }
 
+  // REMEMBER THE BROKER (F-366). Best-effort and outside every branch: a re-opened quote is
+  // still evidence of who this broker is, and the point is to learn them once.
+  await rememberBroker(env, { brokerEmail, brokerName, brokerPhone, brokerAgency });
+
   // Notify on a NEW quote or a real revision -- never on a re-open, which is the duplicate
   // notification this fix removes.
   if (isNew || !unchanged) {
@@ -682,6 +695,92 @@ async function handleShareQuote(id, env, url) {
 // page itself is: 128 bits of randomness, and the only thing it can do is annotate the ONE
 // quote it belongs to. It CANNOT change the quote, the price, or ABY's own count -- those stay
 // exactly as quoted, which is ruling 1 expressed in the schema rather than in the UI.
+// --- The broker directory: remember them once, prefill after that (F-366) -----
+//
+// Eric, 2026-08-21: "is there any way for quotes that ABY is running for us to save the broker's
+// info (name, email, phone, agency, logo) so that when we want to quote for them we could
+// populate that stuff automatically instead of us having to start from scratch every time?"
+//
+// 🔴 IT IS ITS OWN TABLE, AND THAT IS THE WHOLE DESIGN DECISION. The obvious home is brokers,
+// which already has exactly these columns -- and writing there would BREAK BROKER SIGNUP. That
+// table backs self-service accounts: handleRegister refuses with "An account already exists
+// for that email. Try signing in." the moment a row exists, and an auto-created row has an empty
+// password_hash, which verifyPassword always rejects. So every broker ABY ever quoted for
+// would be permanently locked out of registering, told an account exists that nobody can sign
+// into. The invite path skips them for the same reason.
+// ⭐ A directory of people we have quoted for is not a list of people with accounts. Two
+// different facts, two tables.
+//
+// ⚠️ THE FIRST VERSION OF THIS ROW SAID THE DETAILS WERE ALREADY SITTING IN 1,752 QUOTES. They
+// are not: measured 2026-08-21, ten quotes carry a broker name and six an email. The imported
+// history only ever had an agency column. So this CAPTURES FORWARD -- it starts nearly empty and
+// becomes useful with use, which is a different promise from "we already have this".
+
+async function rememberBroker(env, fields) {
+  const email = String(fields.brokerEmail || '').trim().toLowerCase();
+  // No email, no identity. There is nothing to key a directory on and a row per typo is worse
+  // than no row.
+  if (!email || email.indexOf('@') === -1 || email.length > 200) return;
+
+  const name   = String(fields.brokerName   || '').trim().slice(0, 120);
+  const phone  = String(fields.brokerPhone  || '').trim().slice(0, 40);
+  const agency = String(fields.brokerAgency || '').trim().slice(0, 120);
+  const now    = new Date().toISOString();
+
+  try {
+    // COALESCE(NULLIF(...)) on every field: a later quote that leaves the phone blank must not
+    // erase the phone we already learned. A blank is "not stated on this quote", never "cleared".
+    await env.DB.prepare(
+      'INSERT INTO broker_directory (email, name, phone, agency, first_seen, last_seen, quote_count) ' +
+      'VALUES (?,?,?,?,?,?,1) ' +
+      'ON CONFLICT(email) DO UPDATE SET ' +
+      "  name        = COALESCE(NULLIF(excluded.name, ''), broker_directory.name), " +
+      "  phone       = COALESCE(NULLIF(excluded.phone, ''), broker_directory.phone), " +
+      "  agency      = COALESCE(NULLIF(excluded.agency, ''), broker_directory.agency), " +
+      '  last_seen   = excluded.last_seen, ' +
+      '  quote_count = broker_directory.quote_count + 1'
+    ).bind(email, name, phone, agency, now, now).run();
+  } catch (err) {
+    // Best-effort, like source_tag: the table is newer than the save path and a quote must save
+    // whether or not it exists.
+    console.warn('broker_directory not updated:', String(err && err.message || err));
+  }
+}
+
+// ADMIN ONLY, AND DELIBERATELY SO. This answers "who is broker@example.com?" with a name, a
+// phone and an agency. On a PUBLIC endpoint that is an enumeration surface -- anyone could probe
+// addresses and harvest the answer. Eric's ask was specifically about "quotes that ABY is
+// running", so the prefill belongs to an authenticated ABY session and nothing is lost by
+// keeping it there.
+async function handleBrokerLookup(url, env) {
+  const q = String(url.searchParams.get('q') || '').trim().toLowerCase();
+  if (q.length < 2) return jsonResp({ matches: [] });
+
+  const like = '%' + q.replace(/[%_]/g, '') + '%';
+  const r = await env.DB.prepare(
+    'SELECT email, name, phone, agency, quote_count FROM broker_directory ' +
+    'WHERE lower(email) LIKE ? OR lower(name) LIKE ? OR lower(agency) LIKE ? ' +
+    // Most-quoted first: the person ABY deals with often is the one they are most likely typing.
+    'ORDER BY quote_count DESC, last_seen DESC LIMIT 8'
+  ).bind(like, like, like).all();
+  return jsonResp({ matches: r.results || [] });
+}
+
+// The agency names ABY has actually used, for the agency box. Straight from the quote history,
+// which is the one field the imported book DOES carry -- 189 distinct names across 1,751 quotes.
+// Admin only for the same reason as above: the agency list is ABY's book of business.
+async function handleAgencyLookup(url, env) {
+  const q = String(url.searchParams.get('q') || '').trim().toLowerCase();
+  if (q.length < 2) return jsonResp({ matches: [] });
+  const like = '%' + q.replace(/[%_]/g, '') + '%';
+  const r = await env.DB.prepare(
+    'SELECT trim(broker_agency) AS agency, COUNT(*) AS n FROM quotes ' +
+    "WHERE trim(COALESCE(broker_agency,'')) <> '' AND lower(broker_agency) LIKE ? " +
+    'GROUP BY trim(broker_agency) ORDER BY n DESC LIMIT 8'
+  ).bind(like).all();
+  return jsonResp({ matches: r.results || [] });
+}
+
 async function handleEmployerCount(token, request, env) {
   let body;
   try { body = await request.json(); }
@@ -6136,7 +6235,131 @@ const ABY_INTERNAL_JS = `
     recompute(panel);
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', build);
-  else build();
+  // --- Broker prefill, for an ABY session only (F-366) -------------------------
+  //
+  // Eric: "so that when we want to quote for them we could populate that stuff automatically
+  // instead of us having to start from scratch every time."
+  //
+  // Type two characters of a name, an email or an agency into the broker box and pick the
+  // person. Name, email, phone and agency fill together, because they are one fact about one
+  // person and filling them one at a time is the retyping this removes.
+  //
+  // ⛔ IT LIVES IN THE ABY OVERLAY, which is served only to an authenticated session, and the
+  // endpoints behind it are admin-gated as well. A public "who is this email" box is a
+  // harvesting surface; Eric asked for it on the quotes ABY runs, so that is where it is.
+  //
+  // ⚠️ IT NEVER OVERWRITES SOMETHING ALREADY TYPED unless the user picks a suggestion. Picking
+  // is a deliberate act; typing is not, and a box that rewrites itself while you work is worse
+  // than one that stays empty.
+  function attachDirectoryPrefill() {
+    var nameEl   = document.querySelector('[name="brokerName"]');
+    var emailEl  = document.querySelector('[name="brokerEmail"]');
+    var phoneEl  = document.querySelector('[name="brokerPhone"]');
+    var agencyEl = document.querySelector('[name="brokerAgency"]');
+    if (!nameEl || !emailEl) return;
+
+    var box = document.createElement('div');
+    box.className = 'aby-suggest';
+    box.style.cssText = 'position:absolute;z-index:60;background:#fff;border:1px solid #b8cddd;' +
+      'border-radius:6px;box-shadow:0 6px 20px rgba(20,60,115,.14);min-width:280px;display:none;' +
+      'max-height:260px;overflow:auto;font-size:13px;';
+    document.body.appendChild(box);
+
+    var timer = null, activeEl = null;
+
+    function hide() { box.style.display = 'none'; activeEl = null; }
+
+    function place(el) {
+      var r = el.getBoundingClientRect();
+      box.style.left = (r.left + window.scrollX) + 'px';
+      box.style.top = (r.bottom + window.scrollY + 4) + 'px';
+      box.style.minWidth = Math.max(280, r.width) + 'px';
+    }
+
+    function row(html, onPick) {
+      var d = document.createElement('div');
+      d.style.cssText = 'padding:7px 10px;cursor:pointer;border-bottom:1px solid #eef3f7;';
+      d.innerHTML = html;
+      d.addEventListener('mouseenter', function () { d.style.background = '#f2f7fb'; });
+      d.addEventListener('mouseleave', function () { d.style.background = '#fff'; });
+      // mousedown, not click: a click fires after the input's blur, and blur hides the box.
+      d.addEventListener('mousedown', function (e) { e.preventDefault(); onPick(); hide(); });
+      box.appendChild(d);
+    }
+
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+      });
+    }
+
+    function set(el, v) { if (el && v) el.value = v; }
+
+    function lookupBrokers(el) {
+      var q = el.value.trim();
+      if (q.length < 2) return hide();
+      fetch('/api/broker-lookup?q=' + encodeURIComponent(q))
+        .then(function (r) { return r.ok ? r.json() : { matches: [] }; })
+        .then(function (d) {
+          var m = (d && d.matches) || [];
+          if (!m.length) return hide();
+          box.innerHTML = '';
+          m.forEach(function (b) {
+            row('<strong>' + esc(b.name || b.email) + '</strong>'
+                + (b.agency ? ' <span style="color:#5f6b76">' + esc(b.agency) + '</span>' : '')
+                + '<br><span style="color:#5f6b76">' + esc(b.email)
+                + (b.quote_count > 1 ? ' &middot; ' + b.quote_count + ' quotes' : '') + '</span>',
+              function () {
+                // All four together. They describe one person.
+                set(nameEl, b.name); set(emailEl, b.email);
+                set(phoneEl, b.phone); set(agencyEl, b.agency);
+              });
+          });
+          place(el); activeEl = el; box.style.display = 'block';
+        })
+        .catch(hide);
+    }
+
+    function lookupAgencies(el) {
+      var q = el.value.trim();
+      if (q.length < 2) return hide();
+      fetch('/api/agency-lookup?q=' + encodeURIComponent(q))
+        .then(function (r) { return r.ok ? r.json() : { matches: [] }; })
+        .then(function (d) {
+          var m = (d && d.matches) || [];
+          if (!m.length) return hide();
+          box.innerHTML = '';
+          m.forEach(function (a) {
+            row('<strong>' + esc(a.agency) + '</strong> <span style="color:#5f6b76">'
+                + a.n + ' quote' + (a.n === 1 ? '' : 's') + '</span>',
+              function () { set(agencyEl, a.agency); });
+          });
+          place(el); activeEl = el; box.style.display = 'block';
+        })
+        .catch(hide);
+    }
+
+    function wire(el, fn) {
+      if (!el) return;
+      el.addEventListener('input', function () {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(function () { fn(el); }, 220);
+      });
+      el.addEventListener('blur', function () { setTimeout(hide, 150); });
+      el.addEventListener('keydown', function (e) { if (e.key === 'Escape') hide(); });
+    }
+
+    wire(nameEl, lookupBrokers);
+    wire(emailEl, lookupBrokers);
+    // The agency box gets the AGENCY list, which comes from the quote history rather than the
+    // directory -- it is the one field the imported book actually carries, 189 names deep.
+    wire(agencyEl, lookupAgencies);
+
+    window.addEventListener('scroll', function () { if (activeEl) place(activeEl); }, true);
+  }
+
+  function boot() { build(); attachDirectoryPrefill(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
 })();
 `;
