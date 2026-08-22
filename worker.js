@@ -2643,25 +2643,107 @@ ${abyAdminNav('/admin/brokers')}
      var dmN   = live.reduce(function(t,x){ return t+(x.n||0); }, 0);
      var el = document.getElementById('insights');
      if (!el) return;
+
+     // 🔴🔴 ERIC, 2026-08-22: "10-49 band of what? 28% of what? Total quotes all time? Or, when we
+     // filter by time period, 28% of quotes during the time frame?" -- and separately, "2 of the
+     // five insights apply no matter what timeframe you're looking at."
+     // ⭐⭐ RIGHT ON BOTH, AND THE SECOND IS THE STRUCTURAL ONE. The byAgency and totals queries DO
+     // respect the Since filter; the dormant query deliberately does NOT, because "fallen off" is a
+     // whole-history question -- scoping it would make it mean "quiet inside the window", which is
+     // every agency outside that window. So this card was mixing two populations with nothing on
+     // screen saying which was which, and every percentage had an unstated denominator.
+     // ⛔ NO BACKTICKS IN THIS COMMENT, AND THAT IS NOT A STYLE CHOICE: this whole page is one
+     // template literal, so a backtick ends it early and the parse error then blames an innocent
+     // line much further down. Name identifiers in words here. (TRAPS #248 -- and the page checker
+     // caught this comment doing it on the first run, which is the fifth time in this file.)
+     // ▶️ SPLIT THEM UNDER HEADINGS THAT NAME THE PERIOD, and spell out what each number is a
+     // share OF. A denominator the reader has to infer is one they will quote wrong later.
+     var sel = document.getElementById('fSince');
+     var periodText = 'all time';
+     if (sel && sel.value) {
+       var opt = sel.options[sel.selectedIndex];
+       periodText = String((opt && opt.text) || '').toLowerCase();
+     }
+     var scoped = !!(sel && sel.value);
+     var ofPeriod = scoped ? 'quotes in this period' : 'all quotes ever';
+
+     // How few agencies it takes to reach half the book. A sharper concentration figure than a
+     // fixed top-10, because it does not assume ten is the interesting cut.
+     var half = 0, run = 0;
+     for (var i = 0; i < sorted.length; i++) {
+       run += (sorted[i].n || 0);
+       if (run * 2 >= tot) { half = i + 1; break; }
+     }
+
+     // The MEDIAN agency, which is what makes the long tail concrete. A mean is dragged upward by
+     // the top ten and describes nobody in the book.
+     var med = 0;
+     if (sorted.length) {
+       var ns = sorted.map(function(x){ return Number(x.n || 0); }).sort(function(a,b){ return a-b; });
+       var mi = Math.floor(ns.length / 2);
+       med = ns.length % 2 ? ns[mi] : Math.round((ns[mi-1] + ns[mi]) / 2);
+     }
+
+     // ⚠️ The sales figure is only populated from late May 2025, where the mailbox starts, so
+     // "no sale recorded" is a statement about WHAT WE CAN SEE, not about the agency. Said on screen
+     // rather than left for the reader to discover, because it reads as a conversion rate otherwise.
+     var noSale = sorted.filter(function(x){ return !Number(x.sales || 0); }).length;
+     var multi  = sorted.filter(function(x){ return Number(x.agents || 0) > 1; }).length;
+
+     function li(s){ return '<li>' + s + '</li>'; }
+
+     var inPeriod = [
+       li('<b>' + ag.length.toLocaleString() + ' agencies</b> sent at least one quote'
+          + (scoped ? ' in this period' : ' at some point') + ', '
+          + tot.toLocaleString() + ' quotes between them.'),
+       li('The <b>top 10</b> agencies account for <b>' + Math.round(100*top10/tot) + '%</b> of '
+          + ofPeriod + '.'),
+       (half ? li('It takes only <b>' + half + ' of the ' + ag.length.toLocaleString() + ' agencies</b>'
+          + ' to reach <b>half</b> of ' + ofPeriod + '.') : ''),
+       li('<b>' + mid.length + ' agencies</b> have sent <b>between 10 and 49 quotes</b> each, and'
+          + ' together they are <b>' + Math.round(100*midN/tot) + '%</b> of ' + ofPeriod + '.'
+          + ' That is the middle of the book, and usually where growth is cheapest'
+          + ' &mdash; they already know us.'),
+       li('The <b>typical</b> agency has sent <b>' + med + '</b> '
+          + (med === 1 ? 'quote' : 'quotes') + ' &mdash; half sent that many or fewer.'),
+       li('<b>' + multi + ' agencies</b> reach us through <b>more than one agent</b>.'
+          + ' The rest come through a single person.'),
+       li('<b>' + noSale + ' of ' + ag.length.toLocaleString() + ' agencies</b> have quoted with no'
+          + ' sale recorded against them. <span class="muted">Sales are only on file from late May'
+          + ' 2025, so this counts what we can see, not what they bought.</span>')
+     ].filter(function(s){ return s; }).join('');
+
+     var wholeHistory = [
+       li('<b>' + ones + ' agencies</b> have sent exactly <b>one quote, ever</b>.'),
+       (live.length
+         ? li('<b>' + live.length + ' agencies</b> that sent us five or more quotes have gone quiet'
+              + ' for over a year, worth <b>' + dmN.toLocaleString() + '</b> quotes historically.'
+              + ' They are listed below.')
+         : ''),
+       (acq.length
+         ? li(acq.length + ' more look dormant but were <b>acquired</b> &mdash; '
+              + acq.map(function(x){ return esc(x.agency_label)+' is now '+esc(x.succeeded_by); }).join(', ')
+              + '. Not a call to make.')
+         : '')
+     ].filter(function(s){ return s; }).join('');
+
+     function block(title, note, items){
+       return '<div style="margin-bottom:14px">'
+         + '<div style="font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#6b7b72;'
+         + 'font-weight:600;margin-bottom:4px">' + title + '</div>'
+         + (note ? '<div class="muted" style="font-size:12px;margin-bottom:6px">' + note + '</div>' : '')
+         + '<ul style="margin:0;padding-left:18px;line-height:1.7">' + items + '</ul></div>';
+     }
+
      el.innerHTML =
-       '<ul style="margin:0;padding-left:18px;line-height:1.7">'
-       + '<li><b>' + Math.round(100*top10/tot) + '%</b> of quotes come from the <b>top 10</b> agencies'
-       + ' of ' + ag.length.toLocaleString() + '.</li>'
-       + '<li><b>' + mid.length + ' agencies</b> sit in the 10&ndash;49 band and account for <b>'
-       + Math.round(100*midN/tot) + '%</b>. That is the middle, and it is usually where growth is'
-       + ' cheapest &mdash; they already know us.</li>'
-       + '<li><b>' + ones + ' agencies</b> have sent exactly one quote, ever.</li>'
-       + (live.length
-           ? '<li><b>' + live.length + ' agencies</b> that sent us five or more quotes have gone quiet'
-             + ' for over a year, worth <b>' + dmN.toLocaleString() + '</b> quotes historically.'
-             + ' They are listed below.</li>'
-           : '')
-       + (acq.length
-           ? '<li>' + acq.length + ' more look dormant but were <b>acquired</b> &mdash; '
-             + acq.map(function(x){ return esc(x.agency_label)+' is now '+esc(x.succeeded_by); }).join(', ')
-             + '. Not a call to make.</li>'
-           : '')
-       + '</ul>';
+       block('Showing: ' + esc(periodText),
+             'These move when you change the Since filter.',
+             inPeriod)
+       + block('Whole history',
+               'These cover the entire book and do <b>not</b> change with the Since filter'
+               + ' &mdash; an agency is not "fallen off" just because it is quiet inside a window'
+               + ' you picked.',
+               wholeHistory);
    })();
 
    CACHE.byAgent=st.byAgent||[];
