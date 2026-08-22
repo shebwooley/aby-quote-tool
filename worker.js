@@ -2311,6 +2311,17 @@ ${abyAdminNav('/admin/brokers')}
 <main>
   <div id="warn" style="display:none;background:#fdecec;color:#a12622;border:1px solid #f3c2c2;border-radius:8px;padding:10px 13px;margin:0 0 16px;font-size:13.5px"></div>
   <div class="filters">
+    <!-- Eric, 2026-08-22: "a filter where we could choose to see number of quotes/sales since a
+         specific date? Like 1/1/26, last 12 months, 1/1/25 for example." The named ranges are his,
+         and the worker only ever receives a resolved ISO date -- the vocabulary lives here. -->
+    <span class="muted" style="font-size:13px">Since:</span>
+    <select id="fSince" style="margin-right:14px">
+      <option value="">All time</option>
+      <option value="ytd">This year (1 Jan 2026)</option>
+      <option value="12m">Last 12 months</option>
+      <option value="2025">Since 1 Jan 2025</option>
+      <option value="2024">Since 1 Jan 2024</option>
+    </select>
     <span class="muted" style="font-size:13px">Show:</span>
     <button data-rep="" class="on">Everyone</button>
     <button data-rep="eric">Eric</button>
@@ -2321,6 +2332,9 @@ ${abyAdminNav('/admin/brokers')}
        renders blank on a database error is indistinguishable from one with no data. -->
   <div id="statsWarn" style="display:none;margin:0 0 14px;padding:10px 14px;border-radius:7px;
        background:#fdf1e0;border:1px solid #f0d9ae;color:#7a5410;font-size:13px"></div>
+  <div class="card"><h2>Insights</h2>
+    <p class="sub">Derived from the tables below, so nothing here can disagree with them.</p>
+    <div id="insights"><p class="muted">Loading...</p></div></div>
   <div class="card"><h2>Quotes by agency</h2>
     <p class="sub">Counted from every quote ever run, including from people who never made an account.</p>
     <div id="byAgency"><p class="muted">Loading...</p></div></div>
@@ -2333,6 +2347,11 @@ ${abyAdminNav('/admin/brokers')}
     <p class="sub">Pending and in-process quotes only &mdash; a sold or dead quote is not waiting on
       anybody &mdash; and 2026 onward only. The back-catalog is below.</p>
     <div id="aging"><p class="muted">Loading...</p></div></div>
+  <div class="card"><h2>Agencies that have fallen off</h2>
+    <p class="sub">Sent us five or more quotes at some point and nothing in the last 12 months.
+      Worth a call. Not affected by the Since filter &mdash; the question is about the whole
+      history by definition.</p>
+    <div id="dormant"><p class="muted">Loading...</p></div></div>
   <div class="card"><h2>Historic quotes, by year</h2>
     <p class="sub">Everything before 2026, newest first. Aging buckets say nothing across fifteen
       years; a year count does.</p>
@@ -2352,6 +2371,9 @@ ${abyAdminNav('/admin/brokers')}
      b.className='on'; load();
    };
  });
+ // The Since dropdown reloads the same way the rep buttons do -- one code path, so the two
+ // filters cannot end up applying to different sets.
+ (function(){ var e=document.getElementById('fSince'); if(e) e.onchange=load; })();
  function repSelect(kind,id,cur){
    var o=['','eric','niels'].map(function(v){
      return '<option value="'+v+'"'+((cur||'')===v?' selected':'')+'>'+(v===''?'\u2014':(v==='eric'?'Eric':'Niels'))+'</option>';
@@ -2410,8 +2432,26 @@ ${abyAdminNav('/admin/brokers')}
    });
  }
 
+ // The named ranges live HERE, not in the worker: the worker takes a resolved ISO date and
+ // nothing else, so "last 12 months" cannot mean two different things on two screens.
+ function sinceISO(){
+   var v=(document.getElementById('fSince')||{}).value||'';
+   var now=new Date();
+   if(v==='ytd')  return now.getFullYear()+'-01-01';
+   if(v==='2025') return '2025-01-01';
+   if(v==='2024') return '2024-01-01';
+   if(v==='12m'){
+     var d=new Date(now.getTime()); d.setFullYear(d.getFullYear()-1);
+     return d.toISOString().slice(0,10);
+   }
+   return '';
+ }
+
  async function load(){
-   var q=rep?('?rep='+encodeURIComponent(rep)):'';
+   var parts=[];
+   if(rep) parts.push('rep='+encodeURIComponent(rep));
+   var sv=sinceISO(); if(sv) parts.push('since='+encodeURIComponent(sv));
+   var q=parts.length?('?'+parts.join('&')):'';
    var b=await (await fetch('/api/admin/brokers'+q)).json().catch(function(){return{}});
    var list=b.brokers||[];
    CACHE.brokers=list;
@@ -2558,6 +2598,53 @@ ${abyAdminNav('/admin/brokers')}
              +'<td class="c">'+x.employers+'</td><td class="c">'+x.agencies+'</td></tr>';
          }).join('')+'</tbody></table>'
      : '<p class="muted">Nothing before 2026.</p>';
+
+   // Agencies that have fallen off.
+   var dm = st.dormant || [];
+   document.getElementById('dormant').innerHTML = dm.length
+     ? '<table class="grid"><colgroup><col style="width:40%"><col style="width:15%">'
+       + '<col style="width:20%"><col style="width:25%"></colgroup>'
+       + '<thead><tr><th>Agency</th><th class="c">Quotes ever</th>'
+       + '<th class="date">Last quote</th><th class="c">Quiet for</th></tr></thead><tbody>'
+       + dm.map(function(x){
+           var yrs = Math.floor((x.days_quiet||0)/365), mos = Math.round(((x.days_quiet||0)%365)/30);
+           var quiet = yrs ? (yrs+' yr'+(yrs>1?'s':'')+(mos?' '+mos+' mo':'')) : ((x.days_quiet||0)+' days');
+           return '<tr><td class="wrapcell">'+esc(x.agency_label||'(no agency)')+'</td>'
+             +'<td class="c">'+x.n+'</td><td class="date">'+day(x.last_quote)+'</td>'
+             +'<td class="c">'+quiet+'</td></tr>';
+         }).join('')+'</tbody></table>'
+     : '<p class="muted">Nobody has fallen off &mdash; every agency with five or more quotes has sent one in the last 12 months.</p>';
+
+   // INSIGHTS. Eric, 2026-08-22: "would it be possible to provide some insights?"
+   // Every number here is derived from what is already on this page, so nothing can disagree with
+   // the tables under it. Concentration is the one that changes what you do: a book where a
+   // handful of agencies carry most of the volume is a different business from a broad one.
+   (function(){
+     var ag = CACHE.byAgency || [], tot = (st.totals && st.totals.quotes) || 0;
+     if (!ag.length || !tot) return;
+     var sorted = ag.slice().sort(function(a,b){ return (b.n||0)-(a.n||0); });
+     var top10 = sorted.slice(0,10).reduce(function(t,x){ return t+(x.n||0); }, 0);
+     var ones  = sorted.filter(function(x){ return (x.n||0) === 1; }).length;
+     var mid   = sorted.filter(function(x){ return (x.n||0) >= 10 && (x.n||0) <= 49; });
+     var midN  = mid.reduce(function(t,x){ return t+(x.n||0); }, 0);
+     var dmN   = dm.reduce(function(t,x){ return t+(x.n||0); }, 0);
+     var el = document.getElementById('insights');
+     if (!el) return;
+     el.innerHTML =
+       '<ul style="margin:0;padding-left:18px;line-height:1.7">'
+       + '<li><b>' + Math.round(100*top10/tot) + '%</b> of quotes come from the <b>top 10</b> agencies'
+       + ' of ' + ag.length.toLocaleString() + '.</li>'
+       + '<li><b>' + mid.length + ' agencies</b> sit in the 10&ndash;49 band and account for <b>'
+       + Math.round(100*midN/tot) + '%</b>. That is the middle, and it is usually where growth is'
+       + ' cheapest &mdash; they already know us.</li>'
+       + '<li><b>' + ones + ' agencies</b> have sent exactly one quote, ever.</li>'
+       + (dm.length
+           ? '<li><b>' + dm.length + ' agencies</b> that sent us five or more quotes have gone quiet'
+             + ' for over a year, worth <b>' + dmN.toLocaleString() + '</b> quotes historically.'
+             + ' They are listed below.</li>'
+           : '')
+       + '</ul>';
+   })();
 
    CACHE.byAgent=st.byAgent||[];
    paintByAgent();
@@ -3235,6 +3322,17 @@ const AGENCY_EXPR = "COALESCE(a.name, NULLIF(trim(q.broker_agency),''), '(no age
 async function handleAdminStats(request, env) {
   const rep = (new URL(request.url).searchParams.get('rep') || '').trim().toLowerCase();
   const repFilter = rep ? "AND lower(COALESCE(b.assigned_rep,'')) = ?" : '';
+
+  // SINCE. Eric, 2026-08-22: "maybe a filter where we could choose to see number of quotes/sales
+  // since a specific date? Like 1/1/26, last 12 months, 1/1/25 for example."
+  // Accepted as an ISO date, so the front end owns the vocabulary (this year / last 12 months /
+  // since 2025) and the worker owns only the boundary. A bad value is IGNORED rather than guessed
+  // at -- a filter that silently invents a date reports a subset as if it were the whole book.
+  const sinceRaw = (new URL(request.url).searchParams.get('since') || '').trim();
+  const since = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(sinceRaw) ? sinceRaw : '';
+  // Compared on substr, matching every other date test in this file, because created_at carries a
+  // time and a plain >= against a bare date would drop the first day.
+  const sinceFilter = since ? " AND substr(q.created_at,1,10) >= '" + since + "' " : '';
     // Declared once so every section filters on the SAME definition of "whose quote this is",
     // and so no query has to repeat an expression it might repeat differently.
     const BROKER_JOIN = "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> ''";
@@ -3271,7 +3369,7 @@ async function handleAdminStats(request, env) {
       "FROM quotes q " +
       "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> '' " +
       "LEFT JOIN agencies a ON a.id = b.agency_id " +
-      "WHERE 1=1 " + repFilter +
+      "WHERE 1=1 " + repFilter + sinceFilter +
       " GROUP BY key ORDER BY n DESC LIMIT 1000").bind(...args).all();
 
     const byAgency = await env.DB.prepare(
@@ -3305,7 +3403,7 @@ async function handleAdminStats(request, env) {
       "FROM quotes q " +
       "LEFT JOIN brokers b ON lower(trim(b.email)) = lower(trim(q.broker_email)) AND trim(q.broker_email) <> '' " +
       "LEFT JOIN agencies a ON a.id = b.agency_id " +
-      "WHERE 1=1 " + repFilter +
+      "WHERE 1=1 " + repFilter + sinceFilter +
       " GROUP BY " + AGENCY_EXPR + " ORDER BY n DESC LIMIT 1000").bind(...args).all();
 
     // 🔴 THE "SHOW: ERIC / NIELS" FILTER HAS TO REACH THIS LINE TOO.
@@ -3314,7 +3412,7 @@ async function handleAdminStats(request, env) {
     // neither number was wrong on its own. A filter that silently covers only part of a page is
     // worse than no filter, because the parts it misses look like corroboration.
     const totals = await env.DB.prepare(
-      "SELECT (SELECT COUNT(*) FROM quotes q " + BROKER_JOIN + " WHERE 1=1 " + repFilter + ") AS quotes, " +
+      "SELECT (SELECT COUNT(*) FROM quotes q " + BROKER_JOIN + " WHERE 1=1 " + repFilter + sinceFilter + ") AS quotes, " +
       "       (SELECT COUNT(*) FROM brokers b WHERE 1=1 " + repFilter + ") AS brokers, " +
       "       (SELECT COUNT(*) FROM agencies a WHERE 1=1 " +
                 (rep ? "AND lower(COALESCE(a.assigned_rep,'')) = ?" : '') + ") AS agencies"
@@ -3324,7 +3422,7 @@ async function handleAdminStats(request, env) {
     // ⚠️ `valued` IS REPORTED ALONGSIDE `n` ON PURPOSE. Value was only added today, so most rows
     // have none, and a total presented without saying how many quotes it is drawn from would read
     // as the whole book. A proportion is not a fact unless its denominator travels with it.
-    let byStatus = [], aging = [], historic = [];
+    let byStatus = [], aging = [], historic = [], dormant = [];
     try {
       const r1 = await env.DB.prepare(
         // ⚠️ GROUP BY THE EXPRESSION, and qualify every column with q. -- the join below brings
@@ -3375,12 +3473,34 @@ async function handleAdminStats(request, env) {
         " WHERE substr(q.created_at,1,4) < '2026' " + repFilter +
         " GROUP BY yr ORDER BY yr DESC").bind(...args).all();
       historic = r3.results || [];
+
+      // FALLEN OFF. Eric, 2026-08-22: "maybe some info on agencies that seem to have fallen off
+      // that we need to circle back with?"
+      // An agency that USED to send work and has stopped. Two numbers decide it and both come from
+      // the same row, so they cannot disagree: how much they ever sent, and how long since the last
+      // one.
+      // ⭐ A LOW-VOLUME AGENCY GOING QUIET IS NOT A STORY. One quote in 2014 and silence since is
+      // not a lapsed relationship, it is somebody who tried us once. The floor is 5 quotes, so the
+      // list is people who really were sending work.
+      // ⚠️ Deliberately NOT scoped by `since` -- this question is about the whole history by
+      // definition. Scoping it would make "fallen off" mean "quiet inside the window", which is
+      // every agency outside the window.
+      const r4 = await env.DB.prepare(
+        "SELECT " + AGENCY_EXPR + " AS agency_label, COUNT(*) AS n, " +
+        "       MAX(q.created_at) AS last_quote, " +
+        "       SUM(CASE WHEN q.created_at >= datetime('now','-365 days') THEN 1 ELSE 0 END) AS recent, " +
+        "       CAST(julianday('now') - julianday(MAX(q.created_at)) AS INTEGER) AS days_quiet " +
+        "FROM quotes q " + BROKER_JOIN + " WHERE 1=1 " + repFilter +
+        " GROUP BY " + AGENCY_EXPR +
+        " HAVING n >= 5 AND recent = 0 " +
+        " ORDER BY n DESC LIMIT 40").bind(...args).all();
+      dormant = r4.results || [];
     } catch (err) {
       // Columns may predate the migration. Report nothing rather than a wrong zero.
       console.warn('value/aging unavailable:', String(err && err.message || err));
     }
 
-    return jsonResp({ byAgent: byAgent.results || [], byAgency: byAgency.results || [], totals, byStatus, aging, historic });
+    return jsonResp({ byAgent: byAgent.results || [], byAgency: byAgency.results || [], totals, byStatus, aging, historic, dormant });
   } catch (err) {
     // 🔴🔴 ONE FAILING QUERY USED TO BLANK THE WHOLE PAGE, AND SAY NOTHING ABOUT IT.
     // Eric, 2026-08-19: "nothing is filled in on the Brokers & agencies page." The three queries
@@ -3406,7 +3526,8 @@ async function handleAdminStats(request, env) {
  * its own still answers most of the question.
  */
 async function statsPerBlock(env, firstError, rep) {
-  const out = { byAgent: [], byAgency: [], byStatus: [], aging: [], historic: [], totals: null,
+  const out = { byAgent: [], byAgency: [], byStatus: [], aging: [], historic: [],
+                dormant: [], totals: null,
                 unavailable: {}, error: firstError };
 
   // 🔴 THE REP FILTER HAS TO SURVIVE THE FALLBACK, OR IT LIES.
