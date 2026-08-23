@@ -305,6 +305,11 @@ function seedTest(cfg) {
   // ever change one of these rows.
   const q = [];
   for (let i = 0; i < 3; i++) q.push(`('crmtest-q-old-${i}','Q${i}','2019-06-0${i + 1}','${MOVER_OLD}','Test Agency 0','','')`);
+  // Six recent quotes against Test Agency 7, so it derives as 'regular' and can be RECORDED as
+  // something else. ⚠️ Dated recently on purpose: an old sixth quote would derive as 'former'.
+  for (let i = 0; i < 6; i++) {
+    q.push(`('crmtest-q-grow-${i}','G${i}','2026-07-0${i + 1}','grow${i}@example.com','Test Agency 7','','')`);
+  }
   for (let i = 0; i < 4; i++) q.push(`('crmtest-q-new-${i}','R${i}','2026-06-0${i + 1}','${MOVER_NEW}','Agency With No Record','','')`);
   d1('INSERT INTO quotes (id, quote_number, created_at, broker_email, broker_agency, source_tag, notes) VALUES ' +
      q.join(','), cfg);
@@ -771,6 +776,77 @@ async function runSuite() {
   check('and punctuation or case cannot hide a pair',
         typeof (r.json && r.json.note), 'string',
         'suggestions only -- two similar names may be one firm or two, and only a person knows');
+
+  // ── 29. THE RECORDED STATUS, BESIDE THE LIVE ONE.
+  //    Eric: "We could do an analysis to see we tagged this originally as one quote ever and now
+  //    they have done six, something is working."
+  //    ⭐⭐ THE COMPARISON IS THE FEATURE. A frozen value alone says nothing; a live value alone
+  //    cannot remember. The fixture is built so the two DISAGREE, because two that always agree
+  //    would pass whether or not either was working.
+  const GROWER = AGENCIES[7].id;   // seeded with 6 quotes -- derives as "regular"
+
+  r = await api('GET', '/api/admin/crm/agencies');
+  let grower = ((r.json && r.json.agencies) || []).find((x) => x.id === GROWER) || {};
+  check('a firm with six quotes derives as regular', [grower.quotes, grower.derivedStatus], [6, 'regular']);
+  check('and starts with nothing recorded', grower.recordedStatus, null,
+        'NOT RECORDED and RECORDED-AND-UNCHANGED are different facts');
+
+  // Record them as they were back then, backdated -- which is the whole point of happened_at.
+  r = await api('POST', '/api/admin/crm/status',
+                { id: GROWER, status: 'quoted once', happened_at: '2024-02-01' });
+  check('a status can be recorded, backdated', [r.status, r.json && r.json.recorded], [200, 'quoted once']);
+
+  r = await api('GET', '/api/admin/crm/agencies');
+  grower = ((r.json && r.json.agencies) || []).find((x) => x.id === GROWER) || {};
+  check('⭐ THE FROZEN VALUE AND THE LIVE ONE DISAGREE, WHICH IS THE POINT',
+        [grower.recordedStatus, grower.derivedStatus], ['quoted once', 'regular'],
+        'we tagged this as one quote ever and now they have done six -- something is working');
+  check('and the recording carries its own date', grower.recordedAt, '2024-02-01',
+        'without the date the comparison is meaningless');
+
+  // ⛔ A RECORDED STATUS IS A TAG, so it would otherwise appear twice on the row -- once in its own
+  // column and once in the tag list. It is shown in one place.
+  check('the recorded status does not also show up as an ordinary tag',
+        (grower.tags || []).some((x) => String(x.label).indexOf('status:') === 0), false);
+
+  // ── 30. RECORDING NEVER REWRITES AN EARLIER RECORDING.
+  r = await api('POST', '/api/admin/crm/status',
+                { id: GROWER, status: 'quoted once', happened_at: '2024-02-01' });
+  check('recording the same thing on the same day is a double-click', r.json && r.json.skipped, true);
+
+  r = await api('POST', '/api/admin/crm/status',
+                { id: GROWER, status: 'regular', happened_at: '2026-08-23' });
+  check('recording again on a LATER date is a second observation', r.json && r.json.recorded, 'regular');
+  r = await api('GET', '/api/admin/crm?entity_type=agency&entity_id=' + GROWER);
+  const statusEvents = ((r.json && r.json.events) || [])
+    .filter((e) => String(e.label || '').indexOf('status: ') === 0);
+  check('both recordings survive -- the first is never overwritten', statusEvents.length, 2,
+        'rewriting the first would destroy the only thing it was for');
+  r = await api('GET', '/api/admin/crm/agencies');
+  grower = ((r.json && r.json.agencies) || []).find((x) => x.id === GROWER) || {};
+  check('and the row shows the MOST RECENT recording', [grower.recordedStatus, grower.recordedAt],
+        ['regular', '2026-08-23']);
+
+  // ── 31. THE VOCABULARY IS CLOSED, AND THE BANDS MATCH ON BOTH SIDES.
+  r = await api('POST', '/api/admin/crm/status', { id: GROWER, status: 'doing great' });
+  check('a status outside the vocabulary is refused', r.status, 400,
+        'a free-text status is the tag problem again, one column over');
+  r = await api('POST', '/api/admin/crm/status', { id: 'no-such-id', status: 'regular' });
+  check('recording against a missing agency is refused', r.status, 404);
+
+  r = await api('GET', '/api/admin/crm/agencies');
+  const bands = (r.json && r.json.agencies) || [];
+  const byQuotes = (n) => (bands.find((x) => x.quotes === n) || {}).derivedStatus;
+  // ⚠️ ASSERTED ON BANDS THE FIXTURE ACTUALLY HAS. The first version checked a one-quote firm and
+  // there is none, so it read `undefined` -- an assertion about data that does not exist tells you
+  // nothing about the code.
+  // ⭐⭐ GOING QUIET OUTRANKS VOLUME, and pinning that is worth more than checking three bands.
+  // The three-quote firm's quotes are from 2019, so it reads FORMER rather than occasional -- a
+  // firm that quoted and stopped is a different story from one that never got started, and it is
+  // usually the one that deserves the phone call.
+  check('the derived bands read as intended, and quiet outranks volume',
+        [byQuotes(0), byQuotes(3), byQuotes(6)], ['never quoted', 'former', 'regular'],
+        'the recorded vocabulary and the derived bands must be the same words, or they cannot be compared');
 }
 
 /**
@@ -849,6 +925,21 @@ async function runConcurrencySuite() {
 // self-test whose sabotages are artificial proves the harness runs; one that replays the historical
 // bug proves the harness would have CAUGHT it.
 const SABOTAGES = [
+  {
+    // ⭐⭐ THE ONE THAT DESTROYS THE WHOLE FEATURE WHILE LOOKING LIKE A TIDY-UP: keeping the
+    // recorded value in step with the derived one. It would read perfectly on screen and answer
+    // Eric's question with 'nothing has changed' for ever.
+    name: 'the recorded status is refreshed to match the live one',
+    find: "      row.recordedStatus = rec ? String(rec.label).slice(RECORDED_PREFIX.length) : null;",
+    with: "      row.recordedStatus = rec ? row.derivedStatus : null;",
+    breaks: '⭐ THE FROZEN VALUE AND THE LIVE ONE DISAGREE, WHICH IS THE POINT',
+  },
+  {
+    name: 'a status outside the vocabulary is accepted',
+    find: "  if (RECORDED_STATUSES.indexOf(status) === -1) {",
+    with: '  if (false) {',
+    breaks: 'a status outside the vocabulary is refused',
+  },
   {
     // 🔴 THE ONE THAT WOULD MATTER MOST IF IT REGRESSED. A broker reading ABY's own
     // priority, owner and notes about their agency is not a bug, it is a disclosure.

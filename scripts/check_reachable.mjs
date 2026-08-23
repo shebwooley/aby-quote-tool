@@ -57,6 +57,14 @@ const RULES = [
       && /crm\/import/.test(f.worker),
   },
   {
+    name: "a firm status can be recorded, and read back beside the live one",
+    why: "Eric: we tagged this originally as one quote ever and now they have done six. The"
+       + " whole feature is the COMPARISON, so both values must reach the screen and there must be"
+       + " a control that records one. An endpoint alone records nothing anybody asked for.",
+    holds: (f) => /id="recStatus"/.test(f.worker) && /function recordStatus\(/.test(f.worker)
+      && /recordedStatus/.test(f.worker) && /derivedStatus/.test(f.worker),
+  },
+  {
     name: "an agency can see the people ABY already knows at their firm",
     why: "Written AFTER the endpoint rather than with it, which is the mistake this rule exists"
        + " to catch -- see TRAPS #284. /api/agency/people shipped with no screen calling it, for"
@@ -137,6 +145,10 @@ const RULES = [
 ];
 
 const SABOTAGES = [
+  {
+    why: "the record-status control is orphaned from its endpoint",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/function recordStatus\(/g, "function unusedRec(") }),
+  },
   {
     why: "the agency people card is orphaned from its endpoint",
     apply: (f) => ({ ...f, worker: f.worker.replace(/function loadAgencyPeople\(/g, "function unusedPeople(") }),

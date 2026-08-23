@@ -77,6 +77,7 @@ export default {
     if (path === '/api/admin/crm/agency'       && method === 'POST') return withAuth(request, env, () => handleCrmAgencyField(request, env));
     if (path === '/api/admin/crm/import'       && method === 'POST') return withAuth(request, env, () => handleCrmImport(request, env));
     if (path === '/api/admin/crm/agency-dupes' && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyDupes(request, env));
+    if (path === '/api/admin/crm/status'       && method === 'POST') return withAuth(request, env, () => handleCrmRecordStatus(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
     // Referral partners (F-referrals, Eric 2026-08-19)
     if (path === '/api/admin/referrals' && method === 'GET')  return withAuth(request, env, () => handleAdminReferrals(request, env));
@@ -2391,10 +2392,25 @@ async function handleCrmAgencies(request, env) {
       (byId[e.entity_id] = byId[e.entity_id] || []).push({ label: e.label, at: e.happened_at });
     }
     for (const row of rows) {
-      row.tags = byId[row.id] || [];
+
       // ⭐ DERIVED ON READ, NEVER STORED. A stored metro would be a second hand-kept field beside the
       // city, and the two disagree the first time somebody fills in one and not the other.
       row.metro = metroFor(row.city, row.state);
+      // ⭐⭐ BOTH STATUSES, TOGETHER. Eric: 'we tagged this originally as one quote ever and now
+      // they have done six, something is working.' That question needs the FROZEN value beside
+      // the LIVE one, computed from the same numbers, on the same row.
+      row.derivedStatus = deriveStatus(row.quotes, row.last_quote);
+      const rec = (byId[row.id] || [])
+        .filter((x) => String(x.label || '').toLowerCase().indexOf(RECORDED_PREFIX) === 0)
+        .sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
+      // ⚠️ THE MOST RECENT RECORDING, and its DATE. Without the date the comparison is
+      // meaningless -- 'they were quoted-once' only means something alongside when that was.
+      row.recordedStatus = rec ? String(rec.label).slice(RECORDED_PREFIX.length) : null;
+      row.recordedAt = rec ? rec.at : null;
+      // A recorded status is a tag, so it would otherwise appear twice on the row: once as
+      // itself and once in the tag list. It is shown in its own column instead.
+      row.tags = (byId[row.id] || [])
+        .filter((x) => String(x.label || '').toLowerCase().indexOf(RECORDED_PREFIX) !== 0);
     }
 
     // ⚠️ THE TAG FILTER RUNS HERE, NOT IN SQL, AND ONLY BECAUSE THE TAGS ARE ALREADY IN HAND.
@@ -2874,6 +2890,102 @@ async function handleCrmAgencyDupes(request, env) {
   } catch (err) {
     return jsonResp({ pairs: [], error: String((err && err.message) || err) }, 500);
   }
+}
+
+
+/**
+ * THE RECORDED STATUS, BESIDE THE LIVE ONE.
+ *
+ * ERIC, 2026-08-23: "We could do an analysis to see we tagged this originally as one quote ever and
+ * now they have done six, something is working."
+ *
+ * THAT QUESTION IS UNANSWERABLE FROM A DERIVED STATUS ALONE, and the reason is worth stating once:
+ * by the time you ask it, the derivation has already moved. If the tool recomputes "one quote ever"
+ * every time you look, then the day they reach six it silently stops saying one -- and the thing you
+ * wanted to measure is gone.
+ *
+ * SO A FIRM CARRIES BOTH:
+ *   RECORDED  what somebody said they were, ON A DATE. Frozen. Never recomputed, never migrated
+ *             when the rules change. This is the MEASUREMENT.
+ *   DERIVED   what the quote log says about them TODAY. Computed on read, never stored. This is
+ *             the RESULT.
+ *
+ * IT IS A TAG, NOT A NEW MECHANISM. A recorded status is exactly a tag with a happened_at, so it
+ * lives in crm_events with the rest of the history and needs no second table, no second write path
+ * and no second thing to keep in step. What it needs is the DISCIPLINE of never being rewritten.
+ *
+ * THE VOCABULARY IS DELIBERATELY SHORT AND IS ABOUT VOLUME, NOT INTENT. Priority already answers
+ * "how much would we like them" -- a judgment. This answers "what were they doing when we looked",
+ * which is an observation, and the two must not be collapsed into one column.
+ */
+const RECORDED_STATUSES = ['never quoted', 'quoted once', 'occasional', 'regular', 'former'];
+const RECORDED_PREFIX = 'status: ';
+
+/**
+ * What the quote log says TODAY. Derived on read, never stored.
+ * The bands match the recorded vocabulary so the two can be compared at a glance -- that comparison
+ * is the entire feature, and it fails if one side counts in different buckets from the other.
+ */
+function deriveStatus(quotes, lastQuoteIso) {
+  const n = Number(quotes || 0);
+  if (!n) return 'never quoted';
+  // A firm that quoted plenty and then went quiet is a different story from one that never started,
+  // and "former" is the one that most often deserves a phone call.
+  if (lastQuoteIso) {
+    const days = (Date.now() - Date.parse(lastQuoteIso)) / 86400000;
+    if (days > 730) return 'former';
+  }
+  if (n === 1) return 'quoted once';
+  if (n < 6) return 'occasional';
+  return 'regular';
+}
+
+/**
+ * Record what a firm looks like today, so it can be compared with what it looks like later.
+ *
+ * IT IS WRITTEN AS A TAG and therefore inherits everything tags already do: a date you can backdate,
+ * one row per event, and the same-day duplicate guard.
+ *
+ * IT REFUSES TO OVERWRITE. There is no update path on purpose. Recording a second status on a later
+ * date is a second observation and is exactly what makes the history worth having; rewriting the
+ * first would destroy the only thing it was for.
+ */
+async function handleCrmRecordStatus(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const id = String(body.id || '').trim();
+  if (!id) return jsonResp({ error: 'Which agency?' }, 400);
+
+  const status = String(body.status || '').trim().toLowerCase();
+  if (RECORDED_STATUSES.indexOf(status) === -1) {
+    return jsonResp({ error: 'That is not one of the recorded statuses.' }, 400);
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const wanted = String(body.happened_at || '').trim();
+  if (wanted && !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(wanted)) {
+    return jsonResp({ error: 'The date must be YYYY-MM-DD.' }, 400);
+  }
+  const happenedAt = wanted || today;
+  const by = String(body.by || '').trim().toLowerCase();
+  if (by && CRM_REPS.indexOf(by) === -1) return jsonResp({ error: 'Unknown person.' }, 400);
+
+  const agency = await env.DB.prepare('SELECT id FROM agencies WHERE id = ?').bind(id).first();
+  if (!agency) return jsonResp({ error: 'No such agency.' }, 404);
+
+  const label = RECORDED_PREFIX + status;
+  // The same-day guard the other tag paths use: recording twice in one sitting is a double-click.
+  const dupe = await env.DB.prepare(
+    "SELECT id FROM crm_events WHERE kind = 'tag' AND entity_type = 'agency' AND entity_id = ? " +
+    'AND lower(trim(label)) = ? AND happened_at = ? LIMIT 1'
+  ).bind(id, label, happenedAt).first();
+  if (dupe) return jsonResp({ ok: true, recorded: status, happened_at: happenedAt, skipped: true });
+
+  await env.DB.prepare(
+    'INSERT INTO crm_events (id, entity_type, entity_id, kind, label, body, happened_at, created_at, created_by) ' +
+    "VALUES (?,'agency',?,'tag',?,NULL,?,?,?)"
+  ).bind(crypto.randomUUID(), id, label, happenedAt, new Date().toISOString(), by).run();
+
+  return jsonResp({ ok: true, recorded: status, happened_at: happenedAt });
 }
 
 /** Set a priority or a note on one person or agency. */
@@ -4778,11 +4890,15 @@ ${abyAdminNav('/admin/brokers')}
      return;
    }
 
-   var h = '<table class="grid"><colgroup><col style="width:34px"><col><col style="width:120px">'
-         + '<col style="width:74px"><col style="width:84px"><col style="width:96px"><col style="width:104px">'
-         + '<col style="width:150px"><col style="width:78px"></colgroup><thead><tr>'
+   var h = '<table class="grid"><colgroup><col style="width:34px"><col><col style="width:104px">'
+         + '<col style="width:64px"><col style="width:70px"><col style="width:132px">'
+         + '<col style="width:88px"><col style="width:96px">'
+         + '<col style="width:132px"><col style="width:78px"></colgroup><thead><tr>'
          + '<th><input type="checkbox" onclick="selAll(this)"></th>'
          + '<th>Firm</th><th>Where</th><th class="c">Agents</th><th class="c">Quotes</th>'
+         // ⭐⭐ THE COMPARISON IS THE FEATURE. What they ARE today, and what somebody
+         // RECORDED them as, side by side. Either alone answers a different question.
+         + '<th>Status</th>'
          + '<th>Priority</th><th>Owner</th><th>Tags</th><th class="date">Last contact</th>'
          + '</tr></thead><tbody>';
 
@@ -4805,6 +4921,7 @@ ${abyAdminNav('/admin/brokers')}
         + '<td>' + where + '</td>'
         + '<td class="c">' + (a.agents || '<span class="muted">0</span>') + '</td>'
         + '<td class="c">' + (a.quotes ? a.quotes : '<span class="never">never</span>') + '</td>'
+        + '<td class="wrapcell">' + statusCell(a) + '</td>'
         + '<td>' + priSel(a.id, a.priority) + '</td>'
         + '<td>' + repSel(a.id, a.assigned_rep) + '</td>'
         + '<td class="wrapcell">' + (tags || '<span class="muted">—</span>') + '</td>'
@@ -4882,6 +4999,18 @@ ${abyAdminNav('/admin/brokers')}
          + '<input id="fNoteDate" type="date" value="' + new Date().toISOString().slice(0, 10) + '">'
          + '<button onclick="addNote(' + "'" + id + "'" + ')">Add note</button></div>'
          + '<div id="fMsg" class="muted" style="margin-bottom:10px"></div>'
+         // ⭐ RECORD WHAT THEY LOOK LIKE TODAY, so it can be compared with what they look like
+         // later. The date is backdatable like every other event: you may be recording what was
+         // true when you last spoke to them.
+         + '<div class="mfilters"><span class="muted" style="font-size:13px">Record them as</span>'
+         + '<select id="recStatus">' + RECORDED.map(function(s){
+             return '<option value="' + s + '"' + (a.derivedStatus === s ? ' selected' : '') + '>' + s + '</option>';
+           }).join('') + '</select>'
+         + '<input id="recDate" type="date" value="' + new Date().toISOString().slice(0, 10) + '">'
+         + '<button onclick="recordStatus(' + "'" + id + "'" + ')">Record</button>'
+         + '<span class="muted" style="font-size:12.5px">' + (a.recordedStatus
+             ? 'Last recorded as ' + esc(a.recordedStatus) + ' on ' + day(a.recordedAt)
+             : 'Never recorded') + '</span></div>'
          // ⭐⭐ RECORD AN ACQUISITION WHERE YOU NOTICE IT. Of 672 firms only 12 are marked as
          // acquired and 9 as branches, and 47 rows have two names typed into one box. Only Eric
          // and Niels know these facts, so the job is to make recording one a click from the row
@@ -5003,6 +5132,50 @@ ${abyAdminNav('/admin/brokers')}
  try {
    setView(localStorage.getItem('abyCrmView') === 'marketing' ? 'marketing' : 'performance');
  } catch(e) { setView('performance'); }
+
+ // ── THE RECORDED STATUS, BESIDE THE LIVE ONE ────────────────────────────────────────────
+ //
+ // ⭐⭐ ERIC: 'we tagged this originally as one quote ever and now they have done six, something
+ // is working.' The FROZEN value and the LIVE one have to sit together or the question cannot
+ // be asked at all.
+ // ⛔ AND THE MOVEMENT IS WHAT IS WORTH SEEING, so a recorded value that MATCHES today is shown
+ // quietly and one that DIFFERS is shown loudly. A column where every row looks the same is a
+ // column nobody reads.
+ var RECORDED = ['never quoted','quoted once','occasional','regular','former'];
+
+ function statusCell(a){
+   var live = a.derivedStatus || '';
+   var rec = a.recordedStatus;
+   if (!rec) {
+     // ⚠️ NOT RECORDED and RECORDED-AND-UNCHANGED are different facts. Saying nothing here
+     // would make them look identical.
+     return '<span>' + esc(live) + '</span>'
+          + '<div class="muted" style="font-size:11.5px">not recorded</div>';
+   }
+   if (rec === live) {
+     return '<span>' + esc(live) + '</span>'
+          + '<div class="muted" style="font-size:11.5px">same since ' + day(a.recordedAt) + '</div>';
+   }
+   return '<strong style="color:#1a5c3a">' + esc(live) + '</strong>'
+        + '<div style="font-size:11.5px;color:#8a6d1f">was ' + esc(rec) + ' &middot; ' + day(a.recordedAt) + '</div>';
+ }
+
+ async function recordStatus(id){
+   var sel = q('recStatus'), when = q('recDate');
+   var r = await fetch('/api/admin/crm/status', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ id: id, status: sel.value, happened_at: when.value }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok){ q('fMsg').textContent = d.error || 'That did not save.'; return; }
+   // ⛔ RECORDING NEVER REPLACES AN EARLIER RECORDING. A second one on a later date is a second
+   // observation, and that is the entire point -- so the panel reloads to show the history.
+   q('fMsg').textContent = d.skipped
+     ? 'Already recorded that on ' + d.happened_at + '.'
+     : 'Recorded as ' + d.recorded + ' on ' + d.happened_at + '.';
+   await loadMkt();
+   openFirm(id);
+ }
 </script></body></html>`;
 }
 
