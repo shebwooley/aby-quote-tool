@@ -1813,7 +1813,8 @@ async function handleAdminClients(request, env) {
     // case-insensitively, so the screen disagreed with the thing it is a copy of, and somebody
     // looking for a client would conclude it was missing.
     "SELECT id, name, match_key, status, source, note, original_broker, current_broker, " +
-    "       effective_date, term_date, products FROM aby_clients ORDER BY name COLLATE NOCASE").all());
+    "       effective_date, effective_date_is_estimate, term_date, products " +
+    "FROM aby_clients ORDER BY name COLLATE NOCASE").all());
   const q = await attempt('quotes', () => env.DB.prepare(
     "SELECT quote_number, client_name, created_at, status, broker_agency, broker_name " +
     "FROM quotes WHERE client_name IS NOT NULL AND trim(client_name) <> ''").all());
@@ -1891,6 +1892,12 @@ async function handleAdminClients(request, env) {
       status: cl.status,
       note: cl.note || '',
       termDate: String(cl.term_date || '').slice(0, 10),
+      // WHEN THEY STARTED, WHERE WE CAN SAY. Eric, 2026-08-22: an estimate is "fine... It's better
+      // to have something than nothing." ⛔ BUT IT MUST SAY THAT IT IS ONE. The date comes from the
+      // ORIGINATING quote -- most of them recorded only "Aug 2025 or later", which is a month, not
+      // a day. Rendering that as a plain 1 August would assert a precision nobody has.
+      started: String(cl.effective_date || '').slice(0, 10),
+      startedIsEstimate: cl.effective_date_is_estimate === 1,
       // ONLY a note that SAYS so means two folders. This read "if there is a note at all", which
       // was true while the sole note-writer was the duplicate-folder importer -- and then 977
       // termed clients arrived carrying a provenance note, and every one of them claimed a
@@ -3340,6 +3347,7 @@ ${abyAdminNav('/admin/clients')}
         <option value="">All clients (active and termed)</option>
         <option value="active">Active only</option>
         <option value="termed">Termed only</option>
+        <option value="started">We know when they started</option>
         <option value="noagency">No agency on file</option>
         <option value="contested">More than one agency quoted them</option>
         <option value="pending">Pending quote, and an active client</option>
@@ -3415,6 +3423,7 @@ ${abyAdminNav('/admin/clients')}
   var f=document.getElementById('filter').value;
   var rows=(DATA.rows||[]).filter(function(r){
    if(q && r.name.toLowerCase().indexOf(q)<0) return false;
+   if(f==='started') return !!r.started;
    if(f==='noagency') return r.attribution==='none';
    if(f==='contested') return r.attribution==='contested';
    if(f==='active') return r.status==='active';
@@ -3426,13 +3435,23 @@ ${abyAdminNav('/admin/clients')}
   });
   document.getElementById('count').textContent=rows.length.toLocaleString()+' shown';
   if(!rows.length){ document.getElementById('rows').innerHTML='<p class="muted">Nothing matches.</p>'; return; }
-  var h='<table><tr><th>Client</th><th>Status</th><th class="n">Quotes</th><th class="n">Pending</th>'+
+  var h='<table><tr><th>Client</th><th>Status</th><th class="date" title="When they came on '+
+        'board, taken from the quote that originated them. Most are marked ~ because the quote '+
+        'recorded only a month.">Started</th><th class="n">Quotes</th><th class="n">Pending</th>'+
         '<th class="n">Sold</th><th class="date">Last quote</th><th>Agency</th><th class="n">Sales</th></tr>';
   rows.slice(0,400).forEach(function(r){
    h+='<tr><td>'+esc(r.name)+
       (r.twoFolders?' <span class="muted" title="'+esc(r.note)+'">(2 folders)</span>':'')+'</td>'+
       '<td><span class="pill '+(r.status==='active'?'act':(r.status==='termed'?'term':'unk'))+'">'+
       esc(r.status)+(r.termDate?' '+esc(r.termDate):'')+'</span></td>'+
+      '<td class="date">'+(r.started
+          ? (r.startedIsEstimate
+              // A TILDE AND A MONTH, NOT A DAY. The source said "Aug 2025 or later"; printing
+              // "2025-08-01" would invent a day and quietly turn an estimate into a record.
+              ? '<span class="muted" title="Estimated from the originating quote, which recorded '
+                + 'only a month. The day is not known.">~'+esc(r.started.slice(0,7))+'</span>'
+              : esc(r.started))
+          : '<span class="muted">—</span>')+'</td>'+
       '<td class="n">'+(r.quotes||'')+'</td>'+
       '<td class="n">'+(r.pendingButActive?'<b>'+r.pending+'</b>':(r.pending||''))+'</td>'+
       '<td class="n">'+(r.sold||'')+'</td>'+
