@@ -43,7 +43,10 @@
 # and publishing it hands over every admin page, every query and every business rule.
 worker.js
 worker.js.map
-wrangler.jsonc
+# A GLOB, NOT A FILENAME. wrangler.jsonc was listed here alone, and on 2026-08-23 a new
+# wrangler.test.jsonc -- added for the local test harness -- was served publicly with a 200
+# until somebody thought to curl it. The deny list must cover the NEXT one of these too.
+wrangler*.jsonc
 package.json
 package-lock.json
 node_modules
