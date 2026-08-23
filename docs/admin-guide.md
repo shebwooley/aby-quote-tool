@@ -17,14 +17,16 @@
 > 4. **It says what is BUILT, and marks what is not.** ⏳ means not built yet. A guide that quietly
 >    describes an intention reads exactly like one describing a feature.
 >
-> ## 🔴 WHY THIS LIVES HERE AND NOT IN THE APP
+> ## 🔴 WHY IT IS BEHIND THE ADMIN LOGIN
 >
-> Eric offered either. **It is here because much of it is ABY-internal** — tags, notes, priority, who
-> owns which relationship, which agencies are worth chasing. **An in-app page is one authentication
-> mistake away from a broker reading ABY's sales notes about them.**
-> ⭐ An `/admin/guide` page can be GENERATED from this file later if it is wanted. ⛔ What must not
-> happen is a second hand-written copy — content with two homes in this project has diverged every
-> single time.
+> **Much of this is ABY-internal** — tags, notes, priority, who owns which relationship, which
+> agencies are worth chasing. It sits at `/admin/guide`, behind the same password as every other
+> admin page, and it must stay there. **A broker must never read ABY's sales notes about them.**
+>
+> ⭐ **The page you are reading is GENERATED from a single markdown file.** Editing it means
+> editing that file and rebuilding — the page cannot be edited on its own. ⛔ That is deliberate:
+> content with two homes in this project has diverged every single time — the requirement records
+> and the website, the knowledge-base master and the search index, a record and its source.
 
 ---
 
@@ -93,7 +95,10 @@ quotes, sales, clients, how many are still with us, and who at ABY owns the rela
 - **A branch office is different from an acquisition.** HUB Fort Worth is alive and can be called;
   MHBT is a dead name. Both roll up, but only the branch stays on lists of people to contact.
 
-### Marketing *(new — see the CRM section below)*
+### Marketing
+
+**The same agencies, with the columns you need when you are WORKING them rather than analysing
+them.** ⏳ **Not built yet** — the full description is under *The CRM* below.
 
 ### Pipeline / prospects
 
