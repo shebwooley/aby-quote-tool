@@ -81,6 +81,8 @@
 .aby-proposal .pricing-grid.cols-1 { grid-template-columns: 1fr; }
 .aby-proposal .pricing-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
 .aby-proposal .price-box { border: 1px solid var(--line); border-radius: 18px; padding: 18px; background: #fff; }
+.aby-proposal .price-count { font-weight: 700; color: var(--aby-green); margin: 2px 0 6px;
+  font-size: 15px; }
 .aby-proposal .price-box.featured { border: 3px solid var(--aby-green); background: linear-gradient(180deg, #fff, #f7fbf4); position: relative; }
 .aby-proposal .badge { display: inline-block; background: var(--aby-green); color: #fff; border-radius: 999px; padding: 5px 10px; font-weight: 800; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 8px; }
 .aby-proposal .price-label { color: var(--muted); font-weight: 800; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; min-height: 18px; }
@@ -213,14 +215,25 @@
 .aby-proposal .ack-submit .submit-note { margin-top: 10px; font-size: 11.5px; color: var(--muted); }
 .aby-proposal .ack-disclaimer { color: var(--muted); font-size: 12px; margin-top: 20px; border-top: 1px solid var(--line); padding-top: 14px; }
 @media print { .aby-proposal .ack-card { padding: 18px 20px; border-width: 2px; border-radius: 14px; } .aby-proposal .ack-head h2 { font-size: 18pt; } .aby-proposal .ack-sign-grid { break-inside: avoid; } }
-
-/* The employer's own headcount, at the signature line (F-367). Scoped under .aby-proposal
-   like every other rule in this file, so it cannot restyle the tool's own chrome. */
-.aby-proposal .emp-count { margin-top: 10px; padding: 10px 12px; background: #f4f8fb;
-  border: 1px solid #d5e3ee; border-radius: 7px; }
-.aby-proposal .emp-count label { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  font-size: 13px; color: #143c73; font-weight: 600; margin: 0; }
-.aby-proposal .emp-count input { width: 110px; padding: 6px 8px; border: 1px solid #b8cddd;
-  border-radius: 5px; font: inherit; font-size: 14px; background: #fff; }
-.aby-proposal .emp-count-out { margin-top: 8px; font-size: 13px; color: #5f6b76; line-height: 1.45; }
-.aby-proposal .emp-count-out.changed { color: #1a5c3a; font-weight: 600; }
+
+
+/* The employer's own headcount, at the signature line (F-367). Scoped under .aby-proposal
+
+   like every other rule in this file, so it cannot restyle the tool's own chrome. */
+
+.aby-proposal .emp-count { margin-top: 10px; padding: 10px 12px; background: #f4f8fb;
+
+  border: 1px solid #d5e3ee; border-radius: 7px; }
+
+.aby-proposal .emp-count label { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+
+  font-size: 13px; color: #143c73; font-weight: 600; margin: 0; }
+
+.aby-proposal .emp-count input { width: 110px; padding: 6px 8px; border: 1px solid #b8cddd;
+
+  border-radius: 5px; font: inherit; font-size: 14px; background: #fff; }
+
+.aby-proposal .emp-count-out { margin-top: 8px; font-size: 13px; color: #5f6b76; line-height: 1.45; }
+
+.aby-proposal .emp-count-out.changed { color: #1a5c3a; font-weight: 600; }
+

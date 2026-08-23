@@ -226,11 +226,18 @@ ABYQuote.renderer = (function () {
       var mNote = [];
       if (result.monthlyFee.tierLabel) mNote.push(esc(result.monthlyFee.tierLabel));
       if (result.monthlyFee.breakdown) mNote.push(esc(result.monthlyFee.breakdown));
+      // ⭐⭐ THE COUNT IS ITS OWN LINE, NOT THE TAIL OF THE RATE SENTENCE.
+      // Eric, 2026-08-22 (night): "It still does not show estimated number of participants." It
+      // DID -- his own quote rendered "Estimated for 46 participants." -- but appended to the
+      // grey rate boilerplate it read as more of the same fine print and he did not see it.
+      // ⛔ TECHNICALLY PRESENT AND PRACTICALLY INVISIBLE IS NOT SHOWN. He had asked for this
+      // number twice; a reader who cannot find it has been given nothing.
+      // ⭐ It now sits directly under the price, where the eye already is.
       var mCount = countNote(result.monthlyFee, meta);
-      if (mCount) mNote.push(esc(mCount));
       cards.push({
         label: result.monthlyFee.label || 'Monthly administration',
         price: u.money(result.monthlyFee.amount) + ' <small>monthly</small>',
+        count: mCount,
         note: mNote.join(' '),
         featured: true,
         badge: (result.monthlyFee.count != null) ? 'Est. this group' : ''
@@ -245,6 +252,7 @@ ABYQuote.renderer = (function () {
         (c.badge ? '<span class="badge">' + esc(c.badge) + '</span>' : '') +
         '<div class="price-label">' + esc(c.label) + '</div>' +
         '<div class="price">' + c.price + '</div>' +
+        (c.count ? '<div class="price-count">' + esc(c.count) + '</div>' : '') +
         (c.note ? '<p class="muted">' + c.note + '</p>' : '') +
         '</div>';
     }).join('\n');

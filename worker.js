@@ -2097,7 +2097,7 @@ ${ADMIN_HEADER_CSS}
  /* Sortable headers. The arrow sits in the label rather than a fixed slot because this table's
     headers are short and a reserved gap on nine of them reads as a rendering fault. */
  th.srt{cursor:pointer;user-select:none}
- th.srt:hover{color:#143c73;background:#eef2f7}
+ th.srt:hover{color:#1a5c3a;background:#eef2f7}
  td{padding:7px 6px;border-bottom:1px solid #eef2f6} .muted{color:#8a97a8}
  .n{text-align:right;font-variant-numeric:tabular-nums}
  .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
@@ -2123,7 +2123,7 @@ ${abyAdminNav('/admin/pipeline')}
       <select id="newRep"><option value="">—</option><option value="eric">Eric</option><option value="niels">Niels</option></select>
       <span class="muted" style="font-size:13px">Priority:</span>
       <select id="newPri"><option value="">—</option><option>A</option><option>B</option><option>C</option></select>
-      <button id="add" style="background:#143c73;color:#fff;border:0;font-weight:600">Add to the list</button>
+      <button id="add" style="background:#1a5c3a;color:#fff;border:0;font-weight:600">Add to the list</button>
     </div>
     <div class="msg" id="addMsg" style="display:none;margin-top:10px;padding:10px 12px;border-radius:6px;font-size:13px"></div>
   </div>
@@ -2147,7 +2147,7 @@ ${abyAdminNav('/admin/pipeline')}
       <span class="muted" style="font-size:13px">Status:</span>
       <select id="qStatus"><option value="P">Pending</option><option value="I">In process</option><option value="S">Sold</option><option value="D">Dead</option><option value="N">No Response</option></select>
       <label style="font-size:13px"><input type="checkbox" id="qComm" checked style="margin-right:6px">Commission</label>
-      <button id="qAdd" style="background:#143c73;color:#fff;border:0;font-weight:600">Log it</button>
+      <button id="qAdd" style="background:#1a5c3a;color:#fff;border:0;font-weight:600">Log it</button>
     </div>
     <div class="msg" id="qMsg" style="display:none;margin-top:10px;padding:10px 12px;border-radius:6px;font-size:13px"></div>
   </div>
@@ -2372,7 +2372,7 @@ ${ADMIN_HEADER_CSS}
  table{width:100%;border-collapse:collapse;font-size:14px}
  th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
  th.srt{cursor:pointer;user-select:none}
- th.srt:hover{color:#143c73;background:#eef2f7}
+ th.srt:hover{color:#1a5c3a;background:#eef2f7}
  td{padding:8px 6px;border-bottom:1px solid #eef2f6}
  /* Eric, 2026-08-19: "The date looks stupid - not enough room." An ISO date wrapping
     after the month reads as broken data rather than as a narrow column. It is a fixed
@@ -2404,9 +2404,9 @@ ${ADMIN_HEADER_CSS}
  th.c{text-align:center}
  .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
  .filters button{background:#fff;border:1px solid #c8d2de;border-radius:6px;padding:7px 13px;cursor:pointer;font-size:14px}
- .filters button.on{background:#143c73;color:#fff;border-color:#143c73}
+ .filters button.on{background:#1a5c3a;color:#fff;border-color:#1a5c3a}
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
- a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
+ a.dl{display:inline-block;background:#1a5c3a;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
 ${abyAdminNav('/admin/brokers')}
 <main>
@@ -3573,8 +3573,8 @@ ${ADMIN_HEADER_CSS}
  td.date,th.date{white-space:nowrap;width:1%}
  .n{text-align:right} .muted{color:#8a97a8}
  input,select{padding:6px 8px;border:1px solid #c8d2de;border-radius:6px;font-size:13px}
- button{padding:6px 12px;border:1px solid #143c73;background:#143c73;color:#fff;border-radius:6px;font-size:13px;cursor:pointer}
- button.ghost{background:#fff;color:#143c73}
+ button{padding:6px 12px;border:1px solid #1a5c3a;background:#1a5c3a;color:#fff;border-radius:6px;font-size:13px;cursor:pointer}
+ button.ghost{background:#fff;color:#1a5c3a}
  .partner{border:1px solid #e3e9f0;border-radius:9px;margin-bottom:14px;background:#fff}
  .phead{display:flex;align-items:center;gap:14px;padding:12px 16px;border-bottom:1px solid #eef2f6;flex-wrap:wrap}
  .pname{font-weight:600;font-size:15px}
@@ -3706,7 +3706,18 @@ ${abyAdminNav('/admin/referrals')}
              +'<td><select onchange="setRef(this)" data-b="'+esc(b.id)+'">'
              +'<option value="">— not referred —</option>'+opts+'</select></td></tr>';
          }).join('')+'</tbody></table>'
-     : '<p class="muted">Everyone has a referrer recorded.</p>';
+     // ⛔ AN EMPTY SET MUST NOT ASSERT A HAPPY STATE. This said "Everyone has a referrer recorded"
+     // whenever the list was empty -- and the list is built from the brokers table, which has ZERO rows
+     // because nobody has ever registered an account. So it reported a completed job over a
+     // population that does not exist, which is the same defect as the Pipeline page reading
+     // "Nobody on the list yet" (F-378) and the agency card once reporting "nobody has fallen
+     // off" over a hundred agencies. TRAPS #264.
+     // ⭐ NOTHING and ALL DONE are different answers and must read differently.
+     : (DATA.brokers.length
+         ? '<p class="muted">Everyone has a referrer recorded.</p>'
+         : '<p class="muted">No brokers have registered an account yet, so there is nobody to '
+           + 'attribute. This list fills up as brokers sign in — it is not empty because the '
+           + 'work is done.</p>');
  }
 
  async function addPartner(){
@@ -3785,9 +3796,9 @@ ${ADMIN_HEADER_CSS}
  .n{text-align:right;font-variant-numeric:tabular-nums}
  .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
  .filters button{background:#fff;border:1px solid #c8d2de;border-radius:6px;padding:7px 13px;cursor:pointer;font-size:14px}
- .filters button.on{background:#143c73;color:#fff;border-color:#143c73}
+ .filters button.on{background:#1a5c3a;color:#fff;border-color:#1a5c3a}
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
- a.dl{display:inline-block;background:#143c73;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
+ a.dl{display:inline-block;background:#1a5c3a;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
 </style></head><body>
 ${abyAdminNav('/admin/rates')}
 <main>
