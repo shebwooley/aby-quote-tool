@@ -3318,16 +3318,21 @@ ${abyAdminNav('/admin/clients')}
 
   <div class="card">
     <h2>Clients</h2>
-    <p class="sub">From the shared-drive folder lists &mdash; active and termed, both transcribed
-      from screenshots. The two stretches of the alphabet that were missing (Sab&ndash;Ses and
-      Sys&ndash;Texas&nbsp;C) were filled in on 2026&#8209;08&#8209;22. Still a floor, because a
-      name absent from a screenshot cannot be told from a name that was never there.</p>
+    <!-- ⛔ KEEP THIS SHORT. It said where the list came from, which stretches of the alphabet had
+         been missing before they were filled in, and why the count is a floor. Eric: "I don't like
+         this text at the top of the clients page." He is right and it is the second time today:
+         the same instinct produced "announced 2025" on the quote log.
+         ⭐⭐ THE PATTERN WORTH LEARNING: provenance and caveats are for the NOTES, not the screen.
+         A reader here wants to know what they are looking at, not how it was assembled or how much
+         to distrust it. The reasoning is not lost -- it lives in F-377 and in TRAPS. -->
+    <p class="sub">From the shared-drive client folders: Active Groups, Summit, and the termed
+      list.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
       <input id="q" placeholder="Search a client" style="min-width:260px" oninput="draw()">
       <select id="filter" onchange="draw()">
+        <option value="active" selected>Active clients</option>
         <option value="">All clients (active and termed)</option>
-        <option value="active">Active only</option>
-        <option value="termed">Termed only</option>
+        <option value="termed">Termed clients</option>
         <option value="started">We know when they started</option>
         <option value="noagency">No agency on file</option>
         <option value="contested">More than one agency quoted them</option>
@@ -3399,23 +3404,49 @@ ${abyAdminNav('/admin/clients')}
   }).join('');
  }
 
+ // ⭐⭐ ONE LIST, DEFAULTING TO ACTIVE -- NOT TWO LISTS. Eric asked whether active and termed
+ // should be separate pages. The question this screen mostly answers is "is this company a
+ // client?", and you do not know BEFORE searching which of the two they are in.
+ // 🔴 SO TWO SEPARATE LISTS CREATE A FALSE NEGATIVE: you search the active list, find nothing, and
+ // conclude they are not a client while they sit in the other one. An absence reading as a fact is
+ // the failure this project keeps hitting.
+ // ⭐ The compromise: the DEFAULT is active, so the live book is clean, but a search always looks
+ // at everything and SAYS SO when the filter is hiding matches.
+ function showAll(){ document.getElementById('filter').value=''; draw(); }
+ function matches(r, q, f){
+  if(q && r.name.toLowerCase().indexOf(q)<0) return false;
+  if(f==='started') return !!r.started;
+  if(f==='noagency') return r.attribution==='none';
+  if(f==='contested') return r.attribution==='contested';
+  if(f==='active') return r.status==='active';
+  if(f==='termed') return r.status==='termed';
+  if(f==='pending') return r.pendingButActive;
+  if(f==='quoted') return r.quotes>0;
+  if(f==='never') return r.quotes===0;
+  return true;
+ }
  function draw(){
   var q=(document.getElementById('q').value||'').toLowerCase().trim();
   var f=document.getElementById('filter').value;
-  var rows=(DATA.rows||[]).filter(function(r){
-   if(q && r.name.toLowerCase().indexOf(q)<0) return false;
-   if(f==='started') return !!r.started;
-   if(f==='noagency') return r.attribution==='none';
-   if(f==='contested') return r.attribution==='contested';
-   if(f==='active') return r.status==='active';
-   if(f==='termed') return r.status==='termed';
-   if(f==='pending') return r.pendingButActive;
-   if(f==='quoted') return r.quotes>0;
-   if(f==='never') return r.quotes===0;
-   return true;
-  });
-  document.getElementById('count').textContent=rows.length.toLocaleString()+' shown';
-  if(!rows.length){ document.getElementById('rows').innerHTML='<p class="muted">Nothing matches.</p>'; return; }
+  var all=(DATA.rows||[]);
+  var rows=all.filter(function(r){ return matches(r,q,f); });
+  // How many the SEARCH found that the FILTER is hiding. Computed with the same matcher, so the
+  // two can never disagree about what counts as a match.
+  var hidden=q ? all.filter(function(r){ return matches(r,q,'') ; }).length-rows.length : 0;
+  // ⛔ NO NESTED QUOTES IN THE HANDLER. Quoting inside an inline onclick needs backslashes, and
+  // this page is a template literal that eats a lone one -- so the escapes vanished and the
+  // emitted script was a syntax error (TRAPS #248, again, in the same session). A named function
+  // takes no arguments and therefore needs no quoting at all.
+  var note=hidden>0
+   ? ' <a href="#" onclick="showAll();return false" style="color:#1a5c3a">'
+     +hidden.toLocaleString()+' more match outside this filter</a>'
+   : '';
+  document.getElementById('count').innerHTML=rows.length.toLocaleString()+' shown'+note;
+  if(!rows.length){
+   document.getElementById('rows').innerHTML='<p class="muted">Nothing matches'
+    +(hidden>0?', but '+hidden.toLocaleString()+' match outside this filter.':'.')+'</p>';
+   return;
+  }
   var h='<table><tr><th>Client</th><th>Status</th><th class="date" title="When they came on '+
         'board, taken from the quote that originated them. Most are marked ~ because the quote '+
         'recorded only a month.">Started</th><th class="n">Quotes</th><th class="n">Pending</th>'+
