@@ -71,6 +71,7 @@ export default {
     if (path === '/api/admin/crm/agencies'     && method === 'GET')  return withAuth(request, env, () => handleCrmAgencies(request, env));
     if (path === '/api/admin/crm/relationship' && method === 'POST') return withAuth(request, env, () => handleCrmRelationship(request, env));
     if (path === '/api/admin/crm/agency'       && method === 'POST') return withAuth(request, env, () => handleCrmAgencyField(request, env));
+    if (path === '/api/admin/crm/import'       && method === 'POST') return withAuth(request, env, () => handleCrmImport(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
     // Referral partners (F-referrals, Eric 2026-08-19)
     if (path === '/api/admin/referrals' && method === 'GET')  return withAuth(request, env, () => handleAdminReferrals(request, env));
@@ -2517,6 +2518,161 @@ async function handleCrmAgencyField(request, env) {
   return jsonResp({ ok: true, field, value, metro: field === 'city' ? metroFor(value, body.state) : undefined });
 }
 
+
+/**
+ * Find or create an agency by name, safely under concurrency.
+ *
+ * ⭐⭐ ONE IMPLEMENTATION, USED BY EVERY CALLER. The backfill and the event import both need this, and
+ * on 2026-08-23 the backfill's own copy produced 33 agency records where 20 firms needed one --
+ * because two overlapping runs each inserted the same name. ⛔ A second copy of this would have the
+ * race again, and "fixing one find-or-create is not fixing the race" is the lesson that cost that.
+ *
+ * 🔴 MIN(id) IS AN ARBITRARY BUT STABLE WINNER, which is the property that matters: every racing
+ * caller picks the same row, so the loser can drop its own insert rather than leaving a stray.
+ */
+async function resolveAgency(env, rawName, now, provenance) {
+  const name = String(rawName || '').trim().slice(0, 120);
+  if (!name) return null;
+  const found = await env.DB.prepare('SELECT id FROM agencies WHERE lower(trim(name)) = ?')
+    .bind(name.toLowerCase()).first();
+  if (found) return found.id;
+
+  const newId = crypto.randomUUID();
+  await env.DB.prepare(
+    'INSERT INTO agencies (id, name, share_quotes, created_at, needs_review) VALUES (?,?,?,?,?)'
+  ).bind(newId, name, 0, now, provenance || 'created by an import -- no quote has ever named this firm').run();
+
+  const canon = await env.DB.prepare('SELECT MIN(id) AS id FROM agencies WHERE lower(trim(name)) = ?')
+    .bind(name.toLowerCase()).first();
+  const keep = (canon && canon.id) || newId;
+  if (keep !== newId) {
+    await env.DB.prepare('DELETE FROM agencies WHERE id = ? AND needs_review IS NOT NULL').bind(newId).run();
+  }
+  return keep;
+}
+
+/**
+ * A list from an event: paste the rows, tag them all, in one action.
+ *
+ * ⭐⭐ ERIC, 2026-08-23: *"For adding new agents/agencies, from an event for example... These would be
+ * tags that could create new agents/agencies."*
+ *
+ * 🔴🔴 THE HARD PART IS NOT CREATING PEOPLE, IT IS THE ONES WE ALREADY KNOW. A conference roster
+ * includes agents who have quoted for years, and they are the VALUABLE half of the list.
+ *   ⛔ They must NOT get a second record -- that is the defect the people table exists to prevent.
+ *   ⭐ They MUST still be tagged -- "was at the Tulsa class" is true of them, and it is the whole
+ *     reason for pasting the list.
+ * ⚠️ THE EXISTING PROSPECTS FORM SKIPS AN EXISTING ROW ENTIRELY, TAG AND ALL. That is the one
+ * behaviour this changes.
+ *
+ * ⛔ NOTHING IS EVER OVERWRITTEN. Somebody already on the list may have an account, quotes, a
+ * priority and an owner; a re-pasted list must not quietly rewrite any of it. A name or phone that
+ * differs from what we hold is REPORTED, not applied -- the version we have was typed by somebody
+ * who was dealing with them, and a badge list is not better evidence than that.
+ *
+ * ⚠️ A ROW WITH NO EMAIL CREATES NOTHING AND IS REFUSED, by name, in the report. An email is the only
+ * stable way to know who somebody is, and badge lists often have none -- so this will be a real and
+ * visible fraction, and saying so is the point.
+ */
+async function handleCrmImport(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+
+  const rows = Array.isArray(body.rows) ? body.rows.slice(0, 500) : [];
+  if (!rows.length) return jsonResp({ error: 'Nothing to import.' }, 400);
+
+  // The tag is optional -- somebody may just be adding people -- but it is the reason this exists.
+  const label = body.label ? await crmCanonicalLabel(env, body.label) : '';
+  const today = new Date().toISOString().slice(0, 10);
+  const wanted = String(body.happened_at || '').trim();
+  if (wanted && !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(wanted)) {
+    return jsonResp({ error: 'The date must be YYYY-MM-DD.' }, 400);
+  }
+  const happenedAt = wanted || today;
+  const by = String(body.by || '').trim().toLowerCase();
+  if (by && CRM_REPS.indexOf(by) === -1) return jsonResp({ error: 'Unknown person.' }, 400);
+
+  const now = new Date().toISOString();
+  const added = [], known = [], refused = [], differs = [];
+  let tagged = 0;
+
+  for (const row of rows) {
+    const email = String((row && row.email) || '').trim().toLowerCase();
+    const name = String((row && row.name) || '').trim().slice(0, 120);
+    const agency = String((row && row.agency) || '').trim().slice(0, 120);
+    const phone = String((row && row.phone) || '').trim().slice(0, 40);
+
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      refused.push({ who: name || '(no name)', why: 'no email address, so there is no stable way to know who this is' });
+      continue;
+    }
+
+    try {
+      const existing = await env.DB.prepare(
+        'SELECT email, name, agency, person_id FROM broker_directory WHERE lower(trim(email)) = ?'
+      ).bind(email).first();
+
+      let personId;
+      if (existing) {
+        personId = existing.person_id;
+        // A person row may be missing if the backfill has not run for this address.
+        if (!personId) {
+          personId = crypto.randomUUID();
+          await env.DB.prepare('INSERT INTO people (id, name, created_at, updated_at) VALUES (?,?,?,?)')
+            .bind(personId, name || existing.name || '', now, now).run();
+          await env.DB.prepare(
+            'UPDATE broker_directory SET person_id = ? WHERE lower(trim(email)) = ? AND person_id IS NULL'
+          ).bind(personId, email).run();
+        }
+        known.push({ email, name: existing.name || name });
+        // ⚠️ REPORTED, NOT APPLIED. What we hold was typed by somebody dealing with them.
+        if (name && existing.name && name.toLowerCase() !== String(existing.name).toLowerCase()) {
+          differs.push({ email, weHold: existing.name, theList: name, field: 'name' });
+        }
+        if (agency && existing.agency && agency.toLowerCase() !== String(existing.agency).toLowerCase()) {
+          differs.push({ email, weHold: existing.agency, theList: agency, field: 'agency' });
+        }
+      } else {
+        const agencyId = await resolveAgency(env, agency, now,
+          'created 2026-08-23 by an imported list -- no quote has ever named this firm');
+        personId = crypto.randomUUID();
+        await env.DB.prepare('INSERT INTO people (id, name, created_at, updated_at) VALUES (?,?,?,?)')
+          .bind(personId, name, now, now).run();
+        // ⭐ source RECORDS WHERE THE ROW CAME FROM. Without it, first_seen on an imported agent reads
+        // as "first quoted", which is a different and untrue fact.
+        await env.DB.prepare(
+          'INSERT INTO broker_directory (email, name, phone, agency, agency_id, first_seen, last_seen, ' +
+          'quote_count, person_id, source) VALUES (?,?,?,?,?,?,?,?,?,?)'
+        ).bind(email, name, phone, agency, agencyId, now, now, 0, personId, 'import').run();
+        added.push({ email, name });
+      }
+
+      if (label && personId) {
+        const dupe = await env.DB.prepare(
+          "SELECT id FROM crm_events WHERE kind = 'tag' AND entity_type = 'person' AND entity_id = ? " +
+          'AND lower(trim(label)) = ? AND happened_at = ? LIMIT 1'
+        ).bind(personId, label.toLowerCase(), happenedAt).first();
+        if (!dupe) {
+          await env.DB.prepare(
+            'INSERT INTO crm_events (id, entity_type, entity_id, kind, label, body, happened_at, created_at, created_by) ' +
+            "VALUES (?,'person',?,'tag',?,NULL,?,?,?)"
+          ).bind(crypto.randomUUID(), personId, label, happenedAt, now, by).run();
+          tagged++;
+        }
+      }
+    } catch (err) {
+      refused.push({ who: email, why: String((err && err.message) || err) });
+    }
+  }
+
+  // ⭐⭐ THE SPLIT, NEVER A TOTAL. "9 added, 4 already known and tagged, 1 refused" is the honest
+  // sentence; "14 imported" is the one that hides the two facts somebody needs.
+  return jsonResp({
+    ok: true, label: label || null, happened_at: happenedAt,
+    added: added.length, known: known.length, refused: refused.length, tagged,
+    detail: { added, known, refused, differs },
+  });
+}
+
 /** Set a priority or a note on one person or agency. */
 /**
  * Referral partners, their reps, and what each has actually produced (Eric, 2026-08-19).
@@ -3332,6 +3488,30 @@ ${abyAdminNav('/admin/brokers')}
     <div class="card">
       <h2 style="cursor:default">Marketing</h2>
       <p class="sub" id="mktSub">Every firm we could work &mdash; including the ones that have never quoted.</p>
+      <!-- ADD A LIST FROM AN EVENT (Eric, 2026-08-23). Shut by default: it is an occasional
+           action and the list is the everyday one. -->
+      <details style="margin:0 0 14px">
+        <summary style="cursor:pointer;font-size:13.5px;color:#1a5c3a;font-weight:600">
+          Add a list from an event</summary>
+        <div style="margin-top:10px">
+          <p class="sub" style="margin:0 0 8px">Paste rows straight out of a spreadsheet &mdash;
+            name, firm, email, phone, in any order. The email is what identifies somebody, so a
+            row without one cannot be added. <strong>Anybody we already know is recognised and
+            tagged, not duplicated.</strong></p>
+          <textarea id="importBox" oninput="previewList()" rows="5"
+            placeholder="Jane Smith&#9;Acme Benefits&#9;jane@acme.com&#9;(214) 555-0134"
+            style="width:100%;padding:9px;border:1px solid #c8d2de;border-radius:6px;font:13px ui-monospace,Consolas,monospace"></textarea>
+          <div class="mfilters" style="margin-top:10px">
+            <input id="importTag" list="tagList" placeholder="Tag them all (e.g. Tulsa CE class)">
+            <input id="importDate" type="date">
+            <button class="go" onclick="runImport()"
+              style="background:#1a5c3a;color:#fff;border:1px solid #1a5c3a;border-radius:6px;padding:7px 15px;cursor:pointer;font-weight:600">
+              Add them</button>
+            <span class="muted" id="importMsg"></span>
+          </div>
+          <div id="importPreview"></div>
+        </div>
+      </details>
       <div class="mfilters">
         <select id="mQuoted" onchange="loadMkt()">
           <option value="">All firms</option>
@@ -4193,6 +4373,125 @@ ${abyAdminNav('/admin/brokers')}
 
  function q(id){ return document.getElementById(id); }
 
+ // ── ADDING A LIST FROM AN EVENT ──────────────────────────────────────────────────────────────
+ //
+ // ⛔ NO BACKSLASHES IN HERE. Every page is one template literal, so a regex written the short way
+ // arrives at the browser with its escapes eaten. The parsing below uses string methods only.
+ var parsed = [];
+
+ // ⭐⭐ THE COLUMNS ARE DETECTED, NOT DECLARED. A badge list, a registration export and a hand-typed
+ // list all put the columns in a different order, and asking somebody to rearrange a spreadsheet
+ // before pasting it is how a feature stops being used. The EMAIL is unmistakable, so it anchors the
+ // row: whatever cell holds an at-sign is the address, and the rest is read around it.
+ // ⚠️ The preview is the point of pasting rather than uploading -- it shows what was understood
+ // BEFORE anything is written.
+ function mostlyDigits(s){
+   var d = 0, c = 0;
+   for (var i = 0; i < s.length; i++){
+     var ch = s.charAt(i);
+     if (ch >= '0' && ch <= '9') d++;
+     if (ch !== ' ') c++;
+   }
+   return c > 6 && d >= c - 4;
+ }
+
+ function parseList(text){
+   var out = [], lines = String(text || '').split(String.fromCharCode(10));
+   for (var i = 0; i < lines.length; i++){
+     var line = lines[i].replace(String.fromCharCode(13), '').trim();
+     if (!line) continue;
+     var cells = line.indexOf(String.fromCharCode(9)) !== -1
+       ? line.split(String.fromCharCode(9))
+       : line.split(',');
+     for (var c = 0; c < cells.length; c++) cells[c] = cells[c].trim();
+
+     var email = '', rest = [];
+     for (var k = 0; k < cells.length; k++){
+       if (!email && cells[k].indexOf('@') !== -1 && cells[k].indexOf(' ') === -1) email = cells[k].toLowerCase();
+       else if (cells[k]) rest.push(cells[k]);
+     }
+     var phone = '';
+     for (var m = 0; m < rest.length; m++){
+       if (!phone && mostlyDigits(rest[m])){ phone = rest[m]; rest.splice(m, 1); break; }
+     }
+     out.push({ name: rest[0] || '', agency: rest[1] || '', email: email, phone: phone, line: line });
+   }
+   return out;
+ }
+
+ function previewList(){
+   parsed = parseList(q('importBox').value);
+   var noEmail = 0;
+   for (var i = 0; i < parsed.length; i++) if (!parsed[i].email) noEmail++;
+   if (!parsed.length){ q('importPreview').innerHTML = ''; q('importMsg').textContent = ''; return; }
+
+   var h = '<p class="muted" style="margin:10px 0 6px">Read as ' + parsed.length + ' row'
+         + (parsed.length === 1 ? '' : 's')
+         // ⚠️ SAID UP FRONT, NOT AFTER. A row with no address cannot be added at all, and finding
+         // that out after pressing Apply is the wrong moment.
+         + (noEmail ? '. <strong style="color:#a12622">' + noEmail + ' with no email address, which cannot be added.</strong>' : '.')
+         + '</p><table class="grid"><colgroup><col><col><col style="width:230px"><col style="width:130px"></colgroup>'
+         + '<thead><tr><th>Name</th><th>Firm</th><th>Email</th><th>Phone</th></tr></thead><tbody>';
+   for (var j = 0; j < parsed.length && j < 12; j++){
+     var r = parsed[j];
+     h += '<tr><td>' + (esc(r.name) || '<span class="muted">—</span>') + '</td>'
+        + '<td>' + (esc(r.agency) || '<span class="muted">—</span>') + '</td>'
+        + '<td>' + (r.email ? esc(r.email) : '<span style="color:#a12622">no email</span>') + '</td>'
+        + '<td>' + (esc(r.phone) || '<span class="muted">—</span>') + '</td></tr>';
+   }
+   h += '</tbody></table>';
+   if (parsed.length > 12) h += '<p class="muted">…and ' + (parsed.length - 12) + ' more.</p>';
+   q('importPreview').innerHTML = h;
+ }
+
+ async function runImport(){
+   if (!parsed.length) previewList();
+   if (!parsed.length){ q('importMsg').textContent = 'Paste some rows first.'; return; }
+   q('importMsg').textContent = 'Adding...';
+   var r = await fetch('/api/admin/crm/import', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({
+       rows: parsed, label: q('importTag').value, happened_at: q('importDate').value,
+     }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok){ q('importMsg').textContent = d.error || 'That did not import.'; return; }
+
+   // ⭐⭐ THE SPLIT, NEVER A TOTAL. "9 added, 4 already known and tagged, 1 refused" is the honest
+   // sentence. The already-known half is the valuable one -- those are agents who have quoted for
+   // years and are now recorded as having been at the event.
+   var parts = [d.added + ' added'];
+   if (d.known) parts.push(d.known + ' already known' + (d.label ? ' and tagged' : ''));
+   if (d.tagged) parts.push(d.tagged + ' tagged');
+   if (d.refused) parts.push(d.refused + ' refused');
+   var h = '<p><strong>' + parts.join(', ') + '.</strong></p>';
+
+   var det = d.detail || {};
+   if (det.refused && det.refused.length){
+     h += '<p class="muted">Refused:</p><ul>';
+     for (var i = 0; i < det.refused.length; i++){
+       h += '<li>' + esc(det.refused[i].who) + ' — ' + esc(det.refused[i].why) + '</li>';
+     }
+     h += '</ul>';
+   }
+   // ⛔ REPORTED, NEVER APPLIED. What we already hold was typed by somebody who was dealing with
+   // them; a badge list is not better evidence than that. So a difference is shown and left alone.
+   if (det.differs && det.differs.length){
+     h += '<p class="muted">Different from what we hold, and left alone:</p><ul>';
+     for (var k = 0; k < det.differs.length; k++){
+       var x = det.differs[k];
+       h += '<li>' + esc(x.email) + ' — we have ' + esc(x.field) + ' &ldquo;' + esc(x.weHold)
+          + '&rdquo;, the list says &ldquo;' + esc(x.theList) + '&rdquo;</li>';
+     }
+     h += '</ul>';
+   }
+   q('importPreview').innerHTML = h;
+   q('importMsg').textContent = '';
+   q('importBox').value = '';
+   parsed = [];
+   await loadMkt();
+ }
+
  async function loadMkt(){
    var p = [];
    // ⛔ THIS VIEW USES ITS OWN OWNER FILTER, NOT THE ONE ON THE HIDDEN PERFORMANCE BAR. Reusing
@@ -4325,6 +4624,7 @@ ${abyAdminNav('/admin/brokers')}
    q('bulkBar').style.display = n ? 'flex' : 'none';
    q('bulkN').textContent = n + (n === 1 ? ' firm selected' : ' firms selected');
    if (!q('bulkDate').value) q('bulkDate').value = new Date().toISOString().slice(0, 10);
+   if (!q('importDate').value) q('importDate').value = new Date().toISOString().slice(0, 10);
  }
 
  async function applyBulk(){
@@ -7130,6 +7430,13 @@ const MIGRATIONS = [
   // ⚠️ IT BELONGS TO THE OFFICE, NOT THE BRAND. HUB Fort Worth and HUB are separate rows already
   // (relationship = division), so each carries its own location and the parent needs none. An
   // acquired name (relationship = succeeded) does not need one either -- nobody can visit it.
+  // WHERE A DIRECTORY ROW CAME FROM (Eric, 2026-08-23, the event-list import).
+  // Every row in broker_directory was built FROM THE QUOTES until now, so first_seen meant
+  // 'first quoted'. An agent added from a conference list has never quoted, and without this
+  // column their first_seen reads as a quote date -- a different and untrue fact.
+  // NULL means the original source: derived from the quote log.
+  { sql: "ALTER TABLE broker_directory ADD COLUMN source TEXT",
+    table: "broker_directory", column: "source" },
   { sql: "ALTER TABLE agencies ADD COLUMN city TEXT",  table: "agencies", column: "city" },
   { sql: "ALTER TABLE agencies ADD COLUMN state TEXT", table: "agencies", column: "state" },
   // Filtering the CRM by area is the whole point of collecting it, so it is indexed rather than

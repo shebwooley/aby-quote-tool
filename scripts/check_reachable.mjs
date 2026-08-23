@@ -48,6 +48,15 @@ const RULES = [
     holds: (f) => /\/api\/admin\/crm\/agencies/.test(f.worker) && /function loadMkt\(/.test(f.worker),
   },
   {
+    name: "an event list can be pasted in from the marketing view",
+    why: "WRITTEN IN THE SAME COMMIT AS THE ENDPOINT, deliberately (TRAPS #284). Three endpoints"
+       + " in one day were built, tested and DEPLOYED with no control calling them, because"
+       + " endpoint-then-checker-then-screen leaves a phase where everything is green and nothing"
+       + " is reachable. A rule added with the endpoint FAILS until there is a door.",
+    holds: (f) => /id="importBox"/.test(f.worker) && /function runImport\(/.test(f.worker)
+      && /crm\/import/.test(f.worker),
+  },
+  {
     name: "a recorded note can be removed from the screen it was typed on",
     why: "THIRD instance in one day of an endpoint built, tested and deployed with no control"
        + " calling it. /crm/delete had assertions proving it 404s on a second attempt while nothing"
@@ -119,6 +128,10 @@ const RULES = [
 ];
 
 const SABOTAGES = [
+  {
+    why: "the event-list paste box is orphaned from its endpoint",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/function runImport\(/g, "function unusedImport(") }),
+  },
   {
     why: "the note delete control is orphaned from its endpoint",
     apply: (f) => ({ ...f, worker: f.worker.replace(/function delEvent\(/g, "function unusedDel(") }),

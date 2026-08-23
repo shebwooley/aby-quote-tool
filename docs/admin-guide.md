@@ -246,9 +246,17 @@ DFW. Two hand-typed fields answering the same question disagree within a month.
 
 ### Adding a list from an event
 
-**Paste it in; there is no file to upload, and that is deliberate.** Copying rows straight out of
-Excel gives text this can read without any column-matching, and — the part that matters — **you see
-exactly what you are about to add before it lands.**
+**Open *Add a list from an event* at the top of the Marketing view and paste it in.** There is no
+file to upload, and that is deliberate: copying rows straight out of Excel gives text this can
+read, and — the part that matters — **you see exactly what you are about to add before it lands.**
+
+⭐⭐ **THE COLUMNS ARE WORKED OUT, NOT DECLARED.** Name, firm, email and phone in any order. The
+email is unmistakable, so it anchors each row and the rest is read around it — a badge list, a
+registration export and a hand-typed list all order their columns differently, and having to
+rearrange a spreadsheet first is how a feature stops being used.
+
+**The preview shows what it understood**, and says up front how many rows have no email address
+and therefore cannot be added. ⚠️ Finding that out after pressing the button is the wrong moment.
 
 ⭐ **The tag goes on during the paste.** *"Everyone at the Tulsa class, 14 August"* is one action:
 paste the rows, pick the tag, set the date it happened, apply. Doing it in two steps is two chances
@@ -266,7 +274,8 @@ real fraction of those.
 ⛔ **A re-pasted list never overwrites anybody.** Somebody already there may have an account,
 quotes, a priority and an owner, and none of it is touched.
 
-⏳ **Not built yet.**
+⭐ **The date is the date of the EVENT, not today.** Paste the Tulsa list in September and set
+it to 14 August, and that is what the history says.
 
 ---
 

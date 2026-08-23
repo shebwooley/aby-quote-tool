@@ -76,6 +76,7 @@ function check(name, got, want, why) {
 function die(msg) {
   console.log('');
   console.log('CANNOT RUN: ' + msg);
+  releaseLock();
   cleanupSabotage();
   process.exit(2);
 }
@@ -182,6 +183,27 @@ async function boot(cfg) {
   return proc;
 }
 
+// 🔴🔴 ONE RUN AT A TIME, AND THIS IS NOT TIDINESS. Two runs share the same local database, so
+// the second one's seedTest wipes crm_events while the first is mid-assertion. The result looks
+// EXACTLY like a code regression: on 2026-08-23 an overlapping run reported 78/85 with seven
+// failures naming real rules, and nothing was wrong with the code at all.
+// ⚠️ THE PORT PRE-FLIGHT CANNOT CATCH IT -- the other run spends most of its life BETWEEN boots,
+// with the port free and its fixtures still live.
+const LOCK = join(REPO, 'scripts', '.crm-check.lock');
+
+function takeLock() {
+  if (existsSync(LOCK)) {
+    const held = readFileSync(LOCK, 'utf8').trim();
+    die('another run of this suite is in progress (started ' + held + ').' +
+        NEWLINE + '  Two runs share one local database and corrupt each other, and the result' +
+        NEWLINE + '  looks like a code regression. Wait for it, or delete scripts/.crm-check.lock' +
+        NEWLINE + '  if you are certain nothing is running.');
+  }
+  writeFileSync(LOCK, new Date().toISOString());
+}
+
+function releaseLock() { rmSync(LOCK, { force: true }); }
+
 function cleanupSabotage() {
   rmSync(join(REPO, SAB_JS), { force: true });
   rmSync(join(REPO, SAB_CFG), { force: true });
@@ -234,6 +256,9 @@ function seedTest(cfg) {
   d1('DELETE FROM people', cfg);
   d1("DELETE FROM agencies WHERE id LIKE 'test-agency-%' OR name = 'Agency With No Record'", cfg);
   d1("DELETE FROM broker_directory WHERE email LIKE 'crmtest.%@example.com'", cfg);
+  // ⚠️ The import creates firms too. Left behind, the 'one agency between them' assertion sees
+  // the previous run's record and reads 1 where it should have created it.
+  d1("DELETE FROM agencies WHERE name IN ('A Firm Nobody Has Quoted','Shared Firm From A List')", cfg);
   d1("DELETE FROM quotes WHERE id LIKE 'crmtest-q-%'", cfg);
   d1('INSERT INTO agencies (id, name) VALUES ' +
      AGENCIES.map((a) => `('${a.id}','${a.name}')`).join(','), cfg);
@@ -562,6 +587,68 @@ async function runSuite() {
   check('the never-quoted filter returns only firms with no quotes',
         cold.every((x) => !x.quotes), true);
   check('and it is not empty -- these are the ones worth calling', cold.length > 0, true);
+
+  // ── 19. AN EVENT LIST. Eric: "adding new agents/agencies, from an event for example... These
+  //    would be tags that could create new agents/agencies."
+  //    ⭐⭐ THE HARD PART IS THE PEOPLE WE ALREADY KNOW. A conference roster contains agents who have
+  //    quoted for years, and they are the VALUABLE half: they must be tagged and NOT duplicated.
+  const EVENT = 'Tulsa CE class';
+  const NEWCOMER = 'crmtest.newcomer@example.com';
+  const list = [
+    { name: 'Brand New Person', agency: 'A Firm Nobody Has Quoted', email: NEWCOMER, phone: '214 555 0134' },
+    { name: 'CRM Test Agent', agency: 'Test Agency 0', email: AGENT_EMAIL, phone: '' },
+    { name: 'Somebody With No Address', agency: 'Anywhere', email: '', phone: '' },
+  ];
+  r = await api('POST', '/api/admin/crm/import',
+                { rows: list, label: EVENT, happened_at: '2026-08-14' });
+  check('an event list adds the new people, recognises the known ones, and refuses the rest',
+        [r.json && r.json.added, r.json && r.json.known, r.json && r.json.refused],
+        [1, 1, 1],
+        'never a single total -- the already-known half is the valuable one');
+  check('and it tags EVERYBODY it could, not only the new ones', r.json && r.json.tagged, 2,
+        'the existing prospects form skips a known row entirely, tag and all -- that is what this changes');
+  check('the refusal names WHO and WHY',
+        [r.json.detail.refused[0].who,
+         String(r.json.detail.refused[0].why).includes('no email')],
+        ['Somebody With No Address', true]);
+
+  // ⭐ THE TAG IS ON THE PERSON, so it survives them changing firm -- which is the whole point of
+  // there being a person at all.
+  r = await api('GET', '/api/admin/crm?entity_type=person&entity_id=' + encodeURIComponent(AGENT_EMAIL));
+  check('an agent we already knew now carries the event tag',
+        ((r.json && r.json.events) || []).some((e) => e.label === EVENT && e.happened_at === '2026-08-14'), true);
+  r = await api('GET', '/api/admin/crm/person?email=' + encodeURIComponent(NEWCOMER));
+  check('and the newcomer is a person with their own address', (r.json.addresses || []).length, 1);
+  check('attached to the firm the list named, created for them',
+        r.json.addresses[0].agency_name, 'A Firm Nobody Has Quoted');
+
+  // ── 20. RE-PASTING THE SAME LIST. Somebody will do this, and it must be harmless.
+  r = await api('POST', '/api/admin/crm/import',
+                { rows: list, label: EVENT, happened_at: '2026-08-14' });
+  check('re-pasting the same list adds nobody and re-tags nobody',
+        [r.json && r.json.added, r.json && r.json.known, r.json && r.json.tagged], [0, 2, 0],
+        'the same tag on the same day is a double-click, not a second event');
+
+  // ── 21. IT NEVER OVERWRITES WHAT WE ALREADY HOLD.
+  r = await api('POST', '/api/admin/crm/import',
+                { rows: [{ name: 'A Different Spelling', agency: 'Some Other Firm', email: AGENT_EMAIL }] });
+  check('a name that differs from ours is REPORTED, not applied',
+        (r.json.detail.differs || []).some((d) => d.field === 'name' && d.weHold === 'CRM Test Agent'), true,
+        'what we hold was typed by somebody dealing with them; a badge list is not better evidence');
+  r = await api('GET', '/api/admin/crm/person?email=' + encodeURIComponent(AGENT_EMAIL));
+  check('and the record we hold is unchanged', r.json.addresses[0].name, 'CRM Test Agent');
+
+  // ── 22. ONE FIRM, NOT ONE PER ROW.
+  r = await api('POST', '/api/admin/crm/import', { rows: [
+    { name: 'First Colleague', agency: 'Shared Firm From A List', email: 'crmtest.c1@example.com' },
+    { name: 'Second Colleague', agency: 'Shared Firm From A List', email: 'crmtest.c2@example.com' },
+  ] });
+  check('two people at one firm create ONE agency between them', r.json && r.json.added, 2);
+  r = await api('GET', '/api/admin/crm/agencies');
+  const shared = ((r.json && r.json.agencies) || []).filter((x) => x.name === 'Shared Firm From A List');
+  check('and there is exactly one record for it, carrying both',
+        [shared.length, shared[0] && shared[0].agents], [1, 2],
+        'a find-or-create per row is how 20 firms became 33 agency records on live data');
 }
 
 /**
@@ -641,6 +728,38 @@ async function runConcurrencySuite() {
 // bug proves the harness would have CAUGHT it.
 const SABOTAGES = [
   {
+    // ⭐⭐ THE ONE BEHAVIOUR THIS FEATURE EXISTS TO CHANGE. The existing prospects form skips an
+    // existing row entirely -- tag and all -- so the agents who have quoted for years, who are the
+    // valuable half of a conference list, would silently not be recorded as having been there.
+    name: 'an already-known person is skipped instead of tagged',
+    find: '      if (label && personId) {',
+    with: '      if (label && personId && !existing) {',
+    breaks: 'and it tags EVERYBODY it could, not only the new ones',
+  },
+  {
+    // A badge list overwriting a name somebody typed while dealing with that agent.
+    name: 'the import overwrites the name we already hold',
+    find: "        known.push({ email, name: existing.name || name });",
+    with: ("        known.push({ email, name: existing.name || name });" +
+           " await env.DB.prepare('UPDATE broker_directory SET name = ? WHERE lower(trim(email)) = ?')" +
+           ".bind(name, email).run();"),
+    breaks: 'and the record we hold is unchanged',
+  },
+  {
+    // A row with no address creating a person anyway -- inventing an identity for a name.
+    name: 'a row with no email is imported anyway',
+    // ⚠️ TWO LINES, because the same regex opens three handlers and a substring match found all
+    // three -- so the sabotage applied nowhere and was reported ANCHOR. The refusal message below
+    // belongs only to the import.
+    find: ('    if (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(email)) {'
+           + NEWLINE +
+           "      refused.push({ who: name || '(no name)', why: 'no email address, so there is no stable way to know who this is' });"),
+    with: ('    if (false) {'
+           + NEWLINE +
+           "      refused.push({ who: name || '(no name)', why: 'no email address, so there is no stable way to know who this is' });"),
+    breaks: 'an event list adds the new people, recognises the known ones, and refuses the rest',
+  },
+  {
     // ⭐⭐ ERIC'S RULE, REPLAYED. Without the exclusion, MHBT is back on a list somebody is about
     // to phone. The mechanism and the data are separate problems, and this guards the mechanism.
     name: 'the acquired-name exclusion removed (a dead firm is back on the call list)',
@@ -681,8 +800,12 @@ const SABOTAGES = [
     // with LOCAL getters -- measured on this machine (America/Chicago): 2020-01-01 becomes
     // 2019-12-31. That is the shape that once moved a compliance anchor a day nationwide.
     name: 'happened_at round-tripped through Date() and formatted locally',
-    find: '  const happenedAt = wanted || today;',
-    with: [
+    // ⚠️ ANCHORED ON THE ERROR MESSAGE ABOVE IT, WHICH IS UNIQUE TO handleCrmAdd. The import
+    // handler has an identical happenedAt line, so the one-line anchor matched twice and the
+    // sabotage stopped applying -- with nothing about this rule having changed.
+    find: ("    return jsonResp({ error: 'happened_at must be YYYY-MM-DD.' }, 400);"
+           + NEWLINE + '  }' + NEWLINE + '  const happenedAt = wanted || today;'),
+    with: ["    return jsonResp({ error: 'happened_at must be YYYY-MM-DD.' }, 400);", '  }',
       '  const _d = wanted ? new Date(wanted) : null;',
       '  const happenedAt = _d',
       '    ? [_d.getFullYear(), String(_d.getMonth() + 1).padStart(2, "0"),',
@@ -768,6 +891,7 @@ async function main() {
         'dev server. Kill it, or set CRM_TEST_PORT to a free port.');
   }
 
+  takeLock();
   console.log('CRM spine (F-383) -- driving the real worker against a real local D1');
   console.log('');
 
@@ -794,18 +918,24 @@ async function main() {
     if (failures) {
       console.log('');
       console.log('The CRM does not behave. See the FAIL lines above.');
+      releaseLock();
       process.exit(1);
     }
     console.log('');
     console.log('  This proves the HANDLERS behave. It says NOTHING about whether anybody can reach');
     console.log('  them from a screen -- that is scripts/check_reachable.mjs.');
+    releaseLock();
     return;
   }
-  if (failures) { console.log('Refusing to self-test from a red baseline.'); process.exit(1); }
+  if (failures) { console.log('Refusing to self-test from a red baseline.'); releaseLock(); process.exit(1); }
 
   console.log('');
   console.log('SELF-TEST -- each sabotage must redden its own assertion');
-  const source = readFileSync(join(REPO, 'worker.js'), 'utf8');
+  // 🔴 LINE ENDINGS NORMALISED BEFORE ANY SABOTAGE IS APPLIED. worker.js is checked out CRLF, so a
+  // multi-line anchor written with a bare newline matches NOTHING and the sabotage is reported
+  // ANCHOR -- TRAPS #246, walked into again the moment a two-line anchor was needed.
+  // ⚠️ Writing the copy back with plain newlines is harmless: esbuild and node do not care.
+  const source = readFileSync(join(REPO, 'worker.js'), 'utf8').split(String.fromCharCode(13, 10)).join(String.fromCharCode(10));
   const testCfg = readFileSync(join(REPO, MAIN_CFG), 'utf8');
   let caught = 0;
   let anchorBroken = 0;
@@ -874,6 +1004,7 @@ async function main() {
 
   console.log('');
   console.log(`  ${caught}/${SABOTAGES.length} sabotages caught${anchorBroken ? `, ${anchorBroken} anchor(s) stale` : ''}.`);
+  releaseLock();
   if (caught !== SABOTAGES.length) {
     console.log('An assertion that cannot fail is not an assertion.');
     process.exit(1);
