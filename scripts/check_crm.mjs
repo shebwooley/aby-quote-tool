@@ -259,7 +259,7 @@ function seedBase(cfg) {
   // ⛔ --local only. Nothing here can reach the real database.
   d1('DROP TABLE IF EXISTS brokers', cfg);
   d1('CREATE TABLE IF NOT EXISTS quotes (id TEXT PRIMARY KEY, quote_number TEXT, created_at TEXT, ' +
-     'broker_email TEXT, broker_agency TEXT, source_tag TEXT, notes TEXT)', cfg);
+     'broker_email TEXT, broker_agency TEXT, source_tag TEXT, notes TEXT, broker_name TEXT)', cfg);
   d1('CREATE TABLE IF NOT EXISTS broker_directory (email TEXT PRIMARY KEY, name TEXT, phone TEXT, ' +
      'agency TEXT, first_seen TEXT, last_seen TEXT, quote_count INTEGER)', cfg);
 }
@@ -304,14 +304,24 @@ function seedTest(cfg) {
   // The work itself: 3 quotes run at the old firm, 4 at the new one. ⛔ Nothing the CRM does may
   // ever change one of these rows.
   const q = [];
-  for (let i = 0; i < 3; i++) q.push(`('crmtest-q-old-${i}','Q${i}','2019-06-0${i + 1}','${MOVER_OLD}','Test Agency 0','','')`);
+  for (let i = 0; i < 3; i++) q.push(`('crmtest-q-old-${i}','Q${i}','2019-06-0${i + 1}','${MOVER_OLD}','Test Agency 0','','','Test Mover')`);
   // Six recent quotes against Test Agency 7, so it derives as 'regular' and can be RECORDED as
   // something else. ⚠️ Dated recently on purpose: an old sixth quote would derive as 'former'.
+  // ⭐ ONE PERSON WHOSE QUOTES ARE SOMETIMES TYPED WITH AN ADDRESS AND SOMETIMES WITHOUT --
+  // the shape that made Jason Sandler two rows on live data.
+  q.push("('crmtest-q-sp-1','S1','2026-05-01','split@example.com','Test Agency 1','','','Split Person')");
+  q.push("('crmtest-q-sp-2','S2','2026-05-02','split@example.com','Test Agency 1','','','Split Person')");
+  q.push("('crmtest-q-sp-3','S3','2026-05-03','','Test Agency 1','','','Split Person')");
+  // ⛔ AND ONE NAME THAT MAPS TO TWO ADDRESSES. The name proves nothing, so the blank-email row
+  // must NOT be folded into either -- that would merge two different people for ever.
+  q.push("('crmtest-q-am-1','A1','2026-05-04','amb.one@example.com','Test Agency 2','','','Ambiguous Person')");
+  q.push("('crmtest-q-am-2','A2','2026-05-05','amb.two@example.com','Test Agency 2','','','Ambiguous Person')");
+  q.push("('crmtest-q-am-3','A3','2026-05-06','','Test Agency 2','','','Ambiguous Person')");
   for (let i = 0; i < 6; i++) {
-    q.push(`('crmtest-q-grow-${i}','G${i}','2026-07-0${i + 1}','grow${i}@example.com','Test Agency 7','','')`);
+    q.push(`('crmtest-q-grow-${i}','G${i}','2026-07-0${i + 1}','grow${i}@example.com','Test Agency 7','','','Grower Person')`);
   }
-  for (let i = 0; i < 4; i++) q.push(`('crmtest-q-new-${i}','R${i}','2026-06-0${i + 1}','${MOVER_NEW}','Agency With No Record','','')`);
-  d1('INSERT INTO quotes (id, quote_number, created_at, broker_email, broker_agency, source_tag, notes) VALUES ' +
+  for (let i = 0; i < 4; i++) q.push(`('crmtest-q-new-${i}','R${i}','2026-06-0${i + 1}','${MOVER_NEW}','Agency With No Record','','','Test Mover')`);
+  d1('INSERT INTO quotes (id, quote_number, created_at, broker_email, broker_agency, source_tag, notes, broker_name) VALUES ' +
      q.join(','), cfg);
 }
 
@@ -847,6 +857,26 @@ async function runSuite() {
   check('the derived bands read as intended, and quiet outranks volume',
         [byQuotes(0), byQuotes(3), byQuotes(6)], ['never quoted', 'former', 'regular'],
         'the recorded vocabulary and the derived bands must be the same words, or they cannot be compared');
+
+  // ── 32. ONE PERSON, ONE ROW ON THE AGENT LIST -- even when some of their quotes carry no
+  //    address. Measured live: Jason Sandler was 3 quotes under his address and 3 under his name,
+  //    and it was FIFTEEN people, not the three the plan named.
+  r = await api('GET', '/api/admin/stats');
+  const agents = (r.json && r.json.byAgent) || [];
+  const split = agents.filter((a) => String(a.name || '') === 'Split Person');
+  check('an agent whose quotes sometimes lack an email is ONE row',
+        [split.length, split[0] && split[0].n], [1, 3],
+        'the identity is email-else-name, so a missing address used to open a second bucket');
+  check('and the row is keyed on their ADDRESS, not their name',
+        split[0] && split[0].key, 'split@example.com');
+
+  // ⛔ THE SAFETY CONDITION, AND IT IS THE WHOLE REASON THIS IS SAFE TO DO AT ALL.
+  const amb = agents.filter((a) => String(a.name || '') === 'Ambiguous Person');
+  check('a name that maps to TWO addresses is never collapsed', amb.length, 3,
+        'collapsing on a name alone would merge two different people, permanently and invisibly');
+  check('and the address-less row keys on the name, joining neither',
+        amb.some((a) => a.key === 'ambiguous person'), true,
+        'live, this is Rebecca Hearne -- two agencies, and the quotes must stay with each');
 }
 
 /**
@@ -925,6 +955,14 @@ async function runConcurrencySuite() {
 // self-test whose sabotages are artificial proves the harness runs; one that replays the historical
 // bug proves the harness would have CAUGHT it.
 const SABOTAGES = [
+  {
+    // ⭐⭐ THE DANGEROUS DIRECTION. Without the HAVING, a name that belongs to two people folds
+    // their quote histories into one row -- silently, permanently, and looking tidier than before.
+    name: 'the name-to-email resolution stops requiring the name to be unambiguous',
+    find: '  "  GROUP BY 1 HAVING COUNT(DISTINCT lower(trim(broker_email))) = 1) ";',
+    with: '  "  GROUP BY 1) ";',
+    breaks: 'a name that maps to TWO addresses is never collapsed',
+  },
   {
     // ⭐⭐ THE ONE THAT DESTROYS THE WHOLE FEATURE WHILE LOOKING LIKE A TIDY-UP: keeping the
     // recorded value in step with the derived one. It would read perfectly on screen and answer

@@ -5951,6 +5951,38 @@ const SUCCEEDED_BY = {
 // has one; almost none has a registered broker behind it. Routing a lookup through a table that
 // is empty by design is how a working feature reads as unpopulated data.
 // ⚠️ Same shape as TRAPS #230: valid SQL, no error, a plausible-looking screen, wrong answer.
+// ── WHO AN AGENT IS, ACROSS QUOTES THAT DO AND DO NOT CARRY AN EMAIL ───────────────────────────
+//
+// 🔴🔴 ONE PERSON WAS TWO ROWS, AND THE CAUSE IS THE KEY ITSELF. The identity is email-if-present,
+// else name -- so a broker whose quotes are SOMETIMES typed with an address and sometimes without
+// lands in two buckets: one keyed on the address, one keyed on the name.
+// MEASURED LIVE 2026-08-23: Jason Sandler is 3 quotes under his address and 3 under his name.
+// ⚠️ AND IT IS NOT THE THREE PEOPLE THE PLAN NAMED -- it is FIFTEEN. The three were the ones
+// somebody happened to notice.
+//
+// ⭐⭐ THE FIX RESOLVES A BLANK EMAIL THROUGH THE NAME, AND ONLY WHERE THE NAME IS UNAMBIGUOUS.
+// If a name maps to exactly ONE address anywhere in the log, a quote carrying that name and no
+// address is that person. If it maps to two, the name proves nothing and the rows stay apart.
+// ⛔ THAT CONDITION IS THE WHOLE SAFETY OF IT. Collapsing on a name alone would merge two
+// different John Smiths into one row, permanently and invisibly -- the exact defect the people
+// table exists to prevent, one layer up.
+//
+// ⭐ IT INVENTS NOTHING AND STORES NOTHING. The quotes are untouched; this is a GROUPING, resolved
+// at read time, so a later quote that carries the address simply makes the answer better.
+const AGENT_EMAIL_CTE =
+  "WITH agent_email AS (" +
+  "  SELECT lower(trim(broker_name)) AS nm, MIN(lower(trim(broker_email))) AS email " +
+  "  FROM quotes " +
+  "  WHERE trim(COALESCE(broker_name,'')) <> '' AND trim(COALESCE(broker_email,'')) <> '' " +
+  "  GROUP BY 1 HAVING COUNT(DISTINCT lower(trim(broker_email))) = 1) ";
+
+const AGENT_EMAIL_JOIN = " LEFT JOIN agent_email ae ON ae.nm = lower(trim(q.broker_name)) ";
+
+const AGENT_KEY =
+  "COALESCE(NULLIF(lower(trim(q.broker_email)),''), " +
+  "         ae.email, " +
+  "         NULLIF(lower(trim(q.broker_name)),''), " +
+  "         NULLIF(lower(trim(q.broker_agency)),''), '(not stated)')";
 const AGENCY_JOIN =
   "LEFT JOIN agencies a ON lower(trim(a.name)) = lower(trim(q.broker_agency)) " +
   "AND trim(coalesce(q.broker_agency,'')) <> '' " +
@@ -6027,11 +6059,10 @@ async function handleAdminStats(request, env) {
     // the book, and a table that silently omits it reports a smaller business than exists.
     // ⚠️ A name-keyed group is weaker than an email-keyed one: "Niels" and "Niels Andersen" are two
     // rows. That is a known cost, and it is far smaller than showing none of them.
-    const agentKey =
-      "COALESCE(NULLIF(lower(trim(q.broker_email)),''), " +
-      "         NULLIF(lower(trim(q.broker_name)),''), " +
-      "         NULLIF(lower(trim(q.broker_agency)),''), '(not stated)')";
+    // ⭐ THE SHARED DEFINITION, so this and the fallback below cannot answer differently.
+    const agentKey = AGENT_KEY;
     const byAgent = await env.DB.prepare(
+      AGENT_EMAIL_CTE +
       "SELECT " + agentKey + " AS key, " +
       "       MAX(NULLIF(trim(q.broker_email),'')) AS email, " +
       "       MAX(NULLIF(trim(q.broker_name),'')) AS name, " +
@@ -6055,7 +6086,7 @@ async function handleAdminStats(request, env) {
       "       COUNT(DISTINCT CASE WHEN cc.status = 'active' " +
       "                           THEN q.client_match_key END) AS sold_active " +
       "FROM quotes q " +
-      BROKER_JOIN + " " +
+      BROKER_JOIN + AGENT_EMAIL_JOIN + " " +
       "LEFT JOIN aby_clients cc ON cc.match_key = q.client_match_key " +
       // Only an agent we have an EMAIL for can be assigned -- broker_directory is keyed on it.
       // A name-keyed row ("Niels" and "Niels Andersen" are two groups) has nowhere to store a
@@ -6356,14 +6387,13 @@ async function statsPerBlock(env, firstError, rep) {
   // answers the same question; a fallback that quietly applies a different rule is a second bug
   // waiting for the day the first one fires.
   const agent = await attempt('byAgent', () => env.DB.prepare(
-    "SELECT COALESCE(NULLIF(lower(trim(q.broker_email)),''), " +
-    "                NULLIF(lower(trim(q.broker_name)),''), " +
-    "                NULLIF(lower(trim(q.broker_agency)),''), '(not stated)') AS key, " +
+    AGENT_EMAIL_CTE +
+    "SELECT " + AGENT_KEY + " AS key, " +
     "       MAX(NULLIF(trim(q.broker_email),'')) AS email, " +
     "       MAX(NULLIF(trim(q.broker_name),'')) AS name, " +
     "       MAX(NULLIF(trim(q.broker_agency),'')) AS agency, NULL AS rep, COUNT(*) AS n, " +
     "       MAX(q.created_at) AS last_quote " +
-    "FROM quotes q" + joinIf + "WHERE 1=1 " + repFilter +
+    "FROM quotes q" + joinIf + AGENT_EMAIL_JOIN + "WHERE 1=1 " + repFilter +
     " GROUP BY key ORDER BY n DESC LIMIT 1000").bind(...args).all());
   if (agent) out.byAgent = agent.results || [];
 
