@@ -1749,6 +1749,21 @@ async function handleAdminReferrals(request, env) {
  * arrives as a syntax error. That bug shipped three times in one afternoon. Server side, this is
  * ordinary code.
  */
+// Agency values that are NOT a firm, and values that mean the client came to us DIRECTLY.
+// ⭐ DIRECT IS AN ANSWER, NOT AN ABSENCE -- the same ruling as the `direct` flag on a quote.
+// "Niels Direct" does not name an agency but it DOES say how the client arrived, and lumping it in
+// with "we have no idea" would both understate what we know and invent a firm called Niels Direct.
+const NOT_A_FIRM = new Set(['(no agency folder)', '(loose file - no agency folder)', '(not stated)',
+  '', 'no brokers', 'no broker', 'existing client', 'independent', 'independent broker',
+  'unknown', 'none', 'aby']);
+const DIRECT_MARKERS = new Set(['direct', 'niels', 'eric', 'niels direct', 'eric direct']);
+
+function cleanAgency(a) {
+  const t = String(a == null ? '' : a).trim(), low = t.toLowerCase();
+  if (DIRECT_MARKERS.has(low)) return '(direct)';
+  return NOT_A_FIRM.has(low) ? '' : t;
+}
+
 function normName(s) {
   return String(s == null ? '' : s)
     .toLowerCase().trim()
@@ -1802,6 +1817,12 @@ async function handleAdminClients(request, env) {
   const q = await attempt('quotes', () => env.DB.prepare(
     "SELECT quote_number, client_name, created_at, status, broker_agency, broker_name " +
     "FROM quotes WHERE client_name IS NOT NULL AND trim(client_name) <> ''").all());
+  // The acquisition tree, so an employer quoted by MMA and again by MHBT is not reported as
+  // "contested". MHBT IS MMA -- Marsh acquired it in 2015 -- and a client quoted under both names
+  // before and after a rename is the single most ordinary thing in an acquired book.
+  const fam = await attempt('agencies', () => env.DB.prepare(
+    "SELECT a.name, pa.name AS parent FROM agencies a " +
+    "LEFT JOIN agencies pa ON pa.id = a.parent_id").all());
   const s = await attempt('sales', () => env.DB.prepare(
     "SELECT employer, products, announced_at, agency FROM aby_sales " +
     "WHERE employer IS NOT NULL AND trim(employer) <> ''").all());
@@ -1809,6 +1830,13 @@ async function handleAdminClients(request, env) {
   const clients = (c && c.results) || [];
   const quotes  = (q && q.results) || [];
   const sales   = (s && s.results) || [];
+
+  // agency name -> the family it belongs to. An unparented agency is its own family.
+  const famOf = new Map();
+  for (const r of ((fam && fam.results) || [])) {
+    if (r.name) famOf.set(r.name.trim().toLowerCase(), (r.parent || r.name).trim());
+  }
+  const rootOf = (a) => famOf.get(String(a || '').trim().toLowerCase()) || a;
 
   const qBy = new Map(), sBy = new Map();
   for (const r of quotes) {
@@ -1831,6 +1859,32 @@ async function handleAdminClients(request, env) {
     const qs = qBy.get(k) || [];
     const ss = sBy.get(k) || [];
     qs.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+
+    // THREE SOURCES OF ATTRIBUTION, IN ORDER OF DIRECTNESS:
+    //   1. a sale record states the agency outright -- but only back to late May 2025
+    //   2. a QUOTE that matches this client names one -- and those reach back to 2008
+    //   3. nothing at all, which is the number worth knowing
+    // ⭐ COMPARED BY FAMILY, DISPLAYED BY NAME. "USI / MMA / MHBT" is two firms, not three, and
+    // calling it three would inflate the contested count with the most ordinary event in an
+    // acquired book. The names are still shown in full, because which NAME quoted is real history.
+    const qNames = [...new Set(qs.map((r) => cleanAgency(r.broker_agency)))].filter(Boolean);
+    const qFamilies = [...new Set(qNames.map(rootOf))];
+    const qAgencies = qFamilies.length <= 1 ? qFamilies : qNames;
+    const saleAgency = ss.map((r) => cleanAgency(r.agency)).filter(Boolean)[0] || '';
+    const attrib = saleAgency
+      ? { src: 'sale', label: saleAgency, all: [saleAgency], firms: 1 }
+      : qFamilies.length === 1
+        // The family is the answer; the label names it, even if several of its names quoted.
+        ? { src: 'quote', label: qNames.length > 1 ? qNames.join(' / ') : qFamilies[0],
+            all: qNames, firms: 1 }
+        : qFamilies.length > 1
+          // ⛔ NEVER pick one. Two brokers competing on a single account is a real case here --
+          // Authers Building Group and Gemmy Industries are both on record -- so the screen shows
+          // every agency that quoted and says the attribution is a judgement.
+          ? { src: 'contested', label: qAgencies.join(' / '), all: qAgencies,
+              firms: qFamilies.length }
+          : { src: 'none', label: '', all: [], firms: 0 };
+
     out.rows.push({
       id: cl.id,
       name: cl.name,
@@ -1847,7 +1901,22 @@ async function handleAdminClients(request, env) {
       pending: qs.filter((r) => r.status === 'P').length,
       sold: qs.filter((r) => r.status === 'S').length,
       lastQuote: qs.length ? String(qs[0].created_at || '').slice(0, 10) : '',
-      agency: qs.length ? (qs[0].broker_agency || '') : (ss.length ? (ss[0].agency || '') : ''),
+      // WHO IS RESPONSIBLE FOR THIS CLIENT. Eric, 2026-08-22: "current groups and termed groups
+      // are still sales... we have quotes with agency info dating back several years, and some of
+      // those quotes must match either the termed groups or the currently active groups... so we
+      // could know which agencies are responsible for which sales and see how many we're missing
+      // agency/agent info on."
+      // ⛔ EVERY CLIENT IS A SALE. `aby_sales` is 15 months of announcement emails, not the book --
+      // so attributing only from it discards every agency relationship older than a year.
+      // 🔴 THIS CELL USED TO READ `qs[0].broker_agency`, which silently handed a contested account
+      // to whichever quote happened to sort first. 46 clients were quoted by MORE THAN ONE agency,
+      // and that is a real case in this book (two brokers competing), not a data fault.
+      agency: attrib.label,
+      agencies: attrib.all,
+      // ⭐ THE BADGE COUNTS FIRMS, THE LABEL LISTS NAMES. "USI / MMA / MHBT" is three names and
+      // TWO firms; a badge reading "3 agencies" over an acquisition would overstate the conflict.
+      firmCount: attrib.firms,
+      attribution: attrib.src,
       sales: ss.length,
       soldProducts: ss.map((r) => r.products).filter(Boolean).join('; ').slice(0, 120),
       // The row Eric can act on: an active client whose quote nobody ever dispositioned.
@@ -1882,6 +1951,13 @@ async function handleAdminClients(request, env) {
     pendingQuotesOnActive: out.rows.reduce((n, r) => n + (r.status === 'active' ? r.pending : 0), 0),
     salesWithNoClient: out.orphanSales.length,
     salesMatchedToClient: sales.length - out.orphanSales.length,
+    // How much of the BOOK we can put a name to. This is the question Eric asked and nothing
+    // answered it before: `aby_sales` covers 15 months, so counting only from there implied we
+    // knew almost nothing about who brought our clients.
+    clientsAttributed: out.rows.filter((r) => r.attribution !== 'none').length,
+    clientsUnattributed: out.rows.filter((r) => r.attribution === 'none').length,
+    clientsFromQuoteOnly: out.rows.filter((r) => r.attribution === 'quote').length,
+    clientsContested: out.rows.filter((r) => r.attribution === 'contested').length,
     orphanSalesQuoted: out.orphanSales.filter((r) => r.quotes > 0).length,
     quotedNotAClient: [...quotedKeys].filter((k) => !seen.has(k)).length,
   };
@@ -2727,6 +2803,14 @@ ${abyAdminNav('/admin/brokers')}
        + '<td class="c">'+tot+'</td>'
        + '<td class="c">'+pctOfTotal(tot)+'</td>'
        + '<td class="c">'+sales+'</td>'
+       // CLIENTS, NOT QUOTES. Eric, 2026-08-22: "we could know which agencies are responsible for
+       // which sales". This number was already being computed -- it is the numerator of the
+       // conversion rate -- but it only ever appeared inside a tooltip, so the table showed how
+       // BUSY an agency was and never how much of the book it actually brought.
+       // ⚠️ An employer quoted by two different firms counts for both; 36 clients are contested.
+       + '<td class="c">'+(won ? '<strong>'+won+'</strong>'
+            + '<span class="muted" style="font-size:11.5px"> / '+kept+' now</span>'
+            : '<span class="muted">—</span>')+'</td>'
        + '<td class="c">'+convCell+'</td><td class="c">'+keptCell+'</td>'
        + '<td class="c">'+(x.agents||0)+'</td>'
        + '<td class="date">'+(x.last_quote?day(x.last_quote):'\u2014')+'</td>'
@@ -2736,12 +2820,17 @@ ${abyAdminNav('/admin/brokers')}
    var shown = capRows('byAgency', tops);
    document.getElementById('byAgency').innerHTML = tops.length
      ? '<table class="grid"><colgroup>'
-       + '<col style="width:26%"><col style="width:7%"><col style="width:7%">'
-       + '<col style="width:7%"><col style="width:10%"><col style="width:9%">'
-       + '<col style="width:6%"><col style="width:12%"><col style="width:16%">'
+       + '<col style="width:23%"><col style="width:6%"><col style="width:6%">'
+       + '<col style="width:6%"><col style="width:11%"><col style="width:9%">'
+       + '<col style="width:8%"><col style="width:5%"><col style="width:11%">'
+       + '<col style="width:15%">'
        + '</colgroup><thead><tr>'+hc('byAgency','agency','Agency')+hc('byAgency','n','Quotes','c')
        +hc('byAgency','share','Share','c')
        +hc('byAgency','sales','Sales','c')
+       +'<th class="c" title="Clients on our books that this agency brought us — counted '
+       +'from the whole history, by matching each client against the quotes. The second number is '
+       +'how many are still active. Every client is a sale; the sales list only covers the last '
+       +'fifteen months, so counting from there alone would miss most of this.">Clients</th>'
        +'<th class="c" title="Employers this agency quoted that are on our books, active or '
        +'termed. Counts each EMPLOYER once however many times they were quoted, and ignores the '
        +'quote status column entirely -- nothing in the back-book was ever dispositioned.">'
@@ -2767,7 +2856,7 @@ ${abyAdminNav('/admin/brokers')}
              // them up would find a hole and think something was missing.
              var ppl = agentsFor(x);
              if (ppl.length) {
-               out += '<tr style="background:#f4f7f5"><td colspan="9" style="padding:6px 22px;'
+               out += '<tr style="background:#f4f7f5"><td colspan="10" style="padding:6px 22px;'
                  + 'font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:#6b7b72">'
                  + 'Agents we can name here &mdash; ' + ppl.length
                  + ' of the ' + (x.agents||0) + ' who have quoted</td></tr>';
@@ -2778,8 +2867,10 @@ ${abyAdminNav('/admin/brokers')}
                    + (p.email ? ' <span class="muted" style="font-size:11.5px">'+esc(p.email)+'</span>' : '')
                    + '</td>'
                    + '<td class="c">'+Number(p.n||0)+'</td>'
-                   // Five dashes, not three: an agent has no conversion figure of their own
-                   // because a client folder records the AGENCY, never the individual.
+                   // Six dashes: an agent has no client figure of their own, because a client
+                   // folder records the AGENCY and never the individual. That is a real limit of
+                   // the source, not a gap to be filled by guessing.
+                   + '<td class="c"><span class="muted">&mdash;</span></td>'
                    + '<td class="c"><span class="muted">&mdash;</span></td>'
                    + '<td class="c"><span class="muted">&mdash;</span></td>'
                    + '<td class="c"><span class="muted">&mdash;</span></td>'
@@ -2793,7 +2884,7 @@ ${abyAdminNav('/admin/brokers')}
              }
            }
            return out;
-         }).join('')+moreRow('byAgency', shown.length, tops.length, 9)+'</tbody></table>'
+         }).join('')+moreRow('byAgency', shown.length, tops.length, 10)+'</tbody></table>'
      : '<p class="muted">Nothing yet.</p>';
    wireAgToggles();
    }
@@ -3205,6 +3296,7 @@ ${abyAdminNav('/admin/clients')}
     A <b>quote</b> is a proposal we sent. A <b>sale</b> is something that happened on a date.
     A <b>client</b> is somebody we serve today, active or termed.
     <span id="gap"></span>
+    <span id="attrib"></span>
     The reason is now known: the sold groups sit in a <b>second folder tree</b> we had not seen,
     which accounts for about 80% of the gap where it has been checked. So nothing here is merged,
     and no employer is ever marked <i>termed</i> just for being absent from a list.
@@ -3222,6 +3314,8 @@ ${abyAdminNav('/admin/clients')}
         <option value="">All clients (active and termed)</option>
         <option value="active">Active only</option>
         <option value="termed">Termed only</option>
+        <option value="noagency">No agency on file</option>
+        <option value="contested">More than one agency quoted them</option>
         <option value="pending">Pending quote, and an active client</option>
         <option value="quoted">Quoted at some point</option>
         <option value="never">Never quoted through the tool</option>
@@ -3258,6 +3352,15 @@ ${abyAdminNav('/admin/clients')}
 
  function tiles(){
   var t=DATA.totals||{};
+  var at=document.getElementById('attrib');
+  if(at) at.innerHTML=' <b>Every client here is a sale</b> — the sales list holds '+
+    (t.sales||0).toLocaleString()+' records only because it is fifteen months of announcement '+
+    'emails. Matching each client against the quotes, which reach back to 2008, puts an agency on '+
+    '<b>'+(t.clientsAttributed||0).toLocaleString()+'</b> of them; <b>'+
+    (t.clientsFromQuoteOnly||0).toLocaleString()+'</b> of those come from a quote rather than a '+
+    'sale record. <b>'+(t.clientsUnattributed||0).toLocaleString()+'</b> have nothing on file '+
+    'saying who brought them, and '+(t.clientsContested||0).toLocaleString()+' were quoted by more '+
+    'than one agency.';
   var g=document.getElementById('gap');
   if(g) g.innerHTML='Only <b>'+(t.salesMatchedToClient||0).toLocaleString()+' of '+
     (t.sales||0).toLocaleString()+'</b> recorded sales appear in the client folder list, and '+
@@ -3268,6 +3371,8 @@ ${abyAdminNav('/admin/clients')}
    ['Active clients', t.clientsActive, ''],
    ['Termed clients', t.clientsTermed, ''],
    ['Quoted at some point', t.clientsQuoted, ''],
+   ['We know which agency brought them', t.clientsAttributed, ''],
+   ['No agency on file', t.clientsUnattributed, 'flag'],
    ['Never quoted here', t.clientsNeverQuoted, ''],
    ['Pending quotes on an active client', t.pendingQuotesOnActive, 'flag'],
    ['Sales with no client folder', t.salesWithNoClient, 'flag'],
@@ -3284,6 +3389,8 @@ ${abyAdminNav('/admin/clients')}
   var f=document.getElementById('filter').value;
   var rows=(DATA.rows||[]).filter(function(r){
    if(q && r.name.toLowerCase().indexOf(q)<0) return false;
+   if(f==='noagency') return r.attribution==='none';
+   if(f==='contested') return r.attribution==='contested';
    if(f==='active') return r.status==='active';
    if(f==='termed') return r.status==='termed';
    if(f==='pending') return r.pendingButActive;
@@ -3304,7 +3411,20 @@ ${abyAdminNav('/admin/clients')}
       '<td class="n">'+(r.pendingButActive?'<b>'+r.pending+'</b>':(r.pending||''))+'</td>'+
       '<td class="n">'+(r.sold||'')+'</td>'+
       '<td class="date">'+(r.lastQuote||'—')+'</td>'+
-      '<td>'+esc(r.agency||'')+'</td>'+
+      '<td>'+(r.attribution==='none'
+          ? '<span class="muted">not on file</span>'
+          : esc(r.agency||'')
+            + (r.attribution==='contested'
+                ? ' <span class="pill unk" title="'+r.firmCount+' agencies quoted this'
+                  + ' employer, so who brought them is a judgement. Two brokers competing on one'
+                  + ' account is a real case in this book and nothing here picks a winner.">'
+                  + r.firmCount+' agencies</span>'
+                : (r.attribution==='quote'
+                    ? ' <span class="muted" title="Inferred from a quote that matches this'
+                      + ' employer, not from a sale record. The sales list only goes back to late'
+                      + ' May 2025; the quotes reach 2008.">from quote</span>'
+                    : ''))
+        )+'</td>'+
       '<td class="n">'+(r.sales||'')+'</td></tr>';
   });
   h+='</table>';

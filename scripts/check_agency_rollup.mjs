@@ -188,7 +188,7 @@ const RULES = [
       const rows = r.html.split("<tr").slice(1);
       return rows.every((row) => {
         const cells = (row.match(/<td/g) || []).length;
-        return cells === 9 || /colspan="9"/.test(row);
+        return cells === 10 || /colspan="10"/.test(row);
       });
     },
   },
