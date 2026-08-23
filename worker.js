@@ -3083,14 +3083,16 @@ ${abyAdminNav('/admin/brokers')}
        li('<b>' + mid.length + ' agencies</b> have sent <b>between 10 and 49 quotes</b> each, and'
           + ' together they are <b>' + Math.round(100*midN/tot) + '%</b> of ' + ofPeriod + '.'
           + ' That is the middle of the book, and usually where growth is cheapest'
-          + ' &mdash; they already know us.'),
+          + ' &ndash; they already know us.'),
        li('The <b>typical</b> agency has sent <b>' + med + '</b> '
-          + (med === 1 ? 'quote' : 'quotes') + ' &mdash; half sent that many or fewer.'),
+          + (med === 1 ? 'quote' : 'quotes') + ' &ndash; half sent that many or fewer.'),
        li('<b>' + multi + ' agencies</b> reach us through <b>more than one agent</b>.'
           + ' The rest come through a single person.'),
        li('<b>' + noSale + ' of ' + ag.length.toLocaleString() + ' agencies</b> have quoted with no'
-          + ' sale recorded against them. <span class="muted">Sales are only on file from late May'
-          + ' 2025, so this counts what we can see, not what they bought.</span>')
+          + ' sale recorded against them. <span class="muted">The sales record now reaches back'
+          + ' beyond the announcement emails, because a client can be matched to the quote that'
+          + ' originated it &ndash; so this is agencies we could not match a sale for, not simply'
+          + ' a gap in the emails.</span>')
      ].filter(function(s){ return s; }).join('');
 
      var wholeHistory = [
@@ -3102,7 +3104,7 @@ ${abyAdminNav('/admin/brokers')}
          : ''),
        (acq.length
          ? li('<b>' + acq.length + ' names</b> in the log belong to firms that were '
-              + '<b>acquired</b> and are counted under their buyer, not as lapses &mdash; '
+              + '<b>acquired</b> and are counted under their buyer, not as lapses &ndash; '
               + acq.map(function(x){ return esc(x.agency_label)+' is now '+esc(x.parent_name||''); }).join(', ')
               + '.')
          : ''),
@@ -3127,7 +3129,7 @@ ${abyAdminNav('/admin/brokers')}
              inPeriod)
        + block('Whole history',
                'These cover the entire book and do <b>not</b> change with the Since filter'
-               + ' &mdash; an agency is not "fallen off" just because it is quiet inside a window'
+               + ' &ndash; an agency is not "fallen off" just because it is quiet inside a window'
                + ' you picked.',
                wholeHistory);
    })();
