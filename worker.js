@@ -51,6 +51,10 @@ export default {
     if (path === '/api/agency/invite'   && method === 'POST') return handleAgencyInvite(request, env);
     if (path === '/api/agency/settings' && method === 'POST') return handleAgencySettings(request, env);
     if (path === '/api/agency/quotes'   && method === 'GET')  return handleAgencyQuotes(request, env);
+    // The agency's own view of its people. ⛔ Broker-authenticated, and it returns nothing
+    // ABY-internal -- no owner, no priority, no tags, no notes.
+    if (path === '/api/agency/people'   && method === 'GET')  return handleAgencyPeople(request, env);
+    if (path === '/api/agency/person'   && method === 'POST') return handleAgencyPersonUpdate(request, env);
     if (path === '/api/agency/me'       && method === 'GET')  return handleAgencyMe(request, env);
     if (path === '/api/agency/role'     && method === 'POST') return handleAgencyRole(request, env);
     // ABY's own admin views (Eric, 2026-08-18). Admin-gated, not broker-gated.
@@ -72,6 +76,7 @@ export default {
     if (path === '/api/admin/crm/relationship' && method === 'POST') return withAuth(request, env, () => handleCrmRelationship(request, env));
     if (path === '/api/admin/crm/agency'       && method === 'POST') return withAuth(request, env, () => handleCrmAgencyField(request, env));
     if (path === '/api/admin/crm/import'       && method === 'POST') return withAuth(request, env, () => handleCrmImport(request, env));
+    if (path === '/api/admin/crm/agency-dupes' && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyDupes(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
     // Referral partners (F-referrals, Eric 2026-08-19)
     if (path === '/api/admin/referrals' && method === 'GET')  return withAuth(request, env, () => handleAdminReferrals(request, env));
@@ -2695,6 +2700,180 @@ async function handleCrmImport(request, env) {
     added: added.length, known: known.length, refused: refused.length, tagged,
     detail: { added, known, refused, differs },
   });
+}
+
+
+/**
+ * Put a registered or invited broker into the directory ABY actually works from.
+ *
+ * 🔴🔴 THE GAP THIS CLOSES, AND IT IS ERIC'S QUESTION: "will they have the ability to add other
+ * agents or account managers with their emails and us pull that info into our list?"
+ * ⛔ UNTIL NOW, NO. An invite wrote to the brokers table (accounts) and the CRM reads broker_directory
+ * (the people ABY knows of, built from the quote log). So an agency could hand ABY six account
+ * managers and every one of them would be invisible to marketing.
+ *
+ * ⭐⭐ SAME RULE AS THE EVENT IMPORT: recognise, never duplicate. An agent ABY has known for years is
+ * attached to the person they already are; only a genuinely new address creates one.
+ *
+ * ⚠️ THE AGENCY IS TAKEN AS AN ID, NOT A NAME. The inviter is signed in, so their agency is known
+ * exactly -- there is nothing to match on and nothing to get wrong. That is strictly better than the
+ * event import, which only ever has a typed firm name to work with.
+ *
+ * ⛔ IT NEVER OVERWRITES. If ABY already holds a name for that address, the agency's version is not
+ * applied here -- the same reasoning as the import: what ABY holds was typed by somebody dealing
+ * with that agent. The agency can correct it deliberately from their own screen.
+ */
+async function linkBrokerIntoDirectory(env, opts) {
+  const email = String((opts && opts.email) || '').trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { skipped: 'not an email' };
+  const now = new Date().toISOString();
+  const name = String((opts && opts.name) || '').trim().slice(0, 120);
+  const phone = String((opts && opts.phone) || '').trim().slice(0, 40);
+  const agencyId = String((opts && opts.agencyId) || '').trim() || null;
+  const agencyName = String((opts && opts.agencyName) || '').trim().slice(0, 120);
+  const source = String((opts && opts.source) || 'invite');
+
+  try {
+    const existing = await env.DB.prepare(
+      'SELECT email, person_id, agency_id FROM broker_directory WHERE lower(trim(email)) = ?'
+    ).bind(email).first();
+
+    if (existing) {
+      // ⭐ ONE THING IS FILLED IN RATHER THAN OVERWRITTEN: an address ABY knew from a quote may have
+      // no agency record attached. Now that a signed-in administrator has asserted the membership,
+      // that is the best evidence there will ever be for it.
+      if (!existing.agency_id && agencyId) {
+        await env.DB.prepare('UPDATE broker_directory SET agency_id = ? WHERE lower(trim(email)) = ? AND agency_id IS NULL')
+          .bind(agencyId, email).run();
+      }
+      if (existing.person_id) return { linked: 'already known', personId: existing.person_id };
+      const personId = crypto.randomUUID();
+      await env.DB.prepare('INSERT INTO people (id, name, created_at, updated_at) VALUES (?,?,?,?)')
+        .bind(personId, name, now, now).run();
+      await env.DB.prepare('UPDATE broker_directory SET person_id = ? WHERE lower(trim(email)) = ? AND person_id IS NULL')
+        .bind(personId, email).run();
+      return { linked: 'already known', personId };
+    }
+
+    const personId = crypto.randomUUID();
+    await env.DB.prepare('INSERT INTO people (id, name, created_at, updated_at) VALUES (?,?,?,?)')
+      .bind(personId, name, now, now).run();
+    await env.DB.prepare(
+      'INSERT INTO broker_directory (email, name, phone, agency, agency_id, first_seen, last_seen, ' +
+      'quote_count, person_id, source) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    ).bind(email, name, phone, agencyName, agencyId, now, now, 0, personId, source).run();
+    return { linked: 'added', personId };
+  } catch (e) {
+    // ⚠️ REPORTED, NEVER THROWN. An invite must still succeed if this fails: the account and the
+    // set-password email are what the agency asked for, and ABY's list is a second beneficiary.
+    return { error: String((e && e.message) || e) };
+  }
+}
+
+/**
+ * What ABY already knows about the people at YOUR agency.
+ *
+ * ⭐⭐ THE HALF ERIC ASKED ABOUT SECOND, AND THE MORE VALUABLE ONE: "if we already have some agent
+ * info would that fill in to their admin area where they can see it and update it if necessary?"
+ * ABY knows 139 agents from fifteen years of quotes. Making an agency RETYPE their own colleagues is
+ * the product failing at the thing it exists for.
+ *
+ * 🔴 IT RETURNS NOTHING ABY-INTERNAL. No priority, no owner, no tags, no notes. Those are ABY's
+ * judgments about the agency, and a broker must never read them about themselves. The columns are
+ * chosen one by one here rather than by SELECT *, so a column added later cannot leak by default.
+ */
+async function handleAgencyPeople(request, env) {
+  const me = await currentBroker(request, env);
+  if (!me) return jsonResp({ error: 'Please sign in.' }, 401);
+  if (!me.agency_id) return jsonResp({ people: [], note: 'Your account is not attached to an agency.' });
+  try {
+    const { results } = await env.DB.prepare(
+      'SELECT d.email, d.name, d.phone, ' +
+      "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(d.email)) " +
+      "          AND trim(q.broker_email) <> '') AS quotes, " +
+      '       (SELECT MAX(q.created_at) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(d.email))) AS last_quote, ' +
+      "       CASE WHEN EXISTS (SELECT 1 FROM brokers b WHERE lower(trim(b.email)) = lower(trim(d.email)) " +
+      "         AND b.password_hash <> '') THEN 1 ELSE 0 END AS has_account " +
+      'FROM broker_directory d WHERE d.agency_id = ? ORDER BY quotes DESC, d.name'
+    ).bind(me.agency_id).all();
+    return jsonResp({ people: results || [] });
+  } catch (err) {
+    return jsonResp({ people: [], error: String((err && err.message) || err) }, 500);
+  }
+}
+
+/**
+ * An agency administrator corrects one of their own people.
+ *
+ * 🔴🔴 THE FIELD-OWNERSHIP RULE, ENFORCED RATHER THAN DOCUMENTED. The agency owns who somebody is --
+ * their name and phone. ABY owns what ABY thinks of them -- the owner, the priority, the tags, the
+ * notes. ⛔ A closed list of two columns, and the row must already belong to the caller's agency, so
+ * an administrator cannot reach a person at another firm by guessing an address.
+ */
+async function handleAgencyPersonUpdate(request, env) {
+  const me = await currentBroker(request, env);
+  if (!me) return jsonResp({ error: 'Please sign in.' }, 401);
+  if (me.role !== 'admin' || !me.agency_id) {
+    return jsonResp({ error: 'Only an agency administrator can change these.' }, 403);
+  }
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const email = String(body.email || '').trim().toLowerCase();
+  if (!email) return jsonResp({ error: 'Which person?' }, 400);
+
+  const allowed = { name: 120, phone: 40 };
+  const field = String(body.field || '').trim();
+  if (!Object.prototype.hasOwnProperty.call(allowed, field)) {
+    return jsonResp({ error: 'That is not a field you can change.' }, 400);
+  }
+  const value = String(body.value == null ? '' : body.value).trim().slice(0, allowed[field]);
+
+  // ⛔ SCOPED TO THEIR OWN AGENCY IN THE WHERE CLAUSE, not checked beforehand. A check-then-write can
+  // be raced; a scoped write cannot, and changes === 0 is how it reports the refusal.
+  const r = await env.DB.prepare(
+    'UPDATE broker_directory SET ' + field + ' = ? WHERE lower(trim(email)) = ? AND agency_id = ?'
+  ).bind(value, email, me.agency_id).run();
+  if (!r || !r.meta || !r.meta.changes) {
+    return jsonResp({ error: 'That person is not on your agency.' }, 404);
+  }
+  return jsonResp({ ok: true, field, value });
+}
+
+/**
+ * Registered agencies that look like a firm ABY already had.
+ *
+ * 🔴🔴 SELF-SIGNUP ALWAYS CREATES A NEW AGENCY ROW, DELIBERATELY -- there is nothing trustworthy to
+ * match a stranger on, and guessing would put somebody inside another firm's book. ⭐ That decision
+ * is right and it has a consequence: a firm ABY has quoted for years gets a SECOND record the moment
+ * somebody there registers, and both appear on the Marketing list.
+ *
+ * ⛔ SUGGESTIONS, NEVER MERGES -- the same rule as the duplicate people, for the same reason. "Lone
+ * Star Insurance" and "Lone Star Insurance Services" may be one firm or two, and only Eric or Niels
+ * knows. ⚠️ Matched on letters and digits only, so punctuation and case cannot hide a pair.
+ */
+async function handleCrmAgencyDupes(request, env) {
+  try {
+    const { results } = await env.DB.prepare(
+      'SELECT a.id, a.name, a.created_at, ' +
+      '       (SELECT COUNT(*) FROM brokers b WHERE b.agency_id = a.id) AS accounts, ' +
+      '       (SELECT COUNT(*) FROM broker_directory d WHERE d.agency_id = a.id) AS agents ' +
+      "FROM agencies a WHERE COALESCE(a.relationship,'') <> 'succeeded' ORDER BY a.name"
+    ).all();
+    const rows = results || [];
+    const key = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const byKey = {};
+    for (const r of rows) {
+      const k = key(r.name);
+      if (!k) continue;
+      (byKey[k] = byKey[k] || []).push(r);
+    }
+    const pairs = Object.keys(byKey).filter((k) => byKey[k].length > 1).map((k) => byKey[k]);
+    return jsonResp({
+      pairs, matched: pairs.length,
+      note: 'Suggestions only. Two similar names may be one firm or two, and only a person knows.',
+    });
+  } catch (err) {
+    return jsonResp({ pairs: [], error: String((err && err.message) || err) }, 500);
+  }
 }
 
 /** Set a priority or a note on one person or agency. */
@@ -6395,6 +6574,13 @@ async function handleBrokerSignup(request, env) {
     String(body.phone || '').slice(0, 40), agencyId, 'admin',
     new Date().toISOString(), new Date().toISOString()).run();
 
+  // ⭐ A SELF-REGISTERED BROKER REACHES THE LIST TOO. Real brokers sign up off Eric's webinars
+  // unprompted, and until now the only trace was a row in a table nothing reads.
+  await linkBrokerIntoDirectory(env, {
+    email, name: String(body.name || ''), phone: String(body.phone || ''),
+    agencyId, agencyName, source: 'signup',
+  });
+
   return new Response(JSON.stringify({ ok: true, broker: brokerPublic({ id, email, name: body.name, agency: agencyName, phone: body.phone, agency_id: agencyId, role: 'admin' }) }),
     { status: 200, headers: { 'Content-Type': 'application/json',
       'Set-Cookie': sessionCookie(await makeBrokerToken(id, env), 60 * 60 * 24 * 30) } });
@@ -6537,6 +6723,17 @@ async function handleAgencyInvite(request, env) {
     await env.DB.prepare(
       'INSERT INTO brokers (id, email, password_hash, name, agency, phone, agency_id, role, created_at) VALUES (?,?,?,?,?,?,?,?,?)'
     ).bind(id, email, '', name, agency ? agency.name : '', '', me.agency_id, 'member', new Date().toISOString()).run();
+
+    // ⭐⭐ AND INTO THE DIRECTORY ABY ACTUALLY WORKS FROM. Without this the invite writes only to
+    // `brokers`, which the CRM does not read -- so an agency could hand ABY six account managers
+    // and every one would be invisible to marketing. Eric asked exactly this.
+    // ⚠️ Its result is not checked before sending the email: the account and the set-password
+    // link are what the AGENCY asked for, and ABY's list is a second beneficiary. A failure here
+    // must not cost them their invite.
+    await linkBrokerIntoDirectory(env, {
+      email, name, phone: '', agencyId: me.agency_id,
+      agencyName: agency ? agency.name : '', source: 'invite',
+    });
 
     const token = await issueResetToken(env, id);
     const ok = await sendSetPasswordEmail(env, {

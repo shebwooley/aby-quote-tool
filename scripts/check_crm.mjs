@@ -248,6 +248,16 @@ const A2 = { type: 'agency', id: AGENCIES[2].id };
  * (TRAPS #256). It is created by /api/migrate -- the REAL migration.
  */
 function seedBase(cfg) {
+  // 🔴🔴 DROP THE TABLES THE MIGRATION OWNS, SO THE LOCAL DATABASE CANNOT BE OLDER THAN THE CODE.
+  // The local brokers table was left over from a much earlier schema -- email as the primary key,
+  // pw_hash/pw_salt instead of password_hash, NO id column at all -- and CREATE TABLE IF NOT EXISTS
+  // cannot repair a table that already exists in the wrong shape. Signup failed with
+  // 'no such column: id' and the 500 arrived as a wrangler HTML page, naming nothing.
+  // ⭐ TRAPS #206 says a fresh local D1 is not production. The mirror is just as true: an OLD one
+  // is not either, and it fails in a way that looks like a code bug.
+  // ⚠️ Production was checked and is CORRECT -- this was only ever the test database.
+  // ⛔ --local only. Nothing here can reach the real database.
+  d1('DROP TABLE IF EXISTS brokers', cfg);
   d1('CREATE TABLE IF NOT EXISTS quotes (id TEXT PRIMARY KEY, quote_number TEXT, created_at TEXT, ' +
      'broker_email TEXT, broker_agency TEXT, source_tag TEXT, notes TEXT)', cfg);
   d1('CREATE TABLE IF NOT EXISTS broker_directory (email TEXT PRIMARY KEY, name TEXT, phone TEXT, ' +
@@ -271,6 +281,10 @@ function seedTest(cfg) {
   d1('DELETE FROM people', cfg);
   d1("DELETE FROM agencies WHERE id LIKE 'test-agency-%' OR name = 'Agency With No Record'", cfg);
   d1("DELETE FROM broker_directory WHERE email LIKE 'crmtest.%@example.com'", cfg);
+  // ⚠️ The broker ACCOUNTS too. Signup answers 409 for an address that already has one, and
+  // every assertion after that would be answering a different question.
+  d1("DELETE FROM brokers WHERE lower(trim(email)) LIKE 'crmtest.%@example.com'", cfg);
+  d1("DELETE FROM agencies WHERE name = 'Zzz Signup Firm'", cfg);
   // ⛔ AND ANY ROW WITH NO EMAIL AT ALL. Only a sabotage can create one -- the email check is
   // what a sabotage removes -- and it does not match the pattern above, so it survived every
   // reseed and permanently broke the people/addresses count in a LATER, legitimate run.
@@ -670,6 +684,93 @@ async function runSuite() {
   check('and there is exactly one record for it, carrying both',
         [shared.length, shared[0] && shared[0].agents], [1, 2],
         'a find-or-create per row is how 20 firms became 33 agency records on live data');
+
+  // ── 23. THE AGENCY'S OWN ADMIN, AND WHAT IT MUST NOT SHOW.
+  //    Eric: "will they have the ability to add other agents or account managers with their emails
+  //    and us pull that info into our list? And if we already have some agent info would that fill
+  //    in to their admin area?"
+  //    🔴 THIS IS THE FIRST BROKER-FACING SURFACE THAT TOUCHES CRM DATA, so most of what follows is
+  //    about what a broker must NOT be able to see or reach.
+  const adminCookie = cookie;
+  const BOSS = 'crmtest.boss@example.com';
+  const COLLEAGUE = 'crmtest.colleague@example.com';
+
+  cookie = '';
+  r = await api('GET', '/api/agency/people');
+  check('the agency people list refuses an unauthenticated caller', r.status, 401);
+
+  r = await api('POST', '/api/broker/signup',
+                { email: BOSS, password: 'a-long-enough-password', name: 'Boss Person', agency: 'Zzz Signup Firm' });
+  check('a broker can sign up', [r.status, (r.json && r.json.error) || null], [200, null]);
+
+  // ⭐ SIGNING UP PUTS THEM IN ABY'S LIST. Real brokers register off Eric's webinars unprompted, and
+  // until now the only trace was a row in a table nothing reads.
+  const bossCookie = cookie;
+  cookie = adminCookie;
+  r = await api('GET', '/api/admin/crm/person?email=' + encodeURIComponent(BOSS));
+  check('a self-registered broker reaches ABY list as a person', (r.json.addresses || []).length, 1);
+  check('and their firm came with them', r.json.addresses[0].agency_name, 'Zzz Signup Firm');
+
+  // ── 24. AN INVITE REACHES THE LIST TOO -- the half Eric asked about first.
+  cookie = bossCookie;
+  r = await api('POST', '/api/agency/invite',
+                { people: [{ email: COLLEAGUE, name: 'Account Manager' }] });
+  check('an agency administrator can invite a colleague', r.status, 200);
+  cookie = adminCookie;
+  r = await api('GET', '/api/admin/crm/person?email=' + encodeURIComponent(COLLEAGUE));
+  check('an INVITED colleague appears in ABY list', (r.json.addresses || []).length, 1,
+        'an invite used to write only to the accounts table, which the CRM does not read');
+
+  // ── 25. AND SOMEBODY ABY ALREADY KNOWS IS NOT DUPLICATED.
+  cookie = bossCookie;
+  r = await api('POST', '/api/agency/invite',
+                { people: [{ email: AGENT_EMAIL, name: 'A Name Their Agency Uses' }] });
+  cookie = adminCookie;
+  r = await api('GET', '/api/admin/crm/person?email=' + encodeURIComponent(AGENT_EMAIL));
+  check('inviting somebody ABY already knows does NOT create a second record',
+        (r.json.addresses || []).length, 1,
+        'the same recognise-never-duplicate rule as the event import');
+  check('and it does not overwrite the name ABY holds', r.json.addresses[0].name, 'CRM Test Agent',
+        'what ABY holds was typed by somebody dealing with that agent');
+
+  // ── 26. WHAT THE AGENCY SEES, AND WHAT IT MUST NOT.
+  cookie = bossCookie;
+  r = await api('GET', '/api/agency/people');
+  const mine = (r.json && r.json.people) || [];
+  check('the agency sees its own people, prefilled', mine.length >= 2, true,
+        'making an agency retype colleagues ABY already knows is the product failing at its purpose');
+  const leaked = ['priority', 'assigned_rep', 'notes', 'needs_review', 'person_id']
+    .filter((k) => mine.some((x) => Object.prototype.hasOwnProperty.call(x, k)));
+  check('nothing ABY-internal is in the agency payload', leaked, [],
+        'a broker must never read ABYs owner, priority, tags or notes about themselves');
+
+  // ── 27. FIELD OWNERSHIP, ENFORCED RATHER THAN DOCUMENTED.
+  r = await api('POST', '/api/agency/person', { email: COLLEAGUE, field: 'name', value: 'Corrected Name' });
+  check('an agency administrator can correct one of their own people', r.status, 200);
+  r = await api('POST', '/api/agency/person', { email: COLLEAGUE, field: 'priority', value: 'A' });
+  check('but CANNOT set a priority', r.status, 400,
+        'the agency owns who somebody is; ABY owns what ABY thinks of them');
+  r = await api('POST', '/api/agency/person', { email: COLLEAGUE, field: 'assigned_rep', value: 'eric' });
+  check('and CANNOT set the owner', r.status, 400);
+
+  // ⛔ AND CANNOT REACH A PERSON AT ANOTHER FIRM BY GUESSING AN ADDRESS.
+  r = await api('POST', '/api/agency/person', { email: MOVER_OLD, field: 'name', value: 'Not Yours' });
+  check('an administrator cannot edit somebody at another agency', r.status, 404,
+        'scoped in the WHERE clause, so a check-then-write cannot be raced');
+  cookie = adminCookie;
+  r = await api('GET', '/api/admin/crm/person?email=' + encodeURIComponent(MOVER_OLD));
+  check('and that person is untouched', r.json.addresses[0].name, 'Test Mover');
+
+  // ── 28. TWO RECORDS FOR ONE FIRM ARE SUGGESTED, NEVER MERGED.
+  //    Self-signup always creates a NEW agency row -- deliberately, because there is nothing
+  //    trustworthy to match a stranger on. The consequence is a second record for a firm ABY may
+  //    already have, and somebody has to be told.
+  r = await api('GET', '/api/admin/crm/agency-dupes');
+  check('duplicate firm names are reported', r.status, 200);
+  const dupeNames = ((r.json && r.json.pairs) || []).map((g) => g.map((x) => x.name).join(' / '));
+  check('and punctuation or case cannot hide a pair',
+        typeof (r.json && r.json.note), 'string',
+        'suggestions only -- two similar names may be one firm or two, and only a person knows');
 }
 
 /**
@@ -749,6 +850,26 @@ async function runConcurrencySuite() {
 // bug proves the harness would have CAUGHT it.
 const SABOTAGES = [
   {
+    // 🔴 THE ONE THAT WOULD MATTER MOST IF IT REGRESSED. A broker reading ABY's own
+    // priority, owner and notes about their agency is not a bug, it is a disclosure.
+    name: 'the agency people list starts returning ABY-internal columns',
+    find: "      'SELECT d.email, d.name, d.phone, ' +",
+    with: "      'SELECT d.*, ' +",
+    breaks: 'nothing ABY-internal is in the agency payload',
+  },
+  {
+    name: 'an agency administrator can edit somebody at another firm',
+    find: "    'UPDATE broker_directory SET ' + field + ' = ? WHERE lower(trim(email)) = ? AND agency_id = ?'",
+    with: "    'UPDATE broker_directory SET ' + field + ' = ? WHERE lower(trim(email)) = ?'",
+    breaks: 'an administrator cannot edit somebody at another agency',
+  },
+  {
+    name: 'an invite stops reaching ABY list',
+    find: '    await linkBrokerIntoDirectory(env, {',
+    with: '    if (false) await linkBrokerIntoDirectory(env, {',
+    breaks: 'an INVITED colleague appears in ABY list',
+  },
+  {
     // ⭐⭐ THE ONE BEHAVIOUR THIS FEATURE EXISTS TO CHANGE. The existing prospects form skips an
     // existing row entirely -- tag and all -- so the agents who have quoted for years, who are the
     // valuable half of a conference list, would silently not be recorded as having been there.
@@ -803,8 +924,12 @@ const SABOTAGES = [
   {
     // A field name taken from the request. An endpoint that sets a priority then sets anything.
     name: 'the field setter accepts any column name from the browser',
-    find: "  if (!Object.prototype.hasOwnProperty.call(allowed, field)) {",
-    with: '  if (false) {',
+    // ⚠️ ANCHORED WITH THE ERROR MESSAGE BELOW IT. Two handlers now guard a closed list the
+    // same way, so a one-line anchor matched both and the sabotage applied to neither.
+    find: ('  if (!Object.prototype.hasOwnProperty.call(allowed, field)) {' + NEWLINE +
+           "    return jsonResp({ error: 'That is not a field this sets.' }, 400);"),
+    with: ('  if (false) {' + NEWLINE +
+           "    return jsonResp({ error: 'That is not a field this sets.' }, 400);"),
     breaks: 'a field outside the closed list is refused',
   },
 
@@ -887,8 +1012,8 @@ const SABOTAGES = [
     // opened by hand more than once, so this gives one human several person records -- which is the
     // single thing the people table exists to prevent.
     name: 'the backfill stops skipping addresses that already have a person',
-    find: '      if (row.person_id) { out.alreadyLinked++; continue; }',
-    with: '      if (false) { out.alreadyLinked++; continue; }',
+    find: '        if (target) { out.alreadyLinked++; continue; }',
+    with: '        if (false) { out.alreadyLinked++; continue; }',
     breaks: 'running the migration TWICE creates nothing a second time',
   },
   {
