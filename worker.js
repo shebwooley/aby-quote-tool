@@ -6333,6 +6333,21 @@ function brokerPageHTML() {
       <div id="memberList" style="margin-top:18px"></div>
     </div>
 
+    <!-- WHAT ABY ALREADY KNOWS ABOUT THIS AGENCY (F-383). Eric: "if we already have some agent
+         info would that fill in to their admin area where they can see it and update it if
+         necessary?" ABY knows 139 agents from fifteen years of quotes, and making an agency
+         retype their own colleagues is the product failing at the thing it exists for.
+         SHOWN TO EVERY MEMBER, EDITABLE ONLY BY AN ADMINISTRATOR: seeing who is on file is
+         useful to anybody there; changing it is not.
+         It carries NOTHING ABY-INTERNAL -- no owner, no priority, no tags, no notes. -->
+    <div class="card" id="peopleCard" style="display:none">
+      <h2>People we have on file for your agency</h2>
+      <p class="sub" id="peopleSub">Pulled from quotes run over the years, plus anyone invited
+        here.</p>
+      <div id="peopleList"><p class="muted">Loading&hellip;</p></div>
+      <div class="msg" id="peopleMsg" style="display:none"></div>
+    </div>
+
     <div class="card">
       <div class="tabs"><button id="tabMine" class="on">My quotes</button><button id="tabAgency">Agency quotes</button></div>
       <p class="sub" id="quotesSub">Every quote run under your email address.</p>
@@ -6460,6 +6475,9 @@ function brokerPageHTML() {
    $('pName').value=b.name||'';$('pAgency').value=b.agency||'';$('pPhone').value=b.phone||'';
    if(b.logoDataUrl){logoData=b.logoDataUrl;$('logoPrev').src=logoData;$('logoPrev').style.display='block'}
    if(b.role==='admin'){$('agencyCard').style.display='block';$('inviteCard').style.display='block';loadAgency()}
+   // Called for EVERY member, not only administrators: the list is worth seeing whether or not
+   // you can change it. The function decides what is editable.
+   loadAgencyPeople(b);
    loadQuotes();
  }
  async function loadQuotes(url){
@@ -6479,6 +6497,62 @@ function brokerPageHTML() {
    var r=await fetch('/api/broker/me'); var d=await r.json().catch(function(){return{}});
    if(d && d.broker) enter(d.broker);
  })();
+
+ // ── PEOPLE ABY ALREADY HAS ON FILE FOR THIS AGENCY ──────────────────────────────────────
+ // ⛔ NO BACKSLASHES: this page is one template literal, and a lone one is eaten before the
+ // browser sees it.
+ var meRole='', meAgency='';
+ async function loadAgencyPeople(b){
+   if(b){ meRole=b.role||''; meAgency=b.agencyId||''; }
+   if(!meAgency){ $('peopleCard').style.display='none'; return; }
+   $('peopleCard').style.display='block';
+   var r=await fetch('/api/agency/people');
+   var d=await r.json().catch(function(){return{}});
+   var box=$('peopleList');
+   // 🔴 AN ERROR IS NOT AN EMPTY LIST. The two must never render the same way.
+   if(d.error){ box.innerHTML='<p class="muted">Could not load this: '+esc(d.error)+'</p>'; return; }
+   var rows=d.people||[];
+   if(!rows.length){
+     box.innerHTML='<p class="muted">Nobody on file yet. Anyone invited above will appear here.</p>';
+     return;
+   }
+   var admin=(meRole==='admin');
+   $('peopleSub').textContent=admin
+     ? 'Pulled from quotes run over the years, plus anyone invited here. Correct anything out of date.'
+     : 'Pulled from quotes run over the years. Your agency administrator can correct these.';
+   var th='style="text-align:left;padding:6px 4px;font-size:12px;color:#5b6b7f"';
+   var h='<table style="width:100%;border-collapse:collapse;font-size:14px"><thead><tr>'
+        +'<th '+th+'>NAME</th><th '+th+'>EMAIL</th><th '+th+'>PHONE</th>'
+        +'<th style="text-align:right;padding:6px 4px;font-size:12px;color:#5b6b7f">QUOTES</th>'
+        +'</tr></thead><tbody>';
+   for(var i=0;i<rows.length;i++){
+     var x=rows[i];
+     var e=esc(x.email);
+     h+='<tr><td style="padding:6px 4px">'
+       +(admin?'<input value="'+esc(x.name||'')+'" style="width:100%;padding:5px 7px" '
+               +'onchange="savePerson(this,&#39;'+e+'&#39;,&#39;name&#39;)">'
+              :(esc(x.name||'')||'&mdash;'))
+       +'</td><td style="padding:6px 4px">'+e+'</td><td style="padding:6px 4px">'
+       +(admin?'<input value="'+esc(x.phone||'')+'" style="width:100%;padding:5px 7px" '
+               +'onchange="savePerson(this,&#39;'+e+'&#39;,&#39;phone&#39;)">'
+              :(esc(x.phone||'')||'&mdash;'))
+       // ⭐ THE QUOTE COUNT IS WHY THIS IS WORTH SHOWING THEM. It is the evidence that ABY
+       // already knows this person, and it is what makes the row worth correcting.
+       +'</td><td style="text-align:right;padding:6px 4px">'+(x.quotes||0)+'</td></tr>';
+   }
+   box.innerHTML=h+'</tbody></table>';
+ }
+
+ async function savePerson(el,email,field){
+   var r=await fetch('/api/agency/person',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({email:email,field:field,value:el.value})});
+   var d=await r.json().catch(function(){return{}});
+   // ⛔ A WRITE THAT FAILS MUST SAY SO, and the screen must go back to matching the server.
+   // A control that keeps what you typed while the database holds the old value is the worst
+   // of both.
+   show($('peopleMsg'), r.ok?'Saved.':(d.error||'That did not save.'), r.ok?'ok':'err');
+   if(!r.ok) loadAgencyPeople();
+ }
 </script></body></html>`;
 }
 

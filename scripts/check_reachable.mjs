@@ -57,6 +57,15 @@ const RULES = [
       && /crm\/import/.test(f.worker),
   },
   {
+    name: "an agency can see the people ABY already knows at their firm",
+    why: "Written AFTER the endpoint rather than with it, which is the mistake this rule exists"
+       + " to catch -- see TRAPS #284. /api/agency/people shipped with no screen calling it, for"
+       + " the fifth time in one session. The point of the rule is that it FAILS until there is a"
+       + " door, and it did.",
+    holds: (f) => /id="peopleCard"/.test(f.worker) && /function loadAgencyPeople\(/.test(f.worker)
+      && /agency\/people/.test(f.worker),
+  },
+  {
     name: "a recorded note can be removed from the screen it was typed on",
     why: "THIRD instance in one day of an endpoint built, tested and deployed with no control"
        + " calling it. /crm/delete had assertions proving it 404s on a second attempt while nothing"
@@ -128,6 +137,10 @@ const RULES = [
 ];
 
 const SABOTAGES = [
+  {
+    why: "the agency people card is orphaned from its endpoint",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/function loadAgencyPeople\(/g, "function unusedPeople(") }),
+  },
   {
     why: "the event-list paste box is orphaned from its endpoint",
     apply: (f) => ({ ...f, worker: f.worker.replace(/function runImport\(/g, "function unusedImport(") }),
