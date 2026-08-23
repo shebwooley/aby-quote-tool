@@ -2025,7 +2025,7 @@ const CRM_VIEWS = {
  *     live data has one of each.
  */
 async function backfillPeople(env) {
-  const out = { agenciesCreated: 0, agenciesLinked: 0, agenciesConsolidated: 0,
+  const out = { danglingRepaired: 0, agenciesCreated: 0, agenciesLinked: 0, agenciesConsolidated: 0,
                 strayAgenciesRemoved: 0, peopleCreated: 0, alreadyLinked: 0,
                 lostRace: 0, orphansRemoved: 0, people: 0, addresses: 0, errors: [] };
   const now = new Date().toISOString();
@@ -2128,7 +2128,18 @@ async function backfillPeople(env) {
       }
 
       // ③ the human
-      if (row.person_id) { out.alreadyLinked++; continue; }
+      // 🔴 A POINTER IS NOT A PERSON. Skipping on person_id alone leaves an address whose person
+      // has gone permanently unrepaired, and the people/addresses counts never agree again --
+      // which is exactly how this was found. A DANGLING pointer is treated as UNLINKED.
+      if (row.person_id) {
+        const target = await env.DB.prepare('SELECT id FROM people WHERE id = ?')
+          .bind(row.person_id).first();
+        if (target) { out.alreadyLinked++; continue; }
+        out.danglingRepaired++;
+        await env.DB.prepare(
+          'UPDATE broker_directory SET person_id = NULL WHERE lower(trim(email)) = ?'
+        ).bind(email).run();
+      }
       const personId = crypto.randomUUID();
       await env.DB.prepare('INSERT INTO people (id, name, created_at, updated_at) VALUES (?,?,?,?)')
         .bind(personId, String(row.name || '').trim(), now, now).run();
@@ -2594,6 +2605,7 @@ async function handleCrmImport(request, env) {
   const now = new Date().toISOString();
   const added = [], known = [], refused = [], differs = [];
   let tagged = 0;
+  let schemaError = null;
 
   for (const row of rows) {
     const email = String((row && row.email) || '').trim().toLowerCase();
@@ -2660,12 +2672,24 @@ async function handleCrmImport(request, env) {
         }
       }
     } catch (err) {
-      refused.push({ who: email, why: String((err && err.message) || err) });
+      const msg = String((err && err.message) || err);
+      // ⛔ A MISSING COLUMN OR TABLE IS THE DEPLOY BEING AHEAD OF THE DATABASE. Reported once, at
+      // the top, and the loop stops -- five hundred identical per-row refusals would bury it.
+      if (/no such (column|table)/i.test(msg)) { schemaError = msg; break; }
+      refused.push({ who: email, why: msg });
     }
   }
 
   // ⭐⭐ THE SPLIT, NEVER A TOTAL. "9 added, 4 already known and tagged, 1 refused" is the honest
   // sentence; "14 imported" is the one that hides the two facts somebody needs.
+  if (schemaError) {
+    return jsonResp({
+      error: 'The database is behind the code: ' + schemaError +
+             '. Open /api/migrate once, then paste the list again. Nothing was imported.',
+      schema: true,
+    }, 503);
+  }
+
   return jsonResp({
     ok: true, label: label || null, happened_at: happenedAt,
     added: added.length, known: known.length, refused: refused.length, tagged,
@@ -4461,10 +4485,11 @@ ${abyAdminNav('/admin/brokers')}
    // sentence. The already-known half is the valuable one -- those are agents who have quoted for
    // years and are now recorded as having been at the event.
    var parts = [d.added + ' added'];
-   if (d.known) parts.push(d.known + ' already known' + (d.label ? ' and tagged' : ''));
-   if (d.tagged) parts.push(d.tagged + ' tagged');
+   if (d.known) parts.push(d.known + ' already known');
    if (d.refused) parts.push(d.refused + ' refused');
-   var h = '<p><strong>' + parts.join(', ') + '.</strong></p>';
+   var line = parts.join(', ');
+   if (d.label) line += '. ' + d.tagged + ' tagged ' + esc(d.label) + ' on ' + d.happened_at;
+   var h = '<p><strong>' + line + '.</strong></p>';
 
    var det = d.detail || {};
    if (det.refused && det.refused.length){

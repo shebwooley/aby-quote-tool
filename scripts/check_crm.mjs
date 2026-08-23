@@ -191,15 +191,30 @@ async function boot(cfg) {
 // with the port free and its fixtures still live.
 const LOCK = join(REPO, 'scripts', '.crm-check.lock');
 
+// The lock records the PID so a DEAD holder can be told from a live one. A run killed inside a
+// shell pipeline never reaches releaseLock, and without this the stale file blocks every later
+// run -- including the pre-commit hook -- for a reason that has nothing to do with the code.
+function holderAlive(pid) {
+  if (!pid) return true;
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
 function takeLock() {
   if (existsSync(LOCK)) {
     const held = readFileSync(LOCK, 'utf8').trim();
+    const pid = Number((held.split(' pid ')[1] || '').trim());
+    if (!holderAlive(pid)) {
+      console.log('  (clearing a lock left by a run that is no longer alive: ' + held + ')');
+      rmSync(LOCK, { force: true });
+      writeFileSync(LOCK, new Date().toISOString() + ' pid ' + process.pid);
+      return;
+    }
     die('another run of this suite is in progress (started ' + held + ').' +
         NEWLINE + '  Two runs share one local database and corrupt each other, and the result' +
         NEWLINE + '  looks like a code regression. Wait for it, or delete scripts/.crm-check.lock' +
         NEWLINE + '  if you are certain nothing is running.');
   }
-  writeFileSync(LOCK, new Date().toISOString());
+  writeFileSync(LOCK, new Date().toISOString() + ' pid ' + process.pid);
 }
 
 function releaseLock() { rmSync(LOCK, { force: true }); }
@@ -256,6 +271,12 @@ function seedTest(cfg) {
   d1('DELETE FROM people', cfg);
   d1("DELETE FROM agencies WHERE id LIKE 'test-agency-%' OR name = 'Agency With No Record'", cfg);
   d1("DELETE FROM broker_directory WHERE email LIKE 'crmtest.%@example.com'", cfg);
+  // ⛔ AND ANY ROW WITH NO EMAIL AT ALL. Only a sabotage can create one -- the email check is
+  // what a sabotage removes -- and it does not match the pattern above, so it survived every
+  // reseed and permanently broke the people/addresses count in a LATER, legitimate run.
+  // ⭐ A self-test that can leave residue must clear that residue, or it poisons the suite it
+  // exists to protect.
+  d1("DELETE FROM broker_directory WHERE trim(COALESCE(email,'')) = ''", cfg);
   // ⚠️ The import creates firms too. Left behind, the 'one agency between them' assertion sees
   // the previous run's record and reads 1 where it should have created it.
   d1("DELETE FROM agencies WHERE name IN ('A Firm Nobody Has Quoted','Shared Firm From A List')", cfg);
