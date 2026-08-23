@@ -194,7 +194,7 @@ function runAll(text) {
   const flat = text.replace(/\r\n/g, "\n");
   // ⚠️ ORDER MATTERS: a declaration that reads another must come after it.
   for (const decl of ["const PRODUCT_SHORT = ", "const PRODUCT_NAME_TO_ID = ", "function shortProductName(",
-                      "const ABY_ADMIN_LINKS = ", "function abyAdminNav("]) {
+                      "const ADMIN_HEADER_CSS = ", "const ABY_ADMIN_LINKS = ", "function abyAdminNav("]) {
     const at = flat.indexOf("\n" + decl);
     const isFn = decl.startsWith("function");
     // ⚠️ A const may be an OBJECT or an ARRAY, so both closers are tried and the NEARER one wins.
@@ -205,6 +205,15 @@ function runAll(text) {
     if (!isFn) {
       const altAt = flat.indexOf("\n];\n", at);
       if (altAt !== -1 && (endAt === -1 || altAt < endAt)) { close = "\n];\n"; endAt = altAt; }
+      // A THIRD SHAPE: a TEMPLATE LITERAL, closing with a backtick and a semicolon.
+      // ADMIN_HEADER_CSS is a block of CSS, so it is neither an object nor an array, and without
+      // this the slice ran past the declaration and failed as "not defined" -- the same misleading
+      // symptom the two comments above already describe, arriving for a third time by a third
+      // route. ⭐ The lesson those comments keep recording is that this slicer assumes a SHAPE, so
+      // every new shape has to be taught to it.
+      const litClose = "\n" + String.fromCharCode(96) + ";\n";
+      const litAt = flat.indexOf(litClose, at);
+      if (litAt !== -1 && (endAt === -1 || litAt < endAt)) { close = litClose; endAt = litAt; }
     }
     if (at === -1 || endAt === -1) {
       console.log("  FAIL prelude: " + decl.trim() + " not found at module scope in worker.js");

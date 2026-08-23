@@ -2088,15 +2088,7 @@ function adminPipelineHTML() {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Pipeline — ABY admin</title>
 <style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
- header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
- header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85;padding:4px 8px;border-radius:5px} header a:hover{opacity:1;background:rgba(255,255,255,.14)}
- /* The page you are on. Without this the class added to the nav renders identically to the
-    other three links -- markup that changes nothing, which is its own small trap. */
- header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
- /* An ACTION, not a destination. Tinted so it reads as the thing you DO on a bar
-    where everything else is somewhere you go to look. */
- header a.act{background:#2f9e73;opacity:1;font-weight:600}
- header a.act:hover{background:#37b284}
+${ADMIN_HEADER_CSS}
  main{max-width:1240px;margin:22px auto;padding:0 18px}
  .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
  h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
@@ -2373,15 +2365,7 @@ function adminBrokersHTML() {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Brokers &amp; Agencies — ABY admin</title>
 <style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
- header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
- header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85;padding:4px 8px;border-radius:5px} header a:hover{opacity:1;background:rgba(255,255,255,.14)}
- /* The page you are on. Without this the class added to the nav renders identically to the
-    other three links -- markup that changes nothing, which is its own small trap. */
- header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
- /* An ACTION, not a destination. Tinted so it reads as the thing you DO on a bar
-    where everything else is somewhere you go to look. */
- header a.act{background:#2f9e73;opacity:1;font-weight:600}
- header a.act:hover{background:#37b284}
+${ADMIN_HEADER_CSS}
  main{max-width:1180px;margin:22px auto;padding:0 18px}
  .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
  h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
@@ -3292,11 +3276,7 @@ function adminClientsHTML() {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Clients — ABY admin</title>
 <style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
- header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
- header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85;padding:4px 8px;border-radius:5px} header a:hover{opacity:1;background:rgba(255,255,255,.14)}
- header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
- header a.act{background:#2f9e73;opacity:1;font-weight:600}
- header a.act:hover{background:#37b284}
+${ADMIN_HEADER_CSS}
  main{max-width:1180px;margin:0 auto;padding:20px}
  .card{background:#fff;border:1px solid #e3e9f0;border-radius:9px;padding:16px 18px;margin-bottom:16px}
  h2{margin:0 0 4px;font-size:15px} .sub{margin:0 0 12px;color:#5b6b7f;font-size:13px}
@@ -3330,9 +3310,10 @@ ${abyAdminNav('/admin/clients')}
     A <b>client</b> is somebody we serve today, active or termed.
     <span id="gap"></span>
     <span id="attrib"></span>
-    The reason is now known: the sold groups sit in a <b>second folder tree</b> we had not seen,
-    which accounts for about 80% of the gap where it has been checked. So nothing here is merged,
-    and no employer is ever marked <i>termed</i> just for being absent from a list.
+    The reason is known: the sold groups sit in a <b>second folder tree</b> &mdash; Summit &mdash;
+    which accounts for <b>226 of the 353</b> sales that had no folder before it was loaded, and 72%
+    of the COBRA ones. So nothing here is merged, and no employer is ever marked <i>termed</i> just
+    for being absent from a list.
   </div>
 
   <div class="card">
@@ -3507,13 +3488,7 @@ function adminReferralsHTML() {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Referrals — ABY admin</title>
 <style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
- header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
- header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85;padding:4px 8px;border-radius:5px} header a:hover{opacity:1;background:rgba(255,255,255,.14)}
- header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
- /* An ACTION, not a destination. Tinted so it reads as the thing you DO on a bar
-    where everything else is somewhere you go to look. */
- header a.act{background:#2f9e73;opacity:1;font-weight:600}
- header a.act:hover{background:#37b284}
+${ADMIN_HEADER_CSS}
  main{max-width:1100px;margin:0 auto;padding:20px}
  .card{background:#fff;border:1px solid #e3e9f0;border-radius:9px;padding:16px 18px;margin-bottom:16px}
  h2{margin:0 0 4px;font-size:15px} .sub{margin:0 0 12px;color:#5b6b7f;font-size:13px}
@@ -3720,15 +3695,7 @@ function adminRatesHTML() {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Rates — ABY admin</title>
 <style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
- header{background:#143c73;color:#fff;padding:13px 20px;display:flex;align-items:center;gap:16px}
- header b{font-size:16px;font-weight:600} header a{color:#fff;font-size:13px;text-decoration:none;opacity:.85;padding:4px 8px;border-radius:5px} header a:hover{opacity:1;background:rgba(255,255,255,.14)}
- /* The page you are on. Without this the class added to the nav renders identically to the
-    other three links -- markup that changes nothing, which is its own small trap. */
- header a.here{opacity:1;background:rgba(255,255,255,.2);font-weight:600}
- /* An ACTION, not a destination. Tinted so it reads as the thing you DO on a bar
-    where everything else is somewhere you go to look. */
- header a.act{background:#2f9e73;opacity:1;font-weight:600}
- header a.act:hover{background:#37b284}
+${ADMIN_HEADER_CSS}
  main{max-width:1180px;margin:22px auto;padding:0 18px}
  .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
  h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
@@ -5157,6 +5124,36 @@ function isOpenPath(path) {
 // ONE list of links, six pages. It was six copies of the same markup, each differing only in which
 // link carried class="here" -- so adding a screen meant editing all of them and the /aby tool had
 // simply been forgotten.
+// ⭐⭐ THE ONE ADMIN HEADER. Eric, 2026-08-22: "Can you make the headers on all of the app pages
+// look like the Quote log one? They have different heights and colors."
+//
+// 🔴 THEY DIFFERED BECAUSE THE CSS WAS WRITTEN OUT SEVEN TIMES while the MARKUP was already shared
+// (abyAdminNav). Five admin pages carried navy #143c73 at 13px 20px, the quote log green #1a5c3a
+// at 14px 24px, and /aby a third variant. One component, several appearances -- and no way to
+// change it without finding every copy, which is how they drifted apart.
+// ⛔ Recolouring the copies would still leave copies. This is the definition; pages interpolate it.
+//
+// ⚠️ It styles a BARE header selector, so it belongs only on pages whose whole chrome is ours.
+// /aby is the PUBLIC quote tool with its own stylesheet, so that page keeps the class-scoped
+// .aby-adminbar rules -- a bare rule injected there would restyle the tool's own header for ABY
+// users only, and nobody would connect that back to a nav bar.
+const ADMIN_HEADER_CSS = `header{background:#1a5c3a;color:white;padding:14px 24px;display:flex;align-items:center;gap:12px;
+       position:sticky;top:0;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+header h1{font-size:1.05rem;font-weight:700;margin:0;flex:0 0 auto;color:#fff}
+header b{font-size:1.05rem;font-weight:700}
+header nav{flex:1;display:flex;flex-wrap:wrap;gap:2px;margin-left:6px}
+header a{color:rgba(255,255,255,.78);text-decoration:none;font-size:.85rem;font-weight:600;
+         padding:5px 10px;border-radius:5px;white-space:nowrap}
+header a:hover{background:rgba(255,255,255,.15);color:white}
+header a.here{background:rgba(255,255,255,.2);color:white}
+header a.act{background:#2f9e73;color:white;font-weight:700}
+header a.act:hover{background:#37b284}
+header .logout{color:rgba(255,255,255,.75);font-size:.875rem;cursor:pointer;background:none;
+               border:none;padding:4px 8px;border-radius:4px}
+header .logout:hover{background:rgba(255,255,255,.15);color:white}
+@media print{header{display:none}}
+`;
+
 // Eric, 2026-08-21: "On the page where ABY runs quotes /aby is it possible to add the same header
 // navigation that the other admin panels have?"
 const ABY_ADMIN_LINKS = [
@@ -5934,29 +5931,7 @@ function adminHTML() {
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#f0f4f0;color:#1a1a1a;min-height:100vh}
-header{background:#1a5c3a;color:white;padding:14px 24px;display:flex;align-items:center;gap:12px;
-       position:sticky;top:0;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.2)}
-header h1{font-size:1.05rem;font-weight:700;flex:0 0 auto}
-/* 🔴 THE QUOTE LOG HAD NO NAVIGATION AT ALL, AND IT IS THE LANDING PAGE.
-   Eric, 2026-08-19: "Where is the full list of agents/agencies, Prospects (when we add), etc? Why
-   is there no link from /admin?" The three other admin screens -- brokers and agencies, the
-   pipeline, the rate viewer -- each carried a nav bar linking to all four. This one did not, so
-   the front door was the only page with no way out, and everything else was reachable only by
-   typing the URL. Built, deployed, and effectively invisible.
-   ⚠️ I told him yesterday the nav was "in the header of every admin page". I had read it on the
-   pipeline page and generalised. The one page it was missing from is the one everybody starts on. */
-header nav{flex:1;display:flex;flex-wrap:wrap;gap:2px;margin-left:6px}
-header nav a{color:rgba(255,255,255,.78);text-decoration:none;font-size:.85rem;font-weight:600;
-             padding:5px 10px;border-radius:5px;white-space:nowrap}
-header nav a:hover{background:rgba(255,255,255,.15);color:white}
-/* ⭐ The current page is marked. A four-link bar with nothing showing where you are makes every
-   page look the same, which is its own small way of being lost. */
-header nav a.here{background:rgba(255,255,255,.2);color:white}
-header nav a.act{background:#2f9e73;color:white;font-weight:700}
-header nav a.act:hover{background:#37b284}
-header .logout{color:rgba(255,255,255,.75);font-size:.875rem;cursor:pointer;background:none;
-               border:none;padding:4px 8px;border-radius:4px}
-header .logout:hover{background:rgba(255,255,255,.15);color:white}
+${ADMIN_HEADER_CSS}
 .toolbar{background:white;border-bottom:1px solid #e5e5e5;padding:12px 24px;
          display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .toolbar input{flex:1;max-width:400px;padding:.5rem .75rem;border:1px solid #ddd;
@@ -6019,6 +5994,16 @@ tbody tr.data-row.expanded td{background:#f0f8f2;border-top-color:#d4ead9}
 .date-time{font-size:.78rem;color:#999}
 .muted{color:#aaa;font-style:italic}
 .nowrap{white-space:nowrap}
+/* An estimated date. One glyph and a tooltip -- Eric: "just need effective or estimated effective
+   date." No annotation beside the value, because that is what overflowed the column. */
+.est{color:#7d8a80;border-bottom:1px dotted #c3ccc6;cursor:help}
+/* ⛔ NEVER BREAK A PERSON'S NAME MID-WORD. "Kandice" rendered as "Kandic / e" in a 7% column,
+   which reads as a different name.
+   ⚠️ NOT nowrap+ellipsis, which was the first attempt: with two reps that quietly TRUNCATES the
+   second person away, and a name that is merely missing looks like a name that was never there.
+   The column is wider, the separator carries spaces so there is somewhere legal to break, and
+   overflow-wrap normal forbids breaking inside a word. */
+td.repcell{overflow-wrap:normal;word-break:normal}
 /* The Rep column holds multi-person values like "Gerard/Mark, Kandice/Joe" on the sold rows that
    come from aby_sales. The table is table-layout:fixed, so without this the text runs straight out
    of the column and over the Products chips -- which is what Eric photographed on 2026-08-22.
@@ -6217,12 +6202,15 @@ ${abyAdminNav('/admin')}
         <!-- ⭐ These are BINDING now, because the table is table-layout:fixed. Quote # gets enough
              for the longest form of the number (TX260818-M135-NC in monospace) since it is the one
              value that must not wrap; Products takes the slack because its chips can. -->
-        <col style="width:15%">
-        <col style="width:12%">
+        <!-- ⚠️ Rep was 7% and broke first names mid-word ("Kandic / e"). Effective was 12% and
+             its cell is nowrap, so anything long overflowed sideways into Client rather than
+             wrapping. Both widened; Products gives up the slack because its chips wrap cleanly. -->
+        <col style="width:14%">
+        <col style="width:13%">
         <col style="width:17%">
         <col style="width:18%">
-        <col style="width:7%">
-        <col style="width:21%">
+        <col style="width:9%">
+        <col style="width:19%">
         <col style="width:10%">
       </colgroup>
       <thead>
@@ -6643,7 +6631,16 @@ function repCell(v) {
   if (!s || s.charAt(0) === '(') return '<span class="muted">—</span>';
   // A plain two-word personal name shortens to the first name, as before. Anything carrying a
   // separator is a list of people and is shown whole.
-  if (/[,;/&]/.test(s)) return esc(s);
+  // ⭐ SPACES AROUND THE SEPARATOR, BECAUSE THAT IS WHERE A LINE MAY BREAK. Eric, 2026-08-22:
+  // "Kandice/Joe wraps in the middle of Joe's name." A slash with no spaces is one long unbreakable
+  // token, so the browser has nowhere legal to wrap and breaks mid-word instead -- which reads as a
+  // different person's name. Giving it a space either side turns the separator into a break
+  // opportunity and the names stay whole.
+  if (/[,;/&]/.test(s)) {
+    // No backslashes -- the page is a template literal and eats a lone one (TRAPS #248),
+    // so the space class is written out as a character class.
+    return esc(s.split(/[ ]*[/&][ ]*/).filter(function(x){ return x; }).join(' / '));
+  }
   // ⚠️ NO BACKSLASH: this function lives inside adminHTML's template literal, which eats a lone
   // one, so a whitespace class here would arrive at the browser broken. Splitting on a space and
   // dropping the empties does the same job with no escape at all. TRAPS #248.
@@ -6661,29 +6658,51 @@ function effectiveLabel(v) {
 }
 
 /**
- * The Effective cell, with the year problem handled honestly.
+ * The Effective cell.
  *
- * 🔴 ERIC, 2026-08-22, on a sold row: "It just has a month not a month and year." He is right, and
- * it is not a formatting bug -- it is what the source says. 298 of the 308 sold rows carry an
- * effective date the ANNOUNCEMENT EMAIL worded loosely: "October 1", "Sep 2026 or later". There is
- * no year in the data to format.
+ * 🔴 ERIC, 2026-08-22, TWICE. First: "It just has a month not a month and year." My fix appended a
+ * muted "announced 2025" beside the date. He came back: "I don't even understand what announced
+ * 2025 means and don't understand why you don't have a year on some of the effective date lines"
+ * and then "I don't like the note. just need effective or estimated effective date."
  *
- * ⛔ SO THE YEAR IS NOT INVENTED. "October 1" announced in September 2025 is almost certainly
- * 1 Oct 2025; announced in November it could as easily be 2026, and picking one would write a
- * guess into a column people read as fact.
- * ⭐ INSTEAD THE ANNOUNCEMENT DATE IS SHOWN BESIDE IT, MUTED AND LABELLED. That gives the reader
- * exactly what they need to date the row, while making it plain which half is recorded and which
- * half they are inferring. Same principle as the estimate flag on the client record.
+ * ⭐⭐ HE IS RIGHT AND THE FIRST FIX ANSWERED THE WRONG QUESTION. He asked for a YEAR; I gave him a
+ * provenance annotation and still left the date itself yearless. A reader wants a date in the date
+ * column. The uncertainty belongs in HOW the date is marked, not in a second value beside it.
+ *
+ * ⛔ THE YEAR IS STILL NOT ASSERTED AS FACT. 298 of the 308 sold rows carry an effective date the
+ * announcement email worded loosely -- "October 1", "Sep 2026 or later" -- so the year is taken
+ * from when the sale was announced and the whole date is prefixed with a tilde, the same mark the
+ * Clients page already uses for an estimated start. One glyph, no sentence.
+ *
+ * ⚠️ AND IT FIXES A LAYOUT BUG AT THE SAME TIME: the cell is class="nowrap" inside a
+ * table-layout:fixed table, so the appended note could not wrap and OVERFLOWED into the Client
+ * column instead. A short value cannot spill.
  */
 function effectiveCell(q) {
   var s = String(q.effective_date == null ? '' : q.effective_date).trim();
   if (!s) return '';
-  var label = esc(effectiveLabel(s));
-  if (/[0-9]{4}/.test(s)) return label;          // it already carries a year
+  if (/[0-9]{4}/.test(s)) return esc(effectiveLabel(s));   // the source states a year
   var yr = String(q.created_at || '').slice(0, 4);
-  if (!yr) return label;
-  return label + ' <span class="muted" style="font-size:11px">announced ' + esc(yr) + '</span>';
+  if (!yr) return esc(effectiveLabel(s));
+  // Borrow the year, mark the whole thing estimated.
+  // ⛔ NO BACKSLASHES. This whole page is one template literal and a lone backslash is eaten by
+  // it, leaving a regex that silently means something else (TRAPS #224). Character classes say
+  // exactly the same thing and survive.
+  var m = s.match(/^([A-Za-z]+)[.]?[ ]+([0-9]{1,2})$/);
+  var label = m ? esc(effectiveLabel(yr + '-' + pad2(monthNum(m[1])) + '-' + pad2(m[2])))
+                // No day, so no comma: "September 2026", not "September, 2026".
+                : esc(s) + ' ' + esc(yr);
+  return '<span class="est" title="Estimated. The record gave only ' + esc(s)
+       + '; the year is taken from when the sale was announced.">~' + label + '</span>';
 }
+
+function monthNum(name) {
+  var MON = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  var i = MON.indexOf(String(name || '').slice(0, 3).toLowerCase());
+  return i < 0 ? 1 : i + 1;
+}
+
+function pad2(n) { return (Number(n) < 10 ? '0' : '') + Number(n); }
 
 // Sorting. ⭐ The comparators read the SAME values the cells render, so what you see is what you
 // sorted -- a sort keyed on a raw field while the cell shows a formatted one is how a table comes
