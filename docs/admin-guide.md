@@ -90,14 +90,14 @@ quotes, sales, clients, how many are still with us, and who at ABY owns the rela
 
 - **Acquired firms roll up under the survivor.** MHBT's quotes appear under MMA, and MHBT keeps its
   own historical count when you expand the row.
-- 🔴 **The old quotes are never relabelled.** A 2013 quote really was MHBT; rewriting it to MMA would
+- 🔴 **The old quotes are never relabeled.** A 2013 quote really was MHBT; rewriting it to MMA would
   put MMA in the log four years before it existed here.
 - **A branch office is different from an acquisition.** HUB Fort Worth is alive and can be called;
   MHBT is a dead name. Both roll up, but only the branch stays on lists of people to contact.
 
 ### Marketing
 
-**The same firms, with the columns you need when you are working them rather than analysing
+**The same firms, with the columns you need when you are working them rather than analyzing
 them.** It is the second button at the top of Brokers & Agencies, and the page remembers which
 one you left it on. **Full description under *The CRM* below.**
 
@@ -263,7 +263,7 @@ paste the rows, pick the tag, set the date it happened, apply. Doing it in two s
 to tag the wrong set.
 
 🔴 **A conference list will contain people we already know, and they are the valuable half.**
-Anybody already on our books is **recognised and tagged, not duplicated** — creating a second record
+Anybody already on our books is **recognized and tagged, not duplicated** — creating a second record
 for somebody who has quoted for years is exactly what the tool is built to prevent.
 
 ⚠️ **It tells you the split** — *"9 added, 4 already known and tagged, 1 refused"* — never just
@@ -294,7 +294,7 @@ prefilled — name, phone, how many quotes they have run — rather than making 
 we have known for fifteen years. **The quote count is the point:** it is the evidence that we already
 know this person, and what makes the row worth correcting.
 
-🔴 **Somebody we already know is recognised, not duplicated**, and their invite does **not**
+🔴 **Somebody we already know is recognized, not duplicated**, and their invite does **not**
 overwrite the name we hold. What we have was typed by somebody dealing with them.
 
 ### Who owns which field
@@ -325,14 +325,13 @@ two, and only you and Niels know.
 
 ## ⏳ Not built yet, and worth knowing about
 
-- Nobody has yet registered a real account, so the agency side has been proved in testing and not in
-  anger. **The first agency that signs up is the real test.**
+- Nobody has yet registered a real account, so the agency side has been only ever been tested. It has never been used by a real agency. **The first agency that signs up is the real test.**
 
 ---
 
 ## 📌 Still to be written up
 
-*These are pages and behaviours that exist and have not yet been explained here. Listed so the gap is
+*These are pages and behaviors that exist and have not yet been explained here. Listed so the gap is
 visible rather than assumed complete.*
 
 - The internal `/aby` controls on the quote tool, and what a broker does not see

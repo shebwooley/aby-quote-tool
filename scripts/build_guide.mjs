@@ -174,6 +174,33 @@ const body = banner + 'export const ADMIN_GUIDE_HTML = ' + JSON.stringify(html) 
 // 🔴 The generated file must contain no backtick: worker.js imports it, and wrangler bundles the two
 // together. JSON.stringify guarantees this, and asserting it means a future change of encoder cannot
 // quietly reintroduce the trap.
+// 🔴 US ENGLISH, BECAUSE THIS IS SHIPPED PROSE. The project's rule is US spelling in anything
+// a user might see, and the guide is the only long piece of prose the tool serves. Eric caught
+// "in anger" on 2026-08-23 -- a British idiom, not a spelling, and no spell-checker would flag it.
+// ⭐⭐ CHECKED ON THE RENDERED HTML, NOT THE MARKDOWN. The source is hard-wrapped, so "not in
+// anger" spanned a line break and was invisible to a grep of the file while being perfectly
+// visible on the page. Match what the READER sees.
+const BRITISH = [
+  ['in anger', 'used for real'],
+  ['analyse', 'analyze'], ['analysing', 'analyzing'], ['analysed', 'analyzed'],
+  ['realise', 'realize'], ['realising', 'realizing'], ['realised', 'realized'],
+  ['recognis', 'recogniz'], ['organis', 'organiz'],
+  ['normalis', 'normaliz'], ['summaris', 'summariz'], ['prioritis', 'prioritiz'],
+  ['categoris', 'categoriz'], ['apologis', 'apologiz'],
+  ['behaviour', 'behavior'], ['colour', 'color'], ['licence', 'license'],
+  ['defence', 'defense'], ['centre', 'center'], ['grey', 'gray'],
+  ['whilst', 'while'], ['amongst', 'among'], ['learnt', 'learned'],
+  ['relabell', 'relabel'], ['cancell', 'cancel'], ['programme', 'program'],
+];
+const flat = html.toLowerCase();
+const found = BRITISH.filter(([bad]) => flat.indexOf(bad) !== -1);
+if (found.length) {
+  console.log('The guide is shipped prose and must be US English. Found:');
+  for (const [bad, good] of found) console.log('  ' + bad + '  ->  ' + good);
+  console.log('Fix docs/admin-guide.md and re-run.');
+  process.exit(1);
+}
+
 if (body.indexOf('`') !== -1) {
   console.log('CANNOT RUN: the generated file contains a backtick, which would break worker.js.');
   process.exit(2);
