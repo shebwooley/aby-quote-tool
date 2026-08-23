@@ -2731,6 +2731,17 @@ ${abyAdminNav('/admin/brokers')}
      var k = kids[x.agency_label||x.agency] || [];
      return own + k.reduce(function(t,c){ return t+Number(c.n||0); }, 0);
    }
+   // SALES ROLL UP TOO, and they have to, for the same reason quotes do.
+   // 🔴 A sale is filed under the name that WROTE it -- Benefits Texas, not Patriot -- because
+   // that is what happened; Patriot merely owns the book now. So a parent whose own name never
+   // quoted (Patriot, Ghostly) has no sales of its own and read as a dash over a family holding
+   // fifty of them. Quotes were already rolled; sales were not, and nothing said so.
+   // ⭐ Unlike EMPLOYERS, sales are safe to add: a sale row belongs to exactly one agency, so
+   // there is no double-count of the kind that forced conversion to be counted in SQL.
+   function rolledField(x, field){
+     var k = kids[x.agency_label||x.agency] || [];
+     return Number(x[field]||0) + k.reduce(function(t,c){ return t+Number(c[field]||0); }, 0);
+   }
    // Re-sort on the ROLLED total, or a parent sits below firms it now outranks.
    tops.sort(function(a,b){ return rolled(b)-rolled(a); });
 
@@ -2770,8 +2781,23 @@ ${abyAdminNav('/admin/brokers')}
      // ⛔ No badge when an agency has only AGENTS beneath it -- "(1)" would be explaining a
      // combined total that is not combined with anything, and the caret already says there is
      // something to open.
-     var sales = Number(x.sales||0)
-       ? ('<strong>'+x.sales+'</strong>'+(Number(x.sales||0)>Number(x.n||0)
+     // \u26d4 AN INFERRED SALE AND AN ANNOUNCED ONE ARE NOT THE SAME KIND OF FACT, so the cell says
+     // how many of each. 553 sales were reconstructed on 2026-08-22 by matching a client to the
+     // quote that originated it; they carry no announced date because no announcement exists.
+     // A column that silently blended the two would make the reconstruction invisible the moment
+     // anybody stopped remembering it had happened.
+     // A child row and the parent's own row show themselves; a rolled-up parent shows the family.
+     var salesN = (child || ownRow) ? Number(x.sales||0) : rolledField(x, 'sales');
+     var inf = (child || ownRow) ? Number(x.sales_inferred||0)
+                                 : rolledField(x, 'sales_inferred');
+     var sales = salesN
+       ? ('<strong>'+salesN+'</strong>'
+           +(inf ? '<span class="muted" style="font-size:11.5px" title="'+inf+' of these were'
+                 + ' reconstructed by matching a client to the quote that originated it. There is'
+                 + ' no announcement email behind them, so they carry no announced date. The other '
+                 + (salesN-inf)+' came from a real announcement.">'
+                 + ' ('+inf+' inf.)</span>' : '')
+           +(salesN>tot
            ? ' <span title="more sales than quotes on file" style="color:#a0574f">*</span>' : ''))
        : '\u2014';
      // CONVERSION AND RETENTION.
@@ -4070,6 +4096,11 @@ async function handleAdminStats(request, env) {
       // ⚠️ 156 of the 406 sales have no quote at all, so an agency can show sales with a low
       // quote count -- that is the finding, not an error.
       "       (SELECT COUNT(*) FROM aby_sales sx WHERE sx.agency = " + AGENCY_EXPR + ") AS sales, " +
+      // How many of those we INFERRED rather than received an announcement for. Eric, 2026-08-22:
+      // "I do think we should create sales records for the clients whose originating quote we can
+      // now identify... we need to build it as well as we can right now."
+      "       (SELECT COUNT(*) FROM aby_sales sx WHERE sx.agency = " + AGENCY_EXPR +
+      "          AND sx.source LIKE 'inferred-%') AS sales_inferred, " +
 
       // CONVERSION AND RETENTION. Eric, 2026-08-22: "out of those quotes that were run, how many
       // were sold and how many are still active. That will help to tell us agency conversion and

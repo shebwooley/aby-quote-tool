@@ -110,21 +110,51 @@ const AGENT_FIXTURE = [
 ];
 
 const FIXTURE = [
-  { agency_label: "MMA", n: 743, employers: 10, won: 5, kept: 4, agents: 6, sales: 3, last_quote: "2026-08-06", agency_id: "id-mma" },
-  { agency_label: "MHBT", n: 184, employers: 6, won: 3, kept: 1, agents: 2, sales: 0, last_quote: "2017-12-21",
+  { agency_label: "MMA", n: 743, employers: 10, won: 5, kept: 4, agents: 6, sales: 3, sales_inferred: 2, last_quote: "2026-08-06", agency_id: "id-mma" },
+  { agency_label: "MHBT", n: 184, employers: 6, won: 3, kept: 1, agents: 2, sales: 5, sales_inferred: 5,
+    // ⭐ MHBT HAS SALES AND MMA HAS FEWER. The dead name wrote the business; the parent
+    // inherited it. That is the shape that makes a sales rollup observable at all -- if the
+    // child had none, a parent showing its own 3 and a parent showing the family 3 would be
+    // indistinguishable and the rule would be vacuous. last_quote: "2017-12-21",
     parent_name: "MMA", relationship: "succeeded", agency_id: "id-mhbt" },
-  { agency_label: "USI", n: 335, employers: 12, won: 3, kept: 3, agents: 9, sales: 1, last_quote: "2026-08-03", agency_id: "id-usi" },
-  { agency_label: "HUB", n: 41, employers: 5, won: 2, kept: 2, agents: 2, sales: 0, last_quote: "2026-06-04", agency_id: "id-hub" },
-  { agency_label: "HUB-Wellspring", n: 13, employers: 3, won: 1, kept: 1, agents: 1, sales: 0, last_quote: "2021-12-27",
+  { agency_label: "USI", n: 335, employers: 12, won: 3, kept: 3, agents: 9, sales: 1, sales_inferred: 0, last_quote: "2026-08-03", agency_id: "id-usi" },
+  { agency_label: "HUB", n: 41, employers: 5, won: 2, kept: 2, agents: 2, sales: 0, sales_inferred: 0, last_quote: "2026-06-04", agency_id: "id-hub" },
+  { agency_label: "HUB-Wellspring", n: 13, employers: 3, won: 1, kept: 1, agents: 1, sales: 0, sales_inferred: 0, last_quote: "2021-12-27",
     parent_name: "HUB", relationship: "division", agency_id: "id-hw" },
-  { agency_label: "Gus Bates", n: 16, employers: 4, won: 2, kept: 2, agents: 1, sales: 0, last_quote: "2019-10-23",
+  { agency_label: "Gus Bates", n: 16, employers: 4, won: 2, kept: 2, agents: 1, sales: 0, sales_inferred: 0, last_quote: "2019-10-23",
     parent_name: "HUB", relationship: "succeeded", agency_id: "id-gb" },
   // A child whose parent has NEVER quoted. The parent must be synthesised.
-  { agency_label: "Ghost - TX", n: 12, employers: 2, won: 0, kept: 0, agents: 1, sales: 0, last_quote: "2024-01-01",
+  { agency_label: "Ghost - TX", n: 12, employers: 2, won: 0, kept: 0, agents: 1, sales: 0, sales_inferred: 0, last_quote: "2024-01-01",
     parent_name: "Ghostly", relationship: "division", agency_id: "id-ghost" },
 ];
 
 const RULES = [
+  {
+    // A SALE IS FILED UNDER THE NAME THAT WROTE IT. Benefits Texas wrote the business; Patriot
+    // bought them. So a parent whose OWN name never quoted has no sales of its own, and before
+    // sales were rolled its row showed a dash over a family holding fifty of them.
+    // ⭐ Unlike EMPLOYERS, sales are safe to ADD -- a sale row belongs to exactly one agency, so
+    // there is no double-count of the kind that forced conversion to be counted in SQL.
+    name: "a parent's sales include its children's",
+    holds(src) {
+      const r = run(FIXTURE, {}, src);
+      const row = r.html.slice(0, r.html.indexOf("USI"));
+      return row.includes("<strong>8</strong>");        // MMA 3 + MHBT 5
+    },
+  },
+  {
+    // ⚠️ TESTED ON THE PARENT'S OWN ROW, NOT ON A CHILD. A child has no children of its own, so
+    // rolling it returns its own number and a "child shows the family total" sabotage cannot
+    // change anything about it -- the rule would be vacuous. The parent's OWN row is where the
+    // two answers differ: MMA alone sold 3, the MMA family sold 8.
+    name: "the parent's own row shows its own sales, not the family's",
+    holds(src) {
+      const r = run(FIXTURE, { MMA: true }, src);
+      const head = r.html.slice(0, r.html.indexOf("MHBT"));
+      // The headline (8) comes first, then the parent's own row (3), then the children.
+      return head.includes("<strong>8</strong>") && head.includes("<strong>3</strong>");
+    },
+  },
   {
     // ⭐⭐ THE ONE THAT MATTERS. Summing the child rows gives 16 employers for the MMA family;
     // the truth is 14, because two employers were quoted under both MMA and MHBT. A rate built
@@ -390,6 +420,14 @@ const RULES = [
 
 // ---- sabotages: prove each rule can go red ----------------------------------------------------
 const SABOTAGES = [
+  { why: "a parent stops adding its children's sales",
+    apply: (s) => s.replace(
+      "var salesN = (child || ownRow) ? Number(x.sales||0) : rolledField(x, 'sales');",
+      "var salesN = Number(x.sales||0);") },
+  { why: "a child row shows the family's sales instead of its own",
+    apply: (s) => s.replace(
+      "var salesN = (child || ownRow) ? Number(x.sales||0) : rolledField(x, 'sales');",
+      "var salesN = rolledField(x, 'sales');") },
   // ⭐⭐ THE REGRESSION THIS FEATURE IS MOST LIKELY TO SUFFER: somebody looks at the family lookup,
   // decides it is indirection for its own sake, and adds the child rows up instead. It gives a
   // plausible number that is always slightly too low.
