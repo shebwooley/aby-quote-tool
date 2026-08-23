@@ -3334,7 +3334,7 @@ ${abyAdminNav('/admin/brokers')}
       <p class="sub" id="mktSub">Every firm we could work &mdash; including the ones that have never quoted.</p>
       <div class="mfilters">
         <select id="mQuoted" onchange="loadMkt()">
-          <option value="">Everyone</option>
+          <option value="">All firms</option>
           <option value="no">Never quoted</option>
           <option value="yes">Has quoted</option>
         </select>
@@ -4397,12 +4397,18 @@ ${abyAdminNav('/admin/brokers')}
    if (!ev.length){
      h += '<p class="muted">Nothing recorded about this firm yet.</p>';
    } else {
-     h += '<table class="grid"><colgroup><col style="width:100px"><col style="width:78px"><col></colgroup><tbody>';
+     h += '<table class="grid"><colgroup><col style="width:100px"><col style="width:78px"><col><col style="width:26px"></colgroup><tbody>';
      for (var j = 0; j < ev.length; j++){
        h += '<tr><td class="date">' + day(ev[j].happened_at) + '</td><td>'
           + (ev[j].kind === 'tag' ? '<span class="tag">tag</span>' : '<span class="muted">note</span>')
           + '</td><td class="wrapcell">' + esc(ev[j].label || '') + (ev[j].label && ev[j].body ? ' &mdash; ' : '')
-          + esc(ev[j].body || '') + '</td></tr>';
+          + esc(ev[j].body || '')
+          // ⛔ A MISTYPED NOTE HAS TO BE REMOVABLE FROM THE SCREEN IT WAS TYPED ON. The endpoint
+          // existed and was tested before any control called it -- the third time in one day.
+          // ⚠️ Deleting and re-writing is the RIGHT way to correct a recorded entry; editing one
+          // in place is not, because a recorded value is a measurement and must not be restated.
+          + '</td><td style="width:26px"><a href="#" title="Remove this entry" style="color:#a12622;text-decoration:none"'
+          + ' onclick="delEvent(' + "'" + ev[j].id + "','" + id + "'" + ');return false">x</a></td></tr>';
      }
      h += '</tbody></table>';
    }
@@ -4457,6 +4463,17 @@ ${abyAdminNav('/admin/brokers')}
      openFirm(id);
    }
  }
+ async function delEvent(eventId, firmId){
+   var r = await fetch('/api/admin/crm/delete', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ id: eventId }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok){ q('fMsg').textContent = d.error || 'That did not delete.'; return; }
+   await loadMkt();
+   openFirm(firmId);
+ }
+
  async function addNote(id){
    var body = (q('fNote').value || '').trim();
    if (!body){ q('fMsg').textContent = 'Type the note first.'; return; }
@@ -4476,7 +4493,12 @@ ${abyAdminNav('/admin/brokers')}
  // endpoint for its rows the first time it is shown, and doing that before the page had
  // finished its own first render would race the two.
  load();
- try { if (localStorage.getItem('abyCrmView') === 'marketing') setView('marketing'); } catch(e) {}
+ // ⭐ setView IS CALLED EVEN WHEN THE VIEW IS NOT CHANGING, because it is what writes the hint
+ // beside the buttons. Restoring only the remembered view left a first-time visitor looking at
+ // two unlabelled buttons and an empty space.
+ try {
+   setView(localStorage.getItem('abyCrmView') === 'marketing' ? 'marketing' : 'performance');
+ } catch(e) { setView('performance'); }
 </script></body></html>`;
 }
 

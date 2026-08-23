@@ -48,6 +48,13 @@ const RULES = [
     holds: (f) => /\/api\/admin\/crm\/agencies/.test(f.worker) && /function loadMkt\(/.test(f.worker),
   },
   {
+    name: "a recorded note can be removed from the screen it was typed on",
+    why: "THIRD instance in one day of an endpoint built, tested and deployed with no control"
+       + " calling it. /crm/delete had assertions proving it 404s on a second attempt while nothing"
+       + " on any screen could reach it.",
+    holds: (f) => /function delEvent\(/.test(f.worker) && /crm\/delete/.test(f.worker),
+  },
+  {
     name: "the acquisition control is on the firm panel",
     why: "The endpoint that records an acquisition was built, tested and DEPLOYED before any"
        + " control existed to call it -- the exact state F-367 shipped in, noticed only because"
@@ -112,6 +119,10 @@ const RULES = [
 ];
 
 const SABOTAGES = [
+  {
+    why: "the note delete control is orphaned from its endpoint",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/function delEvent\(/g, "function unusedDel(") }),
+  },
   {
     why: "the acquisition control is orphaned from its endpoint",
     apply: (f) => ({ ...f, worker: f.worker.replace(/function saveRel\(/g, "function unusedRel(") }),
