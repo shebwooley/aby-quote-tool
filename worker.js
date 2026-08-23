@@ -2884,11 +2884,17 @@ ${abyAdminNav('/admin/brokers')}
                    + (p.email ? ' <span class="muted" style="font-size:11.5px">'+esc(p.email)+'</span>' : '')
                    + '</td>'
                    + '<td class="c">'+Number(p.n||0)+'</td>'
-                   // Six dashes: an agent has no client figure of their own, because a client
-                   // folder records the AGENCY and never the individual. That is a real limit of
-                   // the source, not a gap to be filled by guessing.
                    + '<td class="c"><span class="muted">&mdash;</span></td>'
-                   + '<td class="c"><span class="muted">&mdash;</span></td>'
+                   // ⭐ THE AGENT'S OWN SOLD GROUPS. This used to be a dash on the grounds that a
+                   // client folder records the AGENCY and never the person -- true, but the QUOTE
+                   // records the person, and pairing the client back to the quote that originated
+                   // it recovers the name. That is exactly what Eric asked for.
+                   // ⚠️ Only where somebody typed the broker's name on the quote.
+                   + '<td class="c">'+(Number(p.sold||0)
+                        ? '<strong>'+Number(p.sold)+'</strong>'
+                          + '<span class="muted" style="font-size:11.5px"> / '
+                          + Number(p.sold_active||0)+' now</span>'
+                        : '<span class="muted">&mdash;</span>')+'</td>'
                    + '<td class="c"><span class="muted">&mdash;</span></td>'
                    + '<td class="c"><span class="muted">&mdash;</span></td>'
                    + '<td class="c"><span class="muted">&mdash;</span></td>'
@@ -3279,6 +3285,10 @@ function adminClientsHTML() {
 ${ADMIN_HEADER_CSS}
  main{max-width:1180px;margin:0 auto;padding:20px}
  .card{background:#fff;border:1px solid #e3e9f0;border-radius:9px;padding:16px 18px;margin-bottom:16px}
+ .card h2{cursor:pointer;user-select:none}
+ .card h2 .tw{font-size:11px;color:#8a97a8;margin-right:6px;display:inline-block;transition:transform .12s}
+ .card.shut h2 .tw{transform:rotate(-90deg)}
+ .card.shut .sub,.card.shut>div,.card.shut>table,.card.shut>p:not(.sub){display:none}
  h2{margin:0 0 4px;font-size:15px} .sub{margin:0 0 12px;color:#5b6b7f;font-size:13px}
  table{width:100%;border-collapse:collapse;font-size:14px}
  th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
@@ -3302,9 +3312,15 @@ ${abyAdminNav('/admin/clients')}
 <main>
   <div id="warn" class="warn" style="display:none"></div>
 
-  <div class="tiles" id="tiles"></div>
+  <!-- ⭐ FOLDED AWAY BY DEFAULT. Eric, 2026-08-22: "the insights at the top of the clients page
+       needs to be a toggle - we probably won't want to see that all the time." The counts and the
+       explanation are worth having and are not worth carrying above every visit, so the card
+       remembers its state and starts shut. -->
+  <div class="card" id="insights">
+    <h2>Overview</h2>
+    <div class="tiles" id="tiles"></div>
 
-  <div class="note">
+    <div class="note">
     <b>These are three different records and this page keeps them apart on purpose.</b>
     A <b>quote</b> is a proposal we sent. A <b>sale</b> is something that happened on a date.
     A <b>client</b> is somebody we serve today, active or termed.
@@ -3313,7 +3329,8 @@ ${abyAdminNav('/admin/clients')}
     The reason is known: the sold groups sit in a <b>second folder tree</b> &mdash; Summit &mdash;
     which accounts for <b>226 of the 353</b> sales that had no folder before it was loaded, and 72%
     of the COBRA ones. So nothing here is merged, and no employer is ever marked <i>termed</i> just
-    for being absent from a list.
+      for being absent from a list.
+    </div>
   </div>
 
   <div class="card">
@@ -3367,7 +3384,10 @@ ${abyAdminNav('/admin/clients')}
     w.textContent='Some of this could not be read: '+Object.keys(d.unavailable).join(', ')+
       '. The numbers below are incomplete, not zero.';
   }
-  tiles(); draw(); orphans();
+  tiles(); draw(); orphans(); wireCollapse();
+  // TWO CALL SITES, like the brokers page: the card exists in the markup before any fetch
+  // returns, so wiring it only after load() leaves it unclickable until the data lands --
+  // and on a slow or failed request, permanently.
  }
 
  function tiles(){
@@ -3425,6 +3445,27 @@ ${abyAdminNav('/admin/clients')}
   if(f==='never') return r.quotes===0;
   return true;
  }
+ // ⚠️ The twisty is added to the DOM rather than written into the heading, so a new card gets the
+ // behaviour without anyone remembering to mark it up. Same helper as the brokers page.
+ function wireCollapse(){
+   Array.prototype.forEach.call(document.querySelectorAll('.card'),function(card){
+     var h=card.querySelector('h2'); if(!h||h.dataset.wired) return;
+     h.dataset.wired='1';
+     var key='abyfold:clients:'+h.textContent.trim();
+     var tw=document.createElement('span'); tw.className='tw'; tw.textContent='\u25bc';
+     h.insertBefore(tw,h.firstChild);
+     // ⭐ SHUT UNLESS THE READER HAS SAID OTHERWISE. The Overview is reference, not the reason to
+     // open this page; the client table is. An unset preference means shut for it and open for
+     // everything else, so the default matches what the card is FOR.
+     var saved=localStorage.getItem(key);
+     if(saved==='shut' || (!saved && card.id==='insights')) card.classList.add('shut');
+     h.onclick=function(){
+       card.classList.toggle('shut');
+       localStorage.setItem(key, card.classList.contains('shut')?'shut':'open');
+     };
+   });
+ }
+
  function draw(){
   var q=(document.getElementById('q').value||'').toLowerCase().trim();
   var f=document.getElementById('filter').value;
@@ -3505,7 +3546,7 @@ ${abyAdminNav('/admin/clients')}
   document.getElementById('orphans').innerHTML=h;
  }
 
- load();
+ wireCollapse(); load();
 </script></body></html>`;
 }
 
@@ -4069,9 +4110,21 @@ async function handleAdminStats(request, env) {
       "       MAX(COALESCE(bd.assigned_rep, a.assigned_rep, b.assigned_rep)) AS rep, " +
       "       MAX(CASE WHEN bd.email IS NOT NULL THEN 1 ELSE 0 END) AS assignable, " +
       "       MAX(COALESCE(bd.assigned_rep,'')) AS own_rep, " +
-      "       COUNT(*) AS n, MAX(q.created_at) AS last_quote " +
+      "       COUNT(*) AS n, MAX(q.created_at) AS last_quote, " +
+      // GROUPS THIS PERSON SOLD. Eric, 2026-08-22: "the reason to pull in the clients is to try to
+      // pair them with quotes so we can figure out which of our agents have sold groups and how
+      // many". This is that pairing: an employer they quoted who is on our books today.
+      // ⚠️ THE AGENT NAME IS ON THE QUOTE, NOT ON THE CLIENT FOLDER -- a folder records the AGENCY
+      // and never the individual. So this can only ever cover quotes where somebody typed the
+      // broker's name, which is 108 of the 974 clients that have a quote at all. The column shows
+      // what we can see and the header says so; it is not a leaderboard.
+      "       COUNT(DISTINCT CASE WHEN cc.status IS NOT NULL " +
+      "                           THEN q.client_match_key END) AS sold, " +
+      "       COUNT(DISTINCT CASE WHEN cc.status = 'active' " +
+      "                           THEN q.client_match_key END) AS sold_active " +
       "FROM quotes q " +
       BROKER_JOIN + " " +
+      "LEFT JOIN aby_clients cc ON cc.match_key = q.client_match_key " +
       // Only an agent we have an EMAIL for can be assigned -- broker_directory is keyed on it.
       // A name-keyed row ("Niels" and "Niels Andersen" are two groups) has nowhere to store a
       // value, and the page shows a dash rather than a control that would silently do nothing.
