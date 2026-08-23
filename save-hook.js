@@ -152,12 +152,22 @@
     };
 
     try {
-      await fetch('/api/quotes', {
+      const res = await fetch('/api/quotes', {
         method:    'POST',
         headers:   { 'Content-Type': 'application/json' },
         body:      JSON.stringify(payload),
         keepalive: true,   // lets the request finish even if the page is closing
       });
+      // ⭐ KEEP THE ID. The response has always carried {id, quoteNumber, revision} and this hook
+      // has always discarded it -- which is why the quote page could not offer a share link: a
+      // link needs the row's id and nothing on the page knew it.
+      // ⛔ STILL FIRE-AND-FORGET IN SPIRIT: if the read fails, or the save failed, the id simply
+      // stays null and the share button does not appear. Nothing here can interrupt the broker.
+      const saved = await res.json().catch(function () { return null; });
+      if (saved && saved.id) {
+        window.__abySavedQuoteId = saved.id;
+        document.dispatchEvent(new CustomEvent('aby:quote-saved', { detail: { id: saved.id } }));
+      }
     } catch (_) {
       // Silently swallow — a failed save should never affect the broker's workflow
     }

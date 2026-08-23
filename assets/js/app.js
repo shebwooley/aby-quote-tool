@@ -583,6 +583,13 @@
       '  <button type="button" class="primary" id="pdfBtn">Download PDF</button>' +
       '  <button type="button" class="secondary" id="htmlBtn">Download HTML</button>' +
       '  <button type="button" class="secondary" id="printBtn">Print</button>' +
+      // ⭐ THE SHARE LINK, WHICH IS THE ONLY DOOR TO THE EMPLOYER-EDITABLE HEADCOUNT.
+      // Hidden until the quote has been saved and we know its id; a button that cannot work is
+      // worse than no button. Absent on a shared page, where the reader IS the employer.
+      (forEmployer ? '' :
+      '  <button type="button" class="secondary" id="shareBtn" hidden' +
+      '          title="Creates a link you can send the employer. On that page they can correct' +
+      ' the headcount and see the price update before they sign.">Copy share link</button>') +
       '</div>' +
       '<div class="quote">' + html + '</div>';
 
@@ -600,7 +607,56 @@
     var htmlBtn = document.getElementById('htmlBtn');
     if (htmlBtn) htmlBtn.addEventListener('click', function () { downloadQuoteAsHtml(form, quoteNumber); });
 
+    wireShareButton();
+
     outputEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Mint and copy a link to this quote.
+  //
+  // ⚠️ THE SAVE IS ASYNCHRONOUS AND USUALLY LANDS AFTER THIS RENDER, so the button starts hidden
+  // and appears when the id arrives. Showing it immediately and hoping would give a button that
+  // fails for the first second on every quote -- which reads as broken, not as slow.
+  function wireShareButton() {
+    var btn = document.getElementById('shareBtn');
+    if (!btn) return;
+
+    function reveal(id) {
+      if (!id) return;
+      btn.hidden = false;
+      btn.onclick = function () { copyShareLink(id, btn); };
+    }
+    reveal(window.__abySavedQuoteId);
+    document.addEventListener('aby:quote-saved', function (e) {
+      reveal(e && e.detail && e.detail.id);
+    });
+  }
+
+  async function copyShareLink(id, btn) {
+    var original = btn.textContent;
+    btn.textContent = 'Creating...';
+    try {
+      var r = await fetch('/api/quotes/' + id + '/share', { method: 'POST' });
+      var d = await r.json().catch(function () { return {}; });
+      if (!r.ok) {
+        // ⛔ SAY WHY. The server refuses a link for a quote carrying a price adjustment, because
+        // the link would re-price and show the employer a figure the document never gave. That is
+        // a real answer and collapsing it into "something went wrong" sends somebody hunting a bug
+        // that does not exist.
+        btn.textContent = original;
+        alert(d.message || 'Could not create a link for this quote.');
+        return;
+      }
+      var url = d.url || (location.origin + '/q/' + d.token);
+      var copied = false;
+      try { await navigator.clipboard.writeText(url); copied = true; } catch (e) { copied = false; }
+      btn.textContent = copied ? 'Link copied' : 'Link ready';
+      if (!copied) prompt('Copy this link:', url);
+      setTimeout(function () { btn.textContent = original; }, 2500);
+    } catch (e) {
+      btn.textContent = original;
+      alert('Could not create a link for this quote.');
+    }
   }
 
   // -------------------------------------------------------------
