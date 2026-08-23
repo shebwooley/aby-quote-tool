@@ -279,27 +279,54 @@ it to 14 August, and that is what the history says.
 
 ---
 
-## ⏳ Not built yet, and worth knowing about
-
 ### The agency's own admin, and how it feeds ABY's list
 
-**An agency administrator can already invite their colleagues** — paste names and emails, and each
-person gets an email to set their own password. Whether colleagues can see each other's quotes is an
-agency setting, and it **starts switched off**.
+**An agency administrator invites their colleagues** — paste names and emails, and each person gets
+an email to set their own password. Whether colleagues can see each other's quotes is an agency
+setting, and it **starts switched off**.
 
-🔴 **Nobody has ever registered an account, so none of this has run in anger.**
+⭐⭐ **AN INVITED COLLEAGUE NOW APPEARS IN OUR LIST IMMEDIATELY**, and so does anybody who signs up
+off a webinar unprompted. Before, an invite wrote only to the accounts table, which the CRM does not
+read — so an agency could hand us six account managers and every one would have been invisible.
 
-**The gap:** an agent invited that way **would not appear in ABY's list at all**, because the list is
-built from the quote log. And an agent ABY already knows would have to be **retyped** by their own
-agency.
+⭐ **And it works the other way. Their admin shows the people WE already know at their firm**,
+prefilled — name, phone, how many quotes they have run — rather than making them retype colleagues
+we have known for fifteen years. **The quote count is the point:** it is the evidence that we already
+know this person, and what makes the row worth correcting.
 
-▶️ **Both are being fixed the same way:** an invited agent becomes a person ABY can see immediately,
-and an agent ABY already knows appears in their agency's admin already filled in, to confirm or
-correct.
+🔴 **Somebody we already know is recognised, not duplicated**, and their invite does **not**
+overwrite the name we hold. What we have was typed by somebody dealing with them.
 
-🔴 **The rule that goes with it:** the agency controls a person's name, phone and title, **and their
-own city and state**. ABY controls the owner, the priority, the tags and the notes. ⛔ **A broker must
-never see a CRM note.**
+### Who owns which field
+
+⛔ **An agency administrator can never change how we see them.** This is enforced, not just intended.
+
+| The agency owns | We own |
+|---|---|
+| the person's **name** and **phone** | **owner**, **priority**, **tags**, **notes** |
+| whether they are still there | whether the firm was acquired or is a branch |
+
+⚠️ **Their screen carries nothing internal at all** — no owner, no priority, no tags, no notes. **A
+broker must never read what we think of them.** An administrator can only edit people at their own
+firm; trying to reach somebody elsewhere by guessing an address is refused.
+
+### 🔴 Two records for one firm
+
+**When somebody signs up, the tool always creates a NEW agency record rather than attaching them to
+one we already have.** That is deliberate: agency names are typed free text and email domains are
+mixed and often personal, so guessing would put a stranger inside somebody else's book.
+
+⚠️ **The consequence is that a firm we have quoted for years gets a second record the moment one of
+their people registers.** The admin reports those pairs — matched ignoring punctuation and case — as
+**suggestions only.** *Lone Star Insurance* and *Lone Star Insurance Services* may be one firm or
+two, and only you and Niels know.
+
+---
+
+## ⏳ Not built yet, and worth knowing about
+
+- Nobody has yet registered a real account, so the agency side has been proved in testing and not in
+  anger. **The first agency that signs up is the real test.**
 
 ---
 
