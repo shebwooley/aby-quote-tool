@@ -97,8 +97,9 @@ quotes, sales, clients, how many are still with us, and who at ABY owns the rela
 
 ### Marketing
 
-**The same agencies, with the columns you need when you are WORKING them rather than analysing
-them.** ⏳ **Not built yet** — the full description is under *The CRM* below.
+**The same firms, with the columns you need when you are working them rather than analysing
+them.** It is the second button at the top of Brokers & Agencies, and the page remembers which
+one you left it on. **Full description under *The CRM* below.**
 
 ### Pipeline / prospects
 
@@ -182,13 +183,26 @@ them *today*, which is recomputed every time you look.
 
 ### Marking an acquisition where you notice it
 
-⏳ **Not built yet.** The mechanism exists and the data barely does: **of 685 agencies, only 12 are
-recorded as acquired and 9 as branch offices.** There are also **47 rows with two firm names typed
-into one box** (*"MMA; MHBT"*), and several spellings of the same firm.
+**Open a firm and answer *what happened to this firm?*** — acquired by somebody, or a branch office
+of them.
 
-⭐ **So the CRM will let you mark a firm as acquired-by or a branch-of, from the row you are looking
-at** — which turns a research project into something cleared while working. **Only Eric and Niels
-know these facts; no query will ever work them out.**
+🔴 **The two do opposite things, and the wording on screen says which:**
+
+| | |
+|---|---|
+| **Acquired** | the name is dead. It **leaves the Marketing list for good** — nobody can call it — and keeps counting for the firm that bought it |
+| **Branch office** | still callable. It **stays** on the Marketing list with its own owner, and also rolls up |
+
+⚠️ **Only top-level firms are offered as the parent.** A chain — A under B under C — would roll a
+firm up to the wrong owner, so it is refused rather than allowed and silently mis-totalled.
+
+⭐ **This exists because the data barely does: of 672 firms only 12 are recorded as acquired and 9
+as branch offices**, and **47 rows have two firm names typed into one box** (*"MMA; MHBT"*). **Only
+you and Niels know these facts; no query will ever work them out** — so the point is to make
+recording one a click from the row you are already looking at.
+
+⚠️ **Marking a firm as acquired makes it disappear from the list you are on.** That is the feature
+working, and the count line says so rather than leaving you wondering.
 
 ### A person is not an email address
 
@@ -218,7 +232,7 @@ is reversible** — splitting them back restores exactly what was there before.
 
 ### Where a firm is
 
-⏳ **City and state are now recorded on each agency, and are empty until somebody types them.**
+**Open a firm and type its city and state.** They start empty.
 
 🔴 **Nothing could be filled in automatically: only 5 of the 6,154 quotes carry a broker phone
 number**, so there is no area code to work from.
@@ -227,6 +241,32 @@ number**, so there is no area code to work from.
 DFW. Two hand-typed fields answering the same question disagree within a month.
 
 ⏳ **The best fix is to let the agency tell us** — see below.
+
+---
+
+### Adding a list from an event
+
+**Paste it in; there is no file to upload, and that is deliberate.** Copying rows straight out of
+Excel gives text this can read without any column-matching, and — the part that matters — **you see
+exactly what you are about to add before it lands.**
+
+⭐ **The tag goes on during the paste.** *"Everyone at the Tulsa class, 14 August"* is one action:
+paste the rows, pick the tag, set the date it happened, apply. Doing it in two steps is two chances
+to tag the wrong set.
+
+🔴 **A conference list will contain people we already know, and they are the valuable half.**
+Anybody already on our books is **recognised and tagged, not duplicated** — creating a second record
+for somebody who has quoted for years is exactly what the tool is built to prevent.
+
+⚠️ **It tells you the split** — *"9 added, 4 already known and tagged, 1 refused"* — never just
+*"14 imported"*. **A row with no email address creates nothing and is reported as refused**, because
+an email is the only stable way to know who somebody is. Badge lists often have none, so expect a
+real fraction of those.
+
+⛔ **A re-pasted list never overwrites anybody.** Somebody already there may have an account,
+quotes, a priority and an owner, and none of it is touched.
+
+⏳ **Not built yet.**
 
 ---
 

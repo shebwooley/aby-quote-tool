@@ -35,6 +35,7 @@ const PORT = Number(process.env.CRM_TEST_PORT || 8799);
 const BASE = `http://127.0.0.1:${PORT}`;
 const SELF_TEST = process.argv.includes('--self-test');
 const WIN = process.platform === 'win32';
+const NEWLINE = String.fromCharCode(10);
 // 🔴 shell: true IS REQUIRED ON WINDOWS AND IS NOT LAZINESS. Node 20 refuses to spawn a .cmd
 // without a shell (the CVE-2024-27980 fix), so npx.cmd fails with EINVAL and the seed dies with no
 // message. ⚠️ It is only SAFE here because every long-lived process is killed by TREE below -- with
@@ -144,6 +145,13 @@ async function portFree() {
 }
 
 async function boot(cfg) {
+  // 🔴 WAIT FOR THE PORT BEFORE STARTING, NOT ONLY ONCE AT THE TOP OF THE RUN. The previous
+  // phase's worker does not release it the instant taskkill returns, so the next boot raced it and
+  // died with 'never came up' -- which reads as a broken worker rather than as a slow shutdown.
+  // ⚠️ It cost a 15-minute self-test that reported CANNOT RUN after passing 74 assertions.
+  for (let i = 0; i < 30 && !(await portFree()); i++) {
+    await new Promise((s) => setTimeout(s, 500));
+  }
   const proc = spawn(NPX, ['wrangler', 'dev', '--local', '--config', cfg,
                            '--port', String(PORT), '--inspector-port', '0', ...PERSIST],
                      { cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'], shell: WIN });
@@ -163,7 +171,14 @@ async function boot(cfg) {
     await new Promise((s) => setTimeout(s, 700));
   }
   killTree(proc);
-  die('the local worker never came up on port ' + PORT + '.\n  ' + log.split('\n').slice(-12).join('\n  '));
+  // ⛔ STATE THE SYMPTOM AND THE CANDIDATES, NEVER ONE CAUSE. This said 'never came up on port
+  // N', which sends a reader to look at PORTS -- while the log below said the worker could not be
+  // BUILT. A message asserting a cause it cannot know is worse than one that does not (TRAPS #283).
+  die('nothing answered on port ' + PORT + ' within 90s -- the worker did not START.'
+      + NEWLINE + '  Usually one of: a BUILD error (read the log below), a leaked dev server still'
+      + NEWLINE + '  holding the port, or a missing binding. THE LOG NAMES IT. Read it before'
+      + NEWLINE + '  changing anything.'
+      + NEWLINE + '  ' + log.split(NEWLINE).slice(-14).join(NEWLINE + '  '));
   return proc;
 }
 
@@ -453,6 +468,100 @@ async function runSuite() {
         'a merge that could not be undone would make a wrong guess permanent');
   r = await api('GET', '/api/admin/crm/person?email=' + encodeURIComponent(MOVER_OLD));
   check('the other side is unchanged too', [(r.json.addresses || []).length, r.json.totalQuotes], [1, 3]);
+
+  // ── 13. THE MARKETING ROW SET. Sourced from the agency records, never from the quote log -- which
+  //    is the one change the whole view rests on, and the only reason a never-quoted firm appears.
+  const A3 = AGENCIES[3].id;
+  const ACQ = AGENCIES[4].id;   // marked as acquired below
+  const DIV = AGENCIES[5].id;   // marked as a branch below
+
+  r = await api('GET', '/api/admin/crm/agencies');
+  const all = (r.json && r.json.agencies) || [];
+  check('the marketing list is sourced from the agency records',
+        all.length >= AGENCIES.length, true,
+        'built from the quote log it could not show a firm that has never quoted');
+  const never = all.find((x) => x.id === A3);
+  check('a firm that has NEVER quoted appears, and says so',
+        [Boolean(never), never && never.quotes], [true, 0]);
+  const created = all.find((x) => x.name === 'Agency With No Record');
+  check('and it carries its agent count without touching the quote log',
+        created && created.agents, 1);
+
+  // ── 14. ACQUIRED vs BRANCH -- the two behave in opposite ways and must not be collapsed.
+  r = await api('POST', '/api/admin/crm/relationship',
+                { id: ACQ, parent_id: AGENCIES[0].id, relationship: 'succeeded', note: 'bought 2019' });
+  check('a firm can be recorded as acquired', [r.status, r.json && r.json.relationship], [200, 'succeeded']);
+  r = await api('POST', '/api/admin/crm/relationship',
+                { id: DIV, parent_id: AGENCIES[0].id, relationship: 'division' });
+  check('and another as a branch office', r.json && r.json.relationship, 'division');
+
+  r = await api('GET', '/api/admin/crm/agencies');
+  const afterRel = (r.json && r.json.agencies) || [];
+  check('the ACQUIRED name leaves the marketing list -- nobody can call it',
+        Boolean(afterRel.find((x) => x.id === ACQ)), false,
+        'Eric: we only market to MMA, not MHBT');
+  check('the BRANCH stays -- it is alive and has its own owner',
+        Boolean(afterRel.find((x) => x.id === DIV)), true,
+        'a branch and an acquisition look identical in a parent-child table and must not behave alike');
+  check('and the page reports how many it is hiding', r.json && r.json.excludedAcquired, 1,
+        'a filtered page that does not say so is the same defect as an empty one saying all done');
+
+  // One hop only: the rollup on the analysis page joins the parent with a SINGLE join, so a
+  // grandparent chain would truncate silently and a child would roll up to the wrong firm.
+  r = await api('POST', '/api/admin/crm/relationship',
+                { id: AGENCIES[6].id, parent_id: DIV, relationship: 'division' });
+  check('a chain is refused, because the rollup is one hop', r.status, 400);
+  r = await api('POST', '/api/admin/crm/relationship',
+                { id: AGENCIES[0].id, parent_id: DIV, relationship: 'division' });
+  check('and so is demoting a firm that already has children', r.status, 400);
+  r = await api('POST', '/api/admin/crm/relationship',
+                { id: A3, parent_id: A3, relationship: 'division' });
+  check('a firm cannot be its own parent', r.status, 400);
+
+  // ── 15. THE FIELD SETTER writes a CLOSED LIST of columns and nothing else.
+  r = await api('POST', '/api/admin/crm/agency', { id: A3, field: 'name', value: 'Renamed By An API' });
+  check('a field outside the closed list is refused', r.status, 400,
+        'a column parameterised by whatever the browser sends eventually writes the wrong one');
+  r = await api('POST', '/api/admin/crm/agency', { id: A3, field: 'priority', value: 'Z' });
+  check('an unknown priority is refused', r.status, 400);
+  r = await api('POST', '/api/admin/crm/agency', { id: A3, field: 'state', value: 'Texas' });
+  check('a state SPELLED OUT is refused', r.status, 400,
+        'Texas looks answered on screen and is invisible to any filter comparing a two-letter code');
+  r = await api('POST', '/api/admin/crm/agency', { id: A3, field: 'priority', value: 'A' });
+  check('a real priority saves', r.status, 200);
+  r = await api('POST', '/api/admin/crm/agency', { id: A3, field: 'priority', value: '' });
+  check('and it can be cleared again', r.status, 200,
+        'blank means nobody has judged this yet, which is not the same as C');
+
+  // ── 16. WHERE A FIRM IS -- typed, and the metro DERIVED from it.
+  await api('POST', '/api/admin/crm/agency', { id: A3, field: 'state', value: 'tx' });
+  await api('POST', '/api/admin/crm/agency', { id: A3, field: 'city', value: 'Frisco' });
+  r = await api('GET', '/api/admin/crm/agencies');
+  const placed = ((r.json && r.json.agencies) || []).find((x) => x.id === A3) || {};
+  check('the state is stored as a two-letter code, upper-cased', placed.state, 'TX');
+  check('the metro is DERIVED from the city, not typed', placed.metro, 'DFW',
+        'two hand-typed fields answering the same question disagree within a month');
+  await api('POST', '/api/admin/crm/agency', { id: A3, field: 'city', value: 'Nowhere Special' });
+  r = await api('GET', '/api/admin/crm/agencies');
+  const unknown = ((r.json && r.json.agencies) || []).find((x) => x.id === A3) || {};
+  check('an unrecognised city gets NO metro rather than a guessed one', unknown.metro, null,
+        'a wrong metro drops a firm out of the right filter and into the wrong one, silently');
+
+  // ── 17. THE TAG FILTER IS EXACT. This is the defect the whole tag design exists to prevent.
+  await api('POST', '/api/admin/crm', { kind: 'tag', label: 'webinar', entities: [{ type: 'agency', id: A3 }] });
+  await api('POST', '/api/admin/crm', { kind: 'tag', label: 'webinar follow-up', entities: [{ type: 'agency', id: DIV }] });
+  r = await api('GET', '/api/admin/crm/agencies?tag=' + encodeURIComponent('webinar'));
+  const tagged = (r.json && r.json.agencies) || [];
+  check('the tag filter matches the WHOLE label, never a substring',
+        [tagged.length, tagged[0] && tagged[0].id], [1, A3],
+        'a substring filter would silently include webinar follow-up and nobody would see it');
+
+  // ── 18. "Never quoted" is the prospecting list.
+  r = await api('GET', '/api/admin/crm/agencies?quoted=no');
+  const cold = (r.json && r.json.agencies) || [];
+  check('the never-quoted filter returns only firms with no quotes',
+        cold.every((x) => !x.quotes), true);
+  check('and it is not empty -- these are the ones worth calling', cold.length > 0, true);
 }
 
 /**
@@ -531,6 +640,34 @@ async function runConcurrencySuite() {
 // self-test whose sabotages are artificial proves the harness runs; one that replays the historical
 // bug proves the harness would have CAUGHT it.
 const SABOTAGES = [
+  {
+    // ⭐⭐ ERIC'S RULE, REPLAYED. Without the exclusion, MHBT is back on a list somebody is about
+    // to phone. The mechanism and the data are separate problems, and this guards the mechanism.
+    name: 'the acquired-name exclusion removed (a dead firm is back on the call list)',
+    find: "  const where = [\"COALESCE(a.relationship,'') <> 'succeeded'\"];",
+    // ⛔ A TAUTOLOGY, NOT AN EMPTY ARRAY. Emptying it leaves the SQL ending in a bare WHERE, which
+    // throws -- and a handler that returns nothing makes 'the acquired firm is absent' TRUE, so the
+    // assertion passed and the sabotage was reported MISSED. The sabotage must break the RULE and
+    // leave the query working.
+    with: "  const where = ['1=1'];",
+    breaks: 'the ACQUIRED name leaves the marketing list -- nobody can call it',
+  },
+  {
+    // The exact defect the whole tag design exists to prevent, moved one layer up: a filter that
+    // matches a SUBSTRING quietly includes the wrong firms and the count still looks plausible.
+    name: 'the tag filter matches a substring instead of the whole label',
+    find: "      rows = rows.filter((x) => x.tags.some((t) => String(t.label).trim().toLowerCase() === want));",
+    with: "      rows = rows.filter((x) => x.tags.some((t) => String(t.label).toLowerCase().includes(want)));",
+    breaks: 'the tag filter matches the WHOLE label, never a substring',
+  },
+  {
+    // A field name taken from the request. An endpoint that sets a priority then sets anything.
+    name: 'the field setter accepts any column name from the browser',
+    find: "  if (!Object.prototype.hasOwnProperty.call(allowed, field)) {",
+    with: '  if (false) {',
+    breaks: 'a field outside the closed list is refused',
+  },
+
   {
     name: 'tags stored as typed (the canonicalisation removed)',
     find: '  return hit && hit.label ? hit.label : raw;',
@@ -683,7 +820,19 @@ async function main() {
       anchorBroken++;
       continue;
     }
-    writeFileSync(join(REPO, SAB_JS), source.replace(s.find, s.with));
+    // 🔴 THE SABOTAGE COPY LIVES IN scripts/, SO ITS RELATIVE IMPORTS MUST BE REWRITTEN.
+    // worker.js imports ./docs/admin-guide.generated.js. From scripts/ that resolves to
+    // scripts/docs/..., which does not exist, so esbuild refuses to build and the dev server
+    // exits at startup -- reported as 'never came up', which reads as a port problem and is not.
+    // ⚠️ It cost two 15-minute self-test runs before the build error was actually read.
+    const sabotaged = source
+      .replace(s.find, s.with)
+      .replace("from './docs/", "from '../docs/");
+    if (sabotaged.indexOf("from '../docs/") === -1 && source.indexOf("from './docs/") !== -1) {
+      console.log('  FAIL: could not rewrite the sabotage copy import path');
+      failures++;
+    }
+    writeFileSync(join(REPO, SAB_JS), sabotaged);
     // ⚠️ wrangler resolves "main" RELATIVE TO THE CONFIG FILE, not to the working directory. This
     // config lives in scripts/, so main is the bare filename -- "scripts/.crm-sabotage.js" here
     // would send wrangler looking for scripts/scripts/... and the boot fails with a message that

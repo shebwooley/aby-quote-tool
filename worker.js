@@ -68,6 +68,9 @@ export default {
     if (path === '/api/admin/crm/person'  && method === 'GET')  return withAuth(request, env, () => handleCrmPerson(request, env));
     if (path === '/api/admin/crm/link'    && method === 'POST') return withAuth(request, env, () => handleCrmLinkPerson(request, env));
     if (path === '/api/admin/crm/suggest' && method === 'GET')  return withAuth(request, env, () => handleCrmSuggestPeople(request, env));
+    if (path === '/api/admin/crm/agencies'     && method === 'GET')  return withAuth(request, env, () => handleCrmAgencies(request, env));
+    if (path === '/api/admin/crm/relationship' && method === 'POST') return withAuth(request, env, () => handleCrmRelationship(request, env));
+    if (path === '/api/admin/crm/agency'       && method === 'POST') return withAuth(request, env, () => handleCrmAgencyField(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
     // Referral partners (F-referrals, Eric 2026-08-19)
     if (path === '/api/admin/referrals' && method === 'GET')  return withAuth(request, env, () => handleAdminReferrals(request, env));
@@ -2301,6 +2304,219 @@ async function handleCrmSuggestPeople(request, env) {
   }
 }
 
+
+/**
+ * The MARKETING row set: every firm ABY could work, whether or not it has ever quoted.
+ *
+ * ⭐⭐ THE ROWS COME FROM THE AGENCY RECORDS AND THE QUOTE STATS ARE ATTACHED. That single change is
+ * what the whole view rests on. Brokers & Agencies builds its rows FROM the quote log, so a firm
+ * that has never quoted cannot appear on it at all -- which is exactly the firm you most want to
+ * see when you are prospecting.
+ *
+ * 🔴 IT IS ALSO 40x CHEAPER, MEASURED AGAINST LIVE D1 ON 2026-08-23, and that was the argument that
+ * settled one page versus two. ONE of the seven quote-log aggregates behind the Performance view
+ * reads 4,026,085 rows in 2,210 ms to produce 639 rows. This reads 107,302 in 56 ms to produce 660.
+ * ⚠️ The difference is not cleverness -- it is asking the smaller table first. The quote-side join is
+ * on lower(trim(name)), which is unindexed, so driving it from 6,154 quotes multiplies by 672
+ * agencies; driving it from one pre-grouped aggregate does not.
+ *
+ * ⛔ SUCCEEDED NAMES ARE EXCLUDED, AND THAT IS ERIC'S RULE, NOT A TIDY-UP. "We only market to MMA,
+ * not MHBT... for working/prospecting/crm purposes we don't really need the MHBT notes." An acquired
+ * name has nobody left to ring. ⚠️ A DIVISION is NOT excluded: HUB Fort Worth is alive and is a real
+ * relationship with its own owner.
+ *
+ * ⚠️ TAGS ARE FETCHED IN ONE QUERY AND MERGED IN JS, not as a correlated subquery per row. Six
+ * hundred subqueries to decorate six hundred rows is how a page that was fast becomes slow six
+ * months later, without anybody changing the page.
+ */
+async function handleCrmAgencies(request, env) {
+  const u = new URL(request.url).searchParams;
+  const rep = (u.get('rep') || '').trim().toLowerCase();
+  const priority = (u.get('priority') || '').trim().toUpperCase();
+  const state = (u.get('state') || '').trim().toUpperCase();
+  const tag = (u.get('tag') || '').trim();
+  const quoted = (u.get('quoted') || '').trim();
+
+  const where = ["COALESCE(a.relationship,'') <> 'succeeded'"];
+  const args = [];
+  if (rep) { where.push("lower(COALESCE(a.assigned_rep,'')) = ?"); args.push(rep); }
+  if (priority) { where.push("COALESCE(a.priority,'') = ?"); args.push(priority); }
+  if (state) { where.push("upper(COALESCE(a.state,'')) = ?"); args.push(state); }
+
+  const sql =
+    // One pass over the quote log, grouped. Everything else joins to THIS.
+    "WITH q AS (SELECT lower(trim(broker_agency)) k, COUNT(*) quotes, MAX(created_at) last_quote " +
+    "           FROM quotes WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1) " +
+    'SELECT a.id, a.name, a.city, a.state, a.priority, a.assigned_rep, a.needs_review, ' +
+    '       a.relationship, a.parent_id, a.relationship_note, pa.name AS parent_name, ' +
+    '       COALESCE(q.quotes, 0) AS quotes, q.last_quote, ' +
+    '       (SELECT COUNT(*) FROM broker_directory d WHERE d.agency_id = a.id) AS agents, ' +
+    "       (SELECT COUNT(*) FROM crm_events e WHERE e.entity_type = 'agency' AND e.entity_id = a.id " +
+    "          AND e.kind = 'note') AS notes, " +
+    "       (SELECT MAX(e.happened_at) FROM crm_events e WHERE e.entity_type = 'agency' " +
+    '          AND e.entity_id = a.id) AS last_contact ' +
+    'FROM agencies a ' +
+    'LEFT JOIN agencies pa ON pa.id = a.parent_id ' +
+    'LEFT JOIN q ON q.k = lower(trim(a.name)) ' +
+    'WHERE ' + where.join(' AND ') + ' ORDER BY a.name LIMIT 2000';
+
+  try {
+    const r = await env.DB.prepare(sql).bind(...args).all();
+    let rows = r.results || [];
+
+    // Every tag on every agency, once.
+    const te = await env.DB.prepare(
+      "SELECT entity_id, label, happened_at FROM crm_events WHERE entity_type = 'agency' " +
+      "AND kind = 'tag' AND trim(COALESCE(label,'')) <> '' ORDER BY happened_at DESC"
+    ).all();
+    const byId = {};
+    for (const e of (te.results || [])) {
+      (byId[e.entity_id] = byId[e.entity_id] || []).push({ label: e.label, at: e.happened_at });
+    }
+    for (const row of rows) {
+      row.tags = byId[row.id] || [];
+      // ⭐ DERIVED ON READ, NEVER STORED. A stored metro would be a second hand-kept field beside the
+      // city, and the two disagree the first time somebody fills in one and not the other.
+      row.metro = metroFor(row.city, row.state);
+    }
+
+    // ⚠️ THE TAG FILTER RUNS HERE, NOT IN SQL, AND ONLY BECAUSE THE TAGS ARE ALREADY IN HAND.
+    // ⛔ It matches on the EXACT label, case-insensitively -- never a substring. A substring filter
+    // is the failure this whole design exists to avoid: it silently includes "sent quoting tool
+    // email v2" and silently excludes nothing, so the count looks plausible and is wrong.
+    if (tag) {
+      const want = tag.toLowerCase();
+      rows = rows.filter((x) => x.tags.some((t) => String(t.label).trim().toLowerCase() === want));
+    }
+    // "Never quoted" is the prospecting list; "has quoted" is the relationship list.
+    if (quoted === 'no') rows = rows.filter((x) => !x.quotes);
+    if (quoted === 'yes') rows = rows.filter((x) => x.quotes > 0);
+
+    return jsonResp({
+      agencies: rows,
+      matched: rows.length,
+      // ⭐ REPORTED SO THE SCREEN CAN SAY WHAT IT IS HIDING. A filtered page that does not say it is
+      // filtered is the same defect as an empty page that says everything is done.
+      excludedAcquired: await countAcquired(env),
+    });
+  } catch (err) {
+    // 🔴 A THROWN QUERY MUST NOT RENDER AS "no agencies". The error reaches the screen.
+    return jsonResp({ agencies: [], error: String((err && err.message) || err) }, 500);
+  }
+}
+
+async function countAcquired(env) {
+  try {
+    const r = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM agencies WHERE COALESCE(relationship,'') = 'succeeded'"
+    ).first();
+    return (r && r.n) || 0;
+  } catch { return null; }
+}
+
+/**
+ * Record what happened to a firm: acquired by somebody, or a branch of them.
+ *
+ * ⭐⭐ THIS IS THE CONTROL THAT MAKES THE MAP FILLABLE. Of 672 agencies only 12 are recorded as
+ * acquired and 9 as branches, and 47 rows have two firm names typed into one box. Only Eric and
+ * Niels know these facts -- no query will ever work them out -- so the job is to make recording one
+ * a click from the row you are already looking at, rather than a research project nobody starts.
+ *
+ * 🔴 THE TWO RELATIONSHIPS BEHAVE IN OPPOSITE WAYS AND MUST NOT BE COLLAPSED:
+ *   succeeded  the name is DEAD. It rolls up for analysis and NEVER appears on a marketing list.
+ *   division   the office is ALIVE. It rolls up AND stays on the marketing list on its own merits.
+ *
+ * ⛔ NO QUOTE IS EVER REWRITTEN. A 2013 quote really was MHBT, and relabelling it MMA would put MMA
+ * in the log four years before it appears there at all. This is a display-time parent.
+ */
+async function handleCrmRelationship(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const id = String(body.id || '').trim();
+  const parentId = String(body.parent_id || '').trim();
+  const rel = String(body.relationship || '').trim().toLowerCase();
+  const note = String(body.note || '').trim().slice(0, 400);
+  if (!id) return jsonResp({ error: 'Which agency?' }, 400);
+
+  const me = await env.DB.prepare('SELECT id, name FROM agencies WHERE id = ?').bind(id).first();
+  if (!me) return jsonResp({ error: 'No such agency.' }, 404);
+
+  // Clearing it is a real action: somebody recorded a relationship and was wrong.
+  if (!rel) {
+    await env.DB.prepare(
+      'UPDATE agencies SET parent_id = NULL, relationship = NULL, relationship_note = ? WHERE id = ?'
+    ).bind(note || null, id).run();
+    return jsonResp({ ok: true, cleared: true });
+  }
+  if (rel !== 'succeeded' && rel !== 'division') {
+    return jsonResp({ error: 'A relationship is either succeeded or division.' }, 400);
+  }
+  if (!parentId) return jsonResp({ error: 'Which firm is the parent?' }, 400);
+  if (parentId === id) return jsonResp({ error: 'A firm cannot be its own parent.' }, 400);
+
+  const parent = await env.DB.prepare('SELECT id, parent_id FROM agencies WHERE id = ?').bind(parentId).first();
+  if (!parent) return jsonResp({ error: 'No such parent agency.' }, 404);
+
+  // 🔴 ONE HOP ONLY, AND THE RULE IS ENFORCED HERE RATHER THAN ASSUMED. The rollup on Brokers &
+  // Agencies joins the parent with a SINGLE join; a grandparent chain would silently truncate, so a
+  // child would roll up to the wrong firm and the totals would be quietly wrong rather than absent.
+  if (parent.parent_id) {
+    return jsonResp({
+      error: 'That firm is itself under another. Point this one at the top of the family instead.',
+    }, 400);
+  }
+  const kids = await env.DB.prepare('SELECT COUNT(*) AS n FROM agencies WHERE parent_id = ?').bind(id).first();
+  if (kids && kids.n) {
+    return jsonResp({
+      error: 'Other firms are already under this one. Move them first, or this would make a chain.',
+    }, 400);
+  }
+
+  await env.DB.prepare(
+    'UPDATE agencies SET parent_id = ?, relationship = ?, relationship_note = ? WHERE id = ?'
+  ).bind(parentId, rel, note || null, id).run();
+  return jsonResp({ ok: true, relationship: rel });
+}
+
+/** Set the priority, the owner, or the location on one firm. */
+async function handleCrmAgencyField(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const id = String(body.id || '').trim();
+  if (!id) return jsonResp({ error: 'Which agency?' }, 400);
+
+  // ⛔ A CLOSED LIST OF COLUMNS, NEVER A NAME FROM THE REQUEST. A field parameterised by whatever the
+  // browser sends is how an endpoint that sets a priority ends up setting a password hash.
+  const allowed = {
+    priority: (v) => {
+      const s = String(v || '').trim().toUpperCase();
+      // A, B, C or nothing. ⚠️ Blank is a real value -- "nobody has judged this yet" is not the same
+      // as C, and forcing a rating would make the column meaningless within a week.
+      return (s === '' || s === 'A' || s === 'B' || s === 'C') ? s || null : undefined;
+    },
+    assigned_rep: (v) => {
+      const s = String(v || '').trim().toLowerCase();
+      return (s === '' || s === 'eric' || s === 'niels' || s === 'open') ? s || null : undefined;
+    },
+    city: (v) => String(v || '').trim().slice(0, 80) || null,
+    state: (v) => {
+      const s = String(v || '').trim().toUpperCase();
+      // ⚠️ TWO LETTERS ONLY. "Texas" looks answered on screen and is invisible to every filter that
+      // compares a code -- the same defect that once made a compliance rule skip a whole state.
+      return (s === '' || /^[A-Z]{2}$/.test(s)) ? s || null : undefined;
+    },
+  };
+
+  const field = String(body.field || '').trim();
+  if (!Object.prototype.hasOwnProperty.call(allowed, field)) {
+    return jsonResp({ error: 'That is not a field this sets.' }, 400);
+  }
+  const value = allowed[field](body.value);
+  if (value === undefined) return jsonResp({ error: 'That value is not one of the allowed ones.' }, 400);
+
+  const r = await env.DB.prepare('UPDATE agencies SET ' + field + ' = ? WHERE id = ?').bind(value, id).run();
+  if (!r || !r.meta || !r.meta.changes) return jsonResp({ error: 'No such agency.' }, 404);
+  return jsonResp({ ok: true, field, value, metro: field === 'city' ? metroFor(value, body.state) : undefined });
+}
+
 /** Set a priority or a note on one person or agency. */
 /**
  * Referral partners, their reps, and what each has actually produced (Eric, 2026-08-19).
@@ -3026,10 +3242,36 @@ ${ADMIN_HEADER_CSS}
  .filters button.on{background:#1a5c3a;color:#fff;border-color:#1a5c3a}
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#1a5c3a;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
+ .views{display:flex;gap:0;align-items:center;margin:0 0 14px}
+ .views button{background:#fff;border:1px solid #c8d2de;padding:8px 20px;cursor:pointer;font-size:14px;font-weight:600;color:#5b6b7f}
+ .views button:first-of-type{border-radius:7px 0 0 7px}
+ .views button:nth-of-type(2){border-radius:0 7px 7px 0;border-left:0}
+ .views button.on{background:#1a5c3a;color:#fff;border-color:#1a5c3a}
+ .vhint{margin-left:14px;color:#8a97a8;font-size:13px}
+ .mfilters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 14px}
+ .bulk{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#eef5f0;border:1px solid #cfe0d5;border-radius:8px;padding:10px 13px;margin:0 0 14px}
+ .bulk input{padding:6px 9px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
+ .bulk button{background:#fff;border:1px solid #c8d2de;border-radius:6px;padding:6px 13px;cursor:pointer;font-size:13px}
+ .bulk button.go{background:#1a5c3a;color:#fff;border-color:#1a5c3a;font-weight:600}
+ .tag{display:inline-block;background:#eef2f7;border-radius:11px;padding:1px 9px;margin:1px 3px 1px 0;font-size:12px;color:#3d5166}
+ .pri{font-weight:700} .pri.A{color:#1a5c3a} .pri.B{color:#8a6d1f} .pri.C{color:#8a97a8}
+ .never{color:#8a97a8;font-style:italic}
+ .rev{background:#fdf1e0;color:#7a5410;border-radius:4px;padding:0 5px;font-size:11px;margin-left:5px}
 </style></head><body>
 ${abyAdminNav('/admin/brokers')}
 <main>
   <div id="warn" style="display:none;background:#fdecec;color:#a12622;border:1px solid #f3c2c2;border-radius:8px;padding:10px 13px;margin:0 0 16px;font-size:13.5px"></div>
+  <!-- THE VIEW TOGGLE (F-383). Eric, 2026-08-23: one page, two views.
+       PERFORMANCE answers "who has done what" and is built FROM the quote log, so a firm that
+       has never quoted cannot appear on it -- correct for an analysis, useless for prospecting.
+       MARKETING answers "who are we working" and is built from the AGENCY records instead, so
+       it shows every firm and hides the ones that no longer exist.
+       The two labels live in CRM_VIEWS in worker.js, so renaming one is a single edit. -->
+  <div class="views">
+    <button id="vPerf" class="on" onclick="setView('performance')">Performance</button>
+    <button id="vMkt" onclick="setView('marketing')">Marketing</button>
+    <span class="vhint" id="viewHint"></span>
+  </div>
   <div class="filters">
     <!-- Eric, 2026-08-22: "a filter where we could choose to see number of quotes/sales since a
          specific date? Like 1/1/26, last 12 months, 1/1/25 for example." The named ranges are his,
@@ -3055,6 +3297,7 @@ ${abyAdminNav('/admin/brokers')}
        renders blank on a database error is indistinguishable from one with no data. -->
   <div id="statsWarn" style="display:none;margin:0 0 14px;padding:10px 14px;border-radius:7px;
        background:#fdf1e0;border:1px solid #f0d9ae;color:#7a5410;font-size:13px"></div>
+  <div id="perfView">
   <div class="card"><h2>Insights</h2>
     <p class="sub">Derived from the tables below, so nothing here can disagree with them.</p>
     <div id="insights"><p class="muted">Loading...</p></div></div>
@@ -3083,6 +3326,48 @@ ${abyAdminNav('/admin/brokers')}
   <div class="card"><h2>Registered brokers</h2>
     <p class="sub">Everyone with an ABY account. Assign each one to whoever owns the relationship.</p>
     <div id="brokers"><p class="muted">Loading...</p></div></div>
+  </div>
+
+  <div id="mktView" style="display:none">
+    <div class="card">
+      <h2 style="cursor:default">Marketing</h2>
+      <p class="sub" id="mktSub">Every firm we could work &mdash; including the ones that have never quoted.</p>
+      <div class="mfilters">
+        <select id="mQuoted" onchange="loadMkt()">
+          <option value="">Everyone</option>
+          <option value="no">Never quoted</option>
+          <option value="yes">Has quoted</option>
+        </select>
+        <select id="mPriority" onchange="loadMkt()">
+          <option value="">Any priority</option>
+          <option value="A">A</option><option value="B">B</option><option value="C">C</option>
+        </select>
+        <select id="mRep" onchange="loadMkt()">
+          <option value="">Any owner</option>
+          <option value="eric">Eric</option>
+          <option value="niels">Niels</option>
+          <option value="open">Open</option>
+        </select>
+        <select id="mTag" onchange="loadMkt()"><option value="">Any tag</option></select>
+        <input id="mFind" placeholder="Find a firm" oninput="paintMkt()"
+               style="padding:5px 8px;border:1px solid #c8d2de;border-radius:5px;font-size:13px">
+        <span class="muted" id="mCount" style="margin-left:auto;font-size:13px"></span>
+      </div>
+      <!-- BULK APPLY. Eric: tick the rows, pick a tag, set a date, apply.
+           The date defaults to today and can be set to any PAST day, because the useful date is
+           when the thing happened, not when it was typed. -->
+      <div class="bulk" id="bulkBar" style="display:none">
+        <strong id="bulkN"></strong>
+        <input id="bulkTag" list="tagList" placeholder="Tag (pick one, or type a new one)">
+        <datalist id="tagList"></datalist>
+        <input id="bulkDate" type="date">
+        <button class="go" onclick="applyBulk()">Apply</button>
+        <button onclick="clearSel()">Clear</button>
+        <span class="muted" id="bulkMsg"></span>
+      </div>
+      <div id="mkt"><p class="muted">Loading...</p></div>
+    </div>
+  </div>
   </main>
 <script>
  var rep='';
@@ -3875,7 +4160,323 @@ ${abyAdminNav('/admin/brokers')}
    if(w){ w.style.display='block'; w.textContent=(d.error||fallback); }
  }
 
+
+ // ── THE MARKETING VIEW (F-383) ───────────────────────────────────────────────────────────────
+ //
+ // ⛔ NO BACKSLASHES ANYWHERE BELOW. Every page in worker.js is one template literal, so a lone
+ // backslash is eaten before the browser sees it and a regex like [0-9] written the short way
+ // arrives as the letter d. Everything here uses string methods or explicit character classes.
+ var mktRows = [];
+ var mktSel = {};
+ var mktTags = [];
+ var view = 'performance';
+
+ // ⭐ THE VIEW IS REMEMBERED. Somebody who works the Marketing list all morning should not land on
+ // the analysis page every time they open this from the nav.
+ function setView(v){
+   view = (v === 'marketing') ? 'marketing' : 'performance';
+   try { localStorage.setItem('abyCrmView', view); } catch(e) {}
+   var mkt = (view === 'marketing');
+   document.getElementById('perfView').style.display = mkt ? 'none' : '';
+   document.getElementById('mktView').style.display = mkt ? '' : 'none';
+   document.getElementById('vPerf').className = mkt ? '' : 'on';
+   document.getElementById('vMkt').className = mkt ? 'on' : '';
+   // The Since filter belongs to the analysis. The Marketing view has its own filters and asks for
+   // no quote history, so leaving it on screen would imply it does something here.
+   var f = document.querySelector('.filters');
+   if (f) f.style.display = mkt ? 'none' : '';
+   document.getElementById('viewHint').textContent = mkt
+     ? 'Who we are working. Firms that no longer exist are hidden.'
+     : 'What the quote log says. Firms that have never quoted do not appear here.';
+   if (mkt && !mktRows.length) loadMkt();
+ }
+
+ function q(id){ return document.getElementById(id); }
+
+ async function loadMkt(){
+   var p = [];
+   // ⛔ THIS VIEW USES ITS OWN OWNER FILTER, NOT THE ONE ON THE HIDDEN PERFORMANCE BAR. Reusing
+   // the shared rep variable meant a filter set on the analysis silently narrowed this list with
+   // screen to explain it -- an effect whose cause was invisible.
+   var qd = q('mQuoted').value, pr = q('mPriority').value, tg = q('mTag').value, mr = q('mRep').value;
+   if (qd) p.push('quoted=' + encodeURIComponent(qd));
+   if (pr) p.push('priority=' + encodeURIComponent(pr));
+   if (tg) p.push('tag=' + encodeURIComponent(tg));
+   if (mr) p.push('rep=' + encodeURIComponent(mr));
+   q('mkt').innerHTML = '<p class="muted">Loading...</p>';
+   var r = await fetch('/api/admin/crm/agencies' + (p.length ? '?' + p.join('&') : ''));
+   var d = await r.json().catch(function(){ return {}; });
+   // 🔴 AN ERROR IS NOT AN EMPTY LIST. Three pages in this admin have rendered a failed query as a
+   // cheerful empty state; the two must never look the same.
+   if (d.error) {
+     q('mkt').innerHTML = '<p style="color:#a12622">Could not load the list: ' + esc(d.error) + '</p>';
+     return;
+   }
+   mktRows = d.agencies || [];
+   q('mktSub').textContent = 'Every firm we could work, including the ones that have never quoted.'
+     + (d.excludedAcquired ? ' ' + d.excludedAcquired + ' acquired names are hidden, because nobody can call them.' : '');
+   await loadTags();
+   paintMkt();
+ }
+
+ async function loadTags(){
+   var r = await fetch('/api/admin/crm/tags');
+   var d = await r.json().catch(function(){ return {}; });
+   mktTags = d.tags || [];
+   // ⭐ THE PICKER IS THE SET IN USE. That is what makes a tag PICKED rather than typed, which is
+   // what stops the filter silently dropping people whose tag was spelled differently.
+   var sel = q('mTag'), keep = sel.value;
+   var opts = ['<option value="">Any tag</option>'];
+   var list = [];
+   for (var i = 0; i < mktTags.length; i++){
+     var lab = mktTags[i].label;
+     opts.push('<option value="' + esc(lab) + '">' + esc(lab) + ' (' + mktTags[i].n + ')</option>');
+     list.push('<option value="' + esc(lab) + '">');
+   }
+   sel.innerHTML = opts.join('');
+   sel.value = keep;
+   q('tagList').innerHTML = list.join('');
+ }
+
+ function repSel(id, cur){
+   var o = ['', 'eric', 'niels', 'open'], lab = { '': '—', eric: 'Eric', niels: 'Niels', open: 'Open' };
+   var h = '<select onchange="setField(this,' + "'" + id + "'" + ',' + "'assigned_rep'" + ')">';
+   for (var i = 0; i < o.length; i++){
+     h += '<option value="' + o[i] + '"' + ((cur || '') === o[i] ? ' selected' : '') + '>' + lab[o[i]] + '</option>';
+   }
+   return h + '</select>';
+ }
+
+ function priSel(id, cur){
+   // ⚠️ BLANK IS A REAL VALUE. "Nobody has judged this yet" is not the same as C, and forcing a
+   // rating would make the column meaningless within a week.
+   var o = ['', 'A', 'B', 'C'];
+   var h = '<select onchange="setField(this,' + "'" + id + "'" + ',' + "'priority'" + ')">';
+   for (var i = 0; i < o.length; i++){
+     h += '<option value="' + o[i] + '"' + ((cur || '') === o[i] ? ' selected' : '') + '>' + (o[i] || '—') + '</option>';
+   }
+   return h + '</select>';
+ }
+
+ function paintMkt(){
+   var find = (q('mFind').value || '').trim().toLowerCase();
+   var rows = mktRows;
+   if (find) rows = rows.filter(function(x){ return String(x.name || '').toLowerCase().indexOf(find) !== -1; });
+
+   q('mCount').textContent = rows.length + ' of ' + mktRows.length + ' firms';
+   // ⛔ TESTED ON THE FILTERED LIST, NOT THE FETCHED ONE. Checking mktRows meant that filtering
+   // 660 firms down to none fell through to the renderer and drew a header with no rows beneath
+   // it. ⚠️ NOTHING FETCHED and NOTHING MATCHED are also different sentences, and a reader needs
+   // to know which one they are looking at before they change a filter.
+   if (!rows.length){
+     q('mkt').innerHTML = mktRows.length
+       ? '<p class="muted">None of the ' + mktRows.length + ' firms match these filters. Widen them, or clear the tag.</p>'
+       : '<p class="muted">No firms came back at all. That is unexpected. Check the filters above, then say so.</p>';
+     return;
+   }
+
+   var h = '<table class="grid"><colgroup><col style="width:34px"><col><col style="width:120px">'
+         + '<col style="width:74px"><col style="width:84px"><col style="width:96px"><col style="width:104px">'
+         + '<col style="width:150px"><col style="width:78px"></colgroup><thead><tr>'
+         + '<th><input type="checkbox" onclick="selAll(this)"></th>'
+         + '<th>Firm</th><th>Where</th><th class="c">Agents</th><th class="c">Quotes</th>'
+         + '<th>Priority</th><th>Owner</th><th>Tags</th><th class="date">Last contact</th>'
+         + '</tr></thead><tbody>';
+
+   for (var i = 0; i < rows.length; i++){
+     var a = rows[i];
+     var where = a.metro ? esc(a.metro) : (a.city ? esc(a.city) : '');
+     if (a.state) where += (where ? ', ' : '') + esc(a.state);
+     if (!where) where = '<span class="muted">—</span>';
+     var tags = '';
+     for (var k = 0; k < a.tags.length && k < 4; k++){
+       tags += '<span class="tag">' + esc(a.tags[k].label) + '</span>';
+     }
+     if (a.tags.length > 4) tags += '<span class="muted">+' + (a.tags.length - 4) + '</span>';
+     h += '<tr>'
+        + '<td><input type="checkbox" ' + (mktSel[a.id] ? 'checked ' : '') + 'onclick="selOne(this,' + "'" + a.id + "'" + ')"></td>'
+        + '<td class="wrapcell"><strong>' + esc(a.name) + '</strong>'
+        + (a.parent_name ? ' <span class="muted">(' + esc(a.relationship === 'division' ? 'branch of ' : 'under ') + esc(a.parent_name) + ')</span>' : '')
+        + (a.needs_review ? '<span class="rev" title="' + esc(a.needs_review) + '">check</span>' : '')
+        + ' <a href="#" onclick="openFirm(' + "'" + a.id + "'" + ');return false" style="font-size:12px">open</a></td>'
+        + '<td>' + where + '</td>'
+        + '<td class="c">' + (a.agents || '<span class="muted">0</span>') + '</td>'
+        + '<td class="c">' + (a.quotes ? a.quotes : '<span class="never">never</span>') + '</td>'
+        + '<td>' + priSel(a.id, a.priority) + '</td>'
+        + '<td>' + repSel(a.id, a.assigned_rep) + '</td>'
+        + '<td class="wrapcell">' + (tags || '<span class="muted">—</span>') + '</td>'
+        + '<td class="date">' + (a.last_contact ? day(a.last_contact) : '<span class="muted">—</span>') + '</td>'
+        + '</tr>';
+   }
+   q('mkt').innerHTML = h + '</tbody></table>';
+   showBulk();
+ }
+
+ function selOne(el, id){ if (el.checked) mktSel[id] = 1; else delete mktSel[id]; showBulk(); }
+ function selAll(el){
+   var boxes = q('mkt').querySelectorAll('tbody input[type=checkbox]');
+   // ⚠️ Only the rows ON SCREEN. Selecting rows a filter is hiding is how forty become four hundred.
+   for (var i = 0; i < boxes.length; i++){ boxes[i].checked = el.checked; boxes[i].onclick(); }
+ }
+ function clearSel(){ mktSel = {}; paintMkt(); }
+ function selCount(){ return Object.keys(mktSel).length; }
+ function showBulk(){
+   var n = selCount();
+   q('bulkBar').style.display = n ? 'flex' : 'none';
+   q('bulkN').textContent = n + (n === 1 ? ' firm selected' : ' firms selected');
+   if (!q('bulkDate').value) q('bulkDate').value = new Date().toISOString().slice(0, 10);
+ }
+
+ async function applyBulk(){
+   var label = (q('bulkTag').value || '').trim();
+   if (!label){ q('bulkMsg').textContent = 'Pick a tag first.'; return; }
+   var ids = Object.keys(mktSel);
+   if (!ids.length) return;
+   var ents = ids.map(function(id){ return { type: 'agency', id: id }; });
+   q('bulkMsg').textContent = 'Applying...';
+   var r = await fetch('/api/admin/crm', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ kind: 'tag', label: label, happened_at: q('bulkDate').value, entities: ents }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok){ q('bulkMsg').textContent = d.error || 'That did not save.'; return; }
+   // ⭐⭐ THE NUMBER ON SCREEN IS THE NUMBER THAT LANDED. Eric's own guard for this build: a tag
+   // applied to 40 firms must read back as 40. Skipped and failed are named, never rounded away.
+   var msg = d.written + ' tagged';
+   if (d.skipped) msg += ', ' + d.skipped + ' already had it that day';
+   if (d.failed) msg += ', ' + d.failed + ' refused';
+   q('bulkMsg').textContent = msg;
+   mktSel = {};
+   await loadMkt();
+ }
+
+ async function setField(el, id, field){
+   var r = await fetch('/api/admin/crm/agency', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ id: id, field: field, value: el.value }),
+   });
+   if (!r.ok){ await failed(r, 'That did not save.'); return; }
+   for (var i = 0; i < mktRows.length; i++){ if (mktRows[i].id === id) mktRows[i][field] = el.value; }
+ }
+
+ // A firm's own panel: its notes, its people, and what happened to it.
+ async function openFirm(id){
+   var a = null;
+   for (var i = 0; i < mktRows.length; i++){ if (mktRows[i].id === id) a = mktRows[i]; }
+   if (!a) return;
+   var r = await fetch('/api/admin/crm?entity_type=agency&entity_id=' + encodeURIComponent(id));
+   var d = await r.json().catch(function(){ return {}; });
+   var ev = d.events || [];
+   var h = '<div class="card" style="border-color:#1a5c3a"><h2 style="cursor:default">' + esc(a.name)
+         + ' <button style="margin-left:auto;font-size:13px" onclick="paintMkt()">Close</button></h2>'
+         + '<div class="mfilters">'
+         + '<input id="fCity" placeholder="City" value="' + esc(a.city || '') + '" style="padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
+         + '<input id="fState" placeholder="TX" maxlength="2" size="3" value="' + esc(a.state || '') + '" style="padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
+         + '<button onclick="saveWhere(' + "'" + id + "'" + ')">Save location</button>'
+         + '<span class="muted">' + (a.metro ? esc(a.metro) : '') + '</span></div>'
+         + '<div class="mfilters"><input id="fNote" placeholder="What happened?" style="flex:1;padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
+         + '<input id="fNoteDate" type="date" value="' + new Date().toISOString().slice(0, 10) + '">'
+         + '<button onclick="addNote(' + "'" + id + "'" + ')">Add note</button></div>'
+         + '<div id="fMsg" class="muted" style="margin-bottom:10px"></div>'
+         // ⭐⭐ RECORD AN ACQUISITION WHERE YOU NOTICE IT. Of 672 firms only 12 are marked as
+         // acquired and 9 as branches, and 47 rows have two names typed into one box. Only Eric
+         // and Niels know these facts, so the job is to make recording one a click from the row
+         // they are already looking at, rather than a research project nobody starts.
+         // 🔴 THE TWO CHOICES BEHAVE IN OPPOSITE WAYS and the wording says so on screen: an
+         // acquired name leaves this list for good, a branch stays on it.
+         + '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:#5b6b7f">'
+         + 'What happened to this firm?</summary><div class="mfilters" style="margin-top:10px">'
+         + '<select id="fRel"><option value="">Nothing / clear it</option>'
+         + '<option value="succeeded"' + (a.relationship === 'succeeded' ? ' selected' : '') + '>Acquired &mdash; the name is dead, drop it from this list</option>'
+         + '<option value="division"' + (a.relationship === 'division' ? ' selected' : '') + '>Branch office &mdash; still callable, keep it here</option>'
+         + '</select>'
+         + '<select id="fParent"><option value="">Which firm?</option>' + parentOpts(a) + '</select>'
+         + '<input id="fRelNote" placeholder="Note (optional)" value="' + esc(a.relationship_note || '') + '" style="flex:1;padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
+         + '<button onclick="saveRel(' + "'" + id + "'" + ')">Save</button>'
+         + '</div></details>';
+   if (!ev.length){
+     h += '<p class="muted">Nothing recorded about this firm yet.</p>';
+   } else {
+     h += '<table class="grid"><colgroup><col style="width:100px"><col style="width:78px"><col></colgroup><tbody>';
+     for (var j = 0; j < ev.length; j++){
+       h += '<tr><td class="date">' + day(ev[j].happened_at) + '</td><td>'
+          + (ev[j].kind === 'tag' ? '<span class="tag">tag</span>' : '<span class="muted">note</span>')
+          + '</td><td class="wrapcell">' + esc(ev[j].label || '') + (ev[j].label && ev[j].body ? ' &mdash; ' : '')
+          + esc(ev[j].body || '') + '</td></tr>';
+     }
+     h += '</tbody></table>';
+   }
+   q('mkt').innerHTML = h + '</div>';
+ }
+
+ async function saveWhere(id){
+   for (var f = 0; f < 2; f++){
+     var field = f ? 'state' : 'city';
+     var el = q(f ? 'fState' : 'fCity');
+     var r = await fetch('/api/admin/crm/agency', {
+       method: 'POST', headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ id: id, field: field, value: el.value }),
+     });
+     var d = await r.json().catch(function(){ return {}; });
+     if (!r.ok){ q('fMsg').textContent = d.error || 'That did not save.'; return; }
+     for (var i = 0; i < mktRows.length; i++){ if (mktRows[i].id === id) mktRows[i][field] = el.value; }
+   }
+   q('fMsg').textContent = 'Saved.';
+   await loadMkt();
+   openFirm(id);
+ }
+
+ // The firms this one could sit under. ⛔ ONLY TOP-LEVEL FIRMS ARE OFFERED, because the rollup on
+ // the analysis page joins the parent with a SINGLE join -- a grandparent chain would truncate
+ // silently and roll a child up to the wrong firm. The server refuses one too; this stops the
+ // person being offered a choice that will be rejected.
+ function parentOpts(a){
+   var h = '';
+   for (var i = 0; i < mktRows.length; i++){
+     var o = mktRows[i];
+     if (o.id === a.id || o.parent_id) continue;
+     h += '<option value="' + o.id + '"' + (a.parent_id === o.id ? ' selected' : '') + '>' + esc(o.name) + '</option>';
+   }
+   return h;
+ }
+
+ async function saveRel(id){
+   var rel = q('fRel').value, par = q('fParent').value;
+   var r = await fetch('/api/admin/crm/relationship', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ id: id, relationship: rel, parent_id: par, note: q('fRelNote').value }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok){ q('fMsg').textContent = d.error || 'That did not save.'; return; }
+   // ⚠️ SAY WHERE IT WENT. Marking a firm as acquired REMOVES IT FROM THIS LIST, and a row
+   // vanishing with no explanation reads as a bug rather than as the thing you just asked for.
+   await loadMkt();
+   if (rel === 'succeeded'){
+     q('mCount').textContent += ' - that firm is now hidden, because nobody can call it';
+   } else {
+     openFirm(id);
+   }
+ }
+ async function addNote(id){
+   var body = (q('fNote').value || '').trim();
+   if (!body){ q('fMsg').textContent = 'Type the note first.'; return; }
+   var r = await fetch('/api/admin/crm', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ kind: 'note', body: body, happened_at: q('fNoteDate').value,
+                            entities: [{ type: 'agency', id: id }] }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok){ q('fMsg').textContent = d.error || 'That did not save.'; return; }
+   q('fNote').value = '';
+   await loadMkt();
+   openFirm(id);
+ }
+
+ // ⭐ THE REMEMBERED VIEW IS RESTORED AFTER load(), NOT BEFORE. setView asks the Marketing
+ // endpoint for its rows the first time it is shown, and doing that before the page had
+ // finished its own first render would race the two.
  load();
+ try { if (localStorage.getItem('abyCrmView') === 'marketing') setView('marketing'); } catch(e) {}
 </script></body></html>`;
 }
 

@@ -31,6 +31,38 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
 
 const RULES = [
+  // ── THE MARKETING VIEW (F-383) ──────────────────────────────────────────────────────────
+  // Everything else this repo guards asks whether the CRM is CORRECT. These ask whether anybody
+  // can get to it. The endpoints were built, tested with 74 assertions and deployed before the
+  // page existed at all -- which is exactly the state F-367 shipped in.
+  {
+    name: "the marketing view has a visible switch on the page",
+    why: "The rows, the tags and the bulk apply are all behind it. Without the toggle the whole"
+       + " view is a route nobody can reach, which is how F-367 shipped.",
+    holds: (f) => /id=['\"]vMkt['\"]/.test(f.worker) && /setView\('marketing'\)/.test(f.worker),
+  },
+  {
+    name: "the switch actually asks the marketing endpoint for rows",
+    why: "A toggle that flips a panel but fetches nothing renders an empty list, and an empty list"
+       + " reads as 'no agencies' rather than as a broken screen.",
+    holds: (f) => /\/api\/admin\/crm\/agencies/.test(f.worker) && /function loadMkt\(/.test(f.worker),
+  },
+  {
+    name: "the acquisition control is on the firm panel",
+    why: "The endpoint that records an acquisition was built, tested and DEPLOYED before any"
+       + " control existed to call it -- the exact state F-367 shipped in, noticed only because"
+       + " somebody went looking. Of 672 firms only 12 are mapped, so an unreachable control here"
+       + " means the map never gets filled in.",
+    holds: (f) => /id="fRel"/.test(f.worker) && /function saveRel\(/.test(f.worker)
+      && /crm\/relationship/.test(f.worker),
+  },
+  {
+    name: "bulk apply is reachable from the rows themselves",
+    why: "Eric asked for tick-the-rows-pick-a-tag-apply. The bar only appears once something is"
+       + " selected, so the checkbox is its only door.",
+    holds: (f) => /id=['\"]bulkBar['\"]/.test(f.worker) && /function selOne\(/.test(f.worker)
+      && /function applyBulk\(/.test(f.worker),
+  },
   {
     name: "the quote page offers a way to share the quote",
     why: "Without it the employer-editable headcount cannot be reached at all (F-367, F-382).",
@@ -80,6 +112,22 @@ const RULES = [
 ];
 
 const SABOTAGES = [
+  {
+    why: "the acquisition control is orphaned from its endpoint",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/function saveRel\(/g, "function unusedRel(") }),
+  },
+  {
+    why: "the marketing switch is removed from the page",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/id="vMkt"/g, 'id="notTheSwitch"') }),
+  },
+  {
+    why: "the marketing view stops fetching its rows",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/function loadMkt\(/g, "function unusedLoad(") }),
+  },
+  {
+    why: "the bulk apply bar is orphaned from the row checkboxes",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/function selOne\(/g, "function unusedSel(") }),
+  },
   {
     why: "the share button is removed from the quote page",
     apply: (f) => ({ ...f, app: f.app.replace(/id="shareBtn"/g, 'id="notShareBtn"') }),
