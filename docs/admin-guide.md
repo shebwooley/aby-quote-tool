@@ -179,7 +179,29 @@ done six, something is working."*
 what somebody *recorded* them as, on a date, which never changes; and what the quote log says about
 them *today*, which is recomputed every time you look.
 
-⛔ **Never "refresh" a recorded status.** Refreshing it destroys the only thing it was for.
+⛔ **Never "refresh" a recorded status.** Refreshing it destroys the only thing it was for — and
+there is deliberately no way to edit one. **Recording again on a later date is a second
+observation**, and that is exactly what makes the history worth having.
+
+**Open a firm and use *Record them as*.** The five words are about VOLUME, not about how much you
+want them — priority already answers that, and the two must not be mixed:
+
+| | |
+|---|---|
+| **never quoted** | no quote, ever |
+| **quoted once** | exactly one |
+| **occasional** | two to five |
+| **regular** | six or more |
+| **former** | they quoted, and nothing in two years |
+
+⭐⭐ **GOING QUIET OUTRANKS VOLUME.** A firm with plenty of quotes but none in two years reads
+**former**, not *regular*. A firm that quoted and stopped is a different story from one that never
+started, and it is usually the one that deserves the call.
+
+**The column shows the MOVEMENT, not the value.** A recording that still matches today sits
+quietly underneath (*"same since Feb 2024"*); one that has moved is called out (*"was quoted once
+· Feb 2024"*). ⚠️ **Never recorded** and **recorded and unchanged** are written differently,
+because they are different facts.
 
 ### Marking an acquisition where you notice it
 
@@ -203,6 +225,23 @@ recording one a click from the row you are already looking at.
 
 ⚠️ **Marking a firm as acquired makes it disappear from the list you are on.** That is the feature
 working, and the count line says so rather than leaving you wondering.
+
+### One person, one row on the agent list
+
+**A broker whose quotes are sometimes typed with an email address and sometimes without used to
+appear twice** — once under the address, once under the name. Jason Sandler was 3 quotes under one
+and 3 under the other. **It was fifteen people, not the three anybody had noticed.**
+
+⭐ **A quote with no address is now matched to the person by name — but only where that name
+belongs to exactly one address.** Jason Sandler now reads 6 quotes in one row.
+
+🔴 **Where a name belongs to TWO addresses, the rows stay apart, and that is the point.**
+*Rebecca Hearne* has two addresses at two different agencies. Folding her together would move one
+agency's quote history onto another, which is the one thing this must never do. **She is exactly
+who the merge below is for:** the tool refuses to guess, and a person decides.
+
+⚠️ **Nothing is rewritten and nothing is stored.** This is worked out fresh every time you look, so
+the next quote that carries the address improves the answer on its own.
 
 ### A person is not an email address
 
