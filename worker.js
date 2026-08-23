@@ -19,6 +19,13 @@ const COOKIE_NAME = 'aby_admin';
 // it can be shared with brokers. Flip to false (and redeploy) to reopen the tool.
 const SITE_LOCKED = false;
 
+// The admin guide, GENERATED from docs/admin-guide.md by scripts/build_guide.mjs.
+// Eric, 2026-08-23, asked for the explanation to live in the app rather than only in the notes.
+// It is imported rather than written here because the markdown is the only copy: two hand-kept
+// versions of the same explanation have diverged every time this project has tried it.
+// The generated file is JSON-escaped, so it contains no backtick and cannot end a page literal.
+import { ADMIN_GUIDE_HTML } from './docs/admin-guide.generated.js';
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -160,6 +167,11 @@ export default {
     if (path === '/admin/referrals') {
       return withAuth(request, env, () => new Response(adminReferralsHTML(), {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
+    }
+    if (path === '/admin/guide') {
+      return withAuth(request, env, () => new Response(adminGuideHTML(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+      }));
     }
     if (path === '/admin/rates') {
       return withAuth(request, env, () => new Response(adminRatesHTML(), {
@@ -5871,9 +5883,55 @@ const ABY_ADMIN_LINKS = [
   { href: '/admin/pipeline',   label: 'Pipeline' },
   { href: '/admin/referrals',  label: 'Referrals' },
   { href: '/admin/rates',      label: 'Rates' },
+  // Last on purpose: it is a reference, not a place work happens. ⛔ It is behind withAuth like
+  // every other admin page -- the guide names how ABY decides who to chase, which is not
+  // something a broker should read about themselves.
+  { href: '/admin/guide',      label: 'Guide' },
 ];
 
 /** The header bar. `here` is the path of the page being rendered, so it marks itself. */
+/**
+ * The admin guide -- what the tool does, in plain English, for Eric and Niels.
+ *
+ * The BODY is generated from docs/admin-guide.md. Only the page shell lives here, so editing the
+ * guide means editing the markdown and re-running scripts/build_guide.mjs.
+ *
+ * Reading width is capped near 46em on purpose: this is the one admin page somebody READS rather
+ * than scans, and a full-width line of prose across a 1400px monitor is close to unreadable.
+ * Tables are allowed to break out of that width, because several of them are genuinely wide.
+ */
+function adminGuideHTML() {
+  return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>Guide &mdash; ABY admin</title><style>' +
+    '*{box-sizing:border-box} body{margin:0;font:16px/1.65 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}' +
+    ADMIN_HEADER_CSS +
+    'main{max-width:56em;margin:26px auto 80px;padding:0 22px}' +
+    '.doc{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:34px 40px}' +
+    '.doc>*{max-width:46em}' +
+    'h1{font-size:27px;line-height:1.25;margin:0 0 6px}' +
+    'h2{font-size:20px;margin:38px 0 10px;padding-top:20px;border-top:1px solid #eef2f6}' +
+    'h2:first-of-type{border-top:0;padding-top:0}' +
+    'h3{font-size:16.5px;margin:26px 0 8px;color:#1a5c3a}' +
+    'p{margin:0 0 13px} li{margin:0 0 7px} ul,ol{margin:0 0 15px;padding-left:22px}' +
+    'hr{border:0;border-top:1px solid #eef2f6;margin:34px 0}' +
+    'code{background:#eef2f7;border-radius:4px;padding:1px 5px;font-size:13.5px;font-family:ui-monospace,Consolas,monospace}' +
+    'blockquote{margin:0 0 20px;padding:15px 20px;background:#f7f9fc;border-left:4px solid #1a5c3a;border-radius:0 8px 8px 0}' +
+    'blockquote>*:last-child{margin-bottom:0}' +
+    'blockquote h2,blockquote h3{border:0;padding-top:0;margin-top:14px}' +
+    '.tw{max-width:none;overflow-x:auto;margin:0 0 20px}' +
+    'table{border-collapse:collapse;font-size:14.5px;width:100%}' +
+    'th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:#5b6b7f;border-bottom:2px solid #dfe5ec;padding:9px 12px 7px}' +
+    'td{padding:9px 12px;border-bottom:1px solid #eef2f6;vertical-align:top}' +
+    'tr:last-child td{border-bottom:0}' +
+    'del{color:#8a97a8}' +
+    '</style></head><body>' +
+    abyAdminNav('/admin/guide') +
+    '<main><div class="doc">' + ADMIN_GUIDE_HTML + '</div></main>' +
+    '<script>function logout(){fetch("/api/admin/logout",{method:"POST"}).then(function(){location.href="/admin"})}</script>' +
+    '</body></html>';
+}
+
 function abyAdminNav(here) {
   const links = ABY_ADMIN_LINKS.map((l) => {
     // The current page wins over the accent style: on /aby, "Run a quote" is where you ARE, not a

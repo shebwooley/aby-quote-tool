@@ -46,6 +46,12 @@ worker.js.map
 # A GLOB, NOT A FILENAME. wrangler.jsonc was listed here alone, and on 2026-08-23 a new
 # wrangler.test.jsonc -- added for the local test harness -- was served publicly with a 200
 # until somebody thought to curl it. The deny list must cover the NEXT one of these too.
+# The admin guide's SOURCE and its generated page body. Added 2026-08-23 with the guide
+# itself, rather than after somebody curled it -- which is how wrangler.test.jsonc was found
+# to be public earlier the same day. A NEW ROOT DIRECTORY IS PUBLISHED BY DEFAULT.
+# The guide names how ABY decides who to chase; it is reachable ONLY through /admin/guide.
+docs
+docs/**
 wrangler*.jsonc
 package.json
 package-lock.json

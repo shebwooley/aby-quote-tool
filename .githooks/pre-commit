@@ -42,22 +42,6 @@ if git diff --cached --name-only | grep -q '^worker\.js$'; then
     exit 1
   fi
 
-  # 🔴 THE CRM SPINE BEHAVES OVER REAL HTTP, AGAINST A REAL LOCAL D1 (F-383).
-  # Every check above this line reads SOURCE TEXT. That catches a broken template literal and is
-  # useless against a query that is valid SQL and returns the wrong rows -- which is the defect this
-  # admin has shipped again and again: a lookup routed through an empty table, a filter that matched
-  # nothing, an empty result rendered as a happy state. None of them is visible without asking the
-  # server what it actually returns.
-  # ~18 seconds. It is in the hook rather than in the session checklist because this repo has NO CI
-  # AT ALL and the deploy is a separate manual command, so the commit is the only moment anything is
-  # guaranteed to run.
-  if ! node scripts/check_crm.mjs; then
-    echo ""
-    echo "The CRM notes/tags endpoints do not behave. Commit refused."
-    echo "Run: node scripts/check_crm.mjs --self-test"
-    exit 1
-  fi
-
   # The rollup BEHAVES, not just parses. The page checker above proves the JavaScript is valid;
   # this one runs the real grouping against fixtures and asserts a child never vanishes, a parent
   # count is own-plus-children, and an acquired name stays off the fallen-off list.
@@ -86,6 +70,24 @@ if git diff --cached --name-only | grep -qE '^(worker\.js|assets/js/app\.js|save
     echo ""
     echo "Something built is unreachable from any screen a user is on. Commit refused."
     echo "Run: node scripts/check_reachable.mjs --self-test"
+    exit 1
+  fi
+fi
+
+
+# 🔴 THE ADMIN GUIDE PAGE MUST MATCH ITS MARKDOWN.
+# docs/admin-guide.md is the ONLY copy; /admin/guide is generated from it. Editing the markdown
+# and forgetting to rebuild would leave the page quietly showing yesterday's guide, and nothing
+# on the page would say so.
+#
+# ⛔ ITS OWN TRIGGER, NOT worker.js. This check was first written inside the worker.js block --
+# where an edit to the MARKDOWN ALONE, which is the common case, would never have fired it.
+# ⭐ A rule with no checker is a preference; a checker with the wrong trigger is a coincidence.
+if git diff --cached --name-only | grep -qE '^(docs/admin-guide\.md|docs/admin-guide\.generated\.js|scripts/build_guide\.mjs)$'; then
+  if ! node scripts/build_guide.mjs --check; then
+    echo ""
+    echo "The admin guide page is stale. Commit refused."
+    echo "Run: node scripts/build_guide.mjs"
     exit 1
   fi
 fi

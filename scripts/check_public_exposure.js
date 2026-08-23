@@ -34,6 +34,8 @@ const FORBIDDEN = [
   // (200) until it was curled by hand. .assetsignore now uses a glob, and this row is what
   // makes that a check rather than a memory.
   ["/wrangler.test.jsonc", "the local test config -- also carries the D1 database id"],
+  ["/docs/admin-guide.md", "the admin guide source -- ABY-internal, names who we chase and why"],
+  ["/docs/admin-guide.generated.js", "the same content, generated for the /admin/guide page"],
   ["/.git/config", "git remote config -- and the entry point to cloning the whole repo"],
   ["/.git/HEAD", "git ref -- with objects reachable this yields full history"],
   ["/.git/index", "git index"],

@@ -123,7 +123,10 @@ function scanTemplateText(name, fnSrc) {
 // refused to pass. Second time that mechanism has paid for itself.
 const PAGES = ["adminHTML", "adminBrokersHTML", "adminRatesHTML", "adminPipelineHTML",
                "adminReferralsHTML", "adminClientsHTML", "brokerPageHTML", "setPasswordPageHTML",
-               "loginHTML"];
+               "loginHTML",
+               // The admin guide. Its BODY is generated from docs/admin-guide.md, so what is checked
+               // here is the page SHELL -- that the wrapper still emits valid HTML around it.
+               "adminGuideHTML"];
 
 // Template-literal constants served verbatim to a browser (not page functions).
 const RAW_LITERALS = ["ABY_INTERNAL_JS"];
@@ -191,6 +194,27 @@ function runAll(text) {
   // defined" and looked like a missing declaration rather than a bad extraction. Same class of bug
   // as the RAG stream checker earlier the same day: an anchor written with \n cannot match a CRLF
   // file, and the symptom points at the wrong thing.
+
+  // A value that comes from an IMPORT rather than a declaration in worker.js.
+  // 🔴 THE SLICER BELOW CANNOT FIND IT, AND ITS FAILURE READS AS A MISSING DECLARATION --
+  // the fourth time this file has recorded that same misleading symptom. The admin guide's body
+  // is generated into docs/admin-guide.generated.js and imported by worker.js.
+  // ⚠️ READ, NOT STUBBED. A stub would let the shell render around empty content and still
+  // pass, which is the opposite of what this checker is for.
+  // ⭐ Parsed out of the file rather than imported, so this stays synchronous -- the generator
+  // emits exactly one JSON string, and JSON.parse fails loudly if that ever stops being true.
+  try {
+    const genPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'admin-guide.generated.js');
+    const genSrc = readFileSync(genPath, 'utf8');
+    const m = /export const ADMIN_GUIDE_HTML = ("[\s\S]*");\s*$/.exec(genSrc);
+    if (!m) throw new Error('the generated file is not the one JSON string this expects');
+    globalThis.ADMIN_GUIDE_HTML = JSON.parse(m[1]);
+    if (!globalThis.ADMIN_GUIDE_HTML) throw new Error('the generated guide is empty');
+  } catch (e) {
+    console.log('  FAIL prelude: could not read the generated admin guide -- ' + e.message);
+    console.log('       Run: node scripts/build_guide.mjs');
+    bad++;
+  }
   const flat = text.replace(/\r\n/g, "\n");
   // ⚠️ ORDER MATTERS: a declaration that reads another must come after it.
   for (const decl of ["const PRODUCT_SHORT = ", "const PRODUCT_NAME_TO_ID = ", "function shortProductName(",
