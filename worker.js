@@ -5961,8 +5961,8 @@ const MIGRATIONS = [
   // LIVE. Refreshing a recorded value destroys the only thing it was for.
   { sql: "CREATE TABLE IF NOT EXISTS crm_events (" +
          "  id TEXT PRIMARY KEY," +
-         "  entity_type TEXT NOT NULL," +      // 'agency' or 'agent' -- same vocabulary as handleAdminAssign
-         "  entity_id TEXT NOT NULL," +        // agencies.id, or the lowercased agent email
+         "  entity_type TEXT NOT NULL," +      // 'agency' or 'person'
+         "  entity_id TEXT NOT NULL," +        // agencies.id, or people.id
          "  kind TEXT NOT NULL," +             // 'note' or 'tag'
          "  label TEXT," +                     // the tag, picked from the existing set. NULL on a plain note
          "  body TEXT," +                      // free text. Optional on a tag
@@ -5978,6 +5978,79 @@ const MIGRATIONS = [
   // every entity -- so it needs its own index or the filter degrades into a scan as tags accumulate.
   { sql: "CREATE INDEX IF NOT EXISTS crm_events_label ON crm_events (kind, label)",
     index: "crm_events_label" },
+
+  // -- A PERSON IS NOT AN EMAIL ADDRESS (F-383) --------------------------------------------------
+  //
+  // ERIC, 2026-08-23: "agents who move from one agency to another. We want the fact that they know
+  // and like us to be recorded without taking their quote history with them - that stays with the
+  // agency. Just a note that they quoted 7 while at the prior agency."
+  //
+  // THAT IS THE MHBT RULE ONE LEVEL DOWN, AND IT RESOLVES THE SAME WAY: THE EVENT STAYS WHERE IT
+  // HAPPENED, THE RELATIONSHIP FOLLOWS THE PERSON. A 2019 quote really was run at that agency and
+  // must keep counting for it; the human being who ran it is somebody ABY still knows.
+  //
+  // WHY THIS CANNOT BE SOLVED BY KEYING ON EMAIL, WHICH IS WHAT THE ADMIN DOES TODAY. An address
+  // BELONGS TO AN AGENCY -- rebecca@ebslp.com, rebecca@legacybenefitservicesllc.com -- so it changes
+  // at exactly the moment we care about. Email as identity breaks on the one event this is for.
+  //
+  // MEASURED AGAINST LIVE D1, 2026-08-23, AND THE THREE CASES ARE THREE DIFFERENT THINGS THAT LOOK
+  // IDENTICAL TO A NAME MATCHER -- which is why nothing here merges automatically:
+  //   Rebecca Hearne   two addresses, TWO DIFFERENT AGENCIES (EBS, Legacy Benefit Services), one
+  //                    quote at each. A REAL MOVE. This is Eric's case, live.
+  //   Abby Crain       abby@benefitstexas.com and abby.crain@patriotgis.com, same agency name.
+  //                    NOT a move -- Patriot ACQUIRED Benefits Texas, so the firm changed under her.
+  //   Jacob Kellum-Hudman  .com and .net at one agency. Neither a move nor an acquisition: an ALIAS.
+  //
+  // SO A MERGE IS ALWAYS A HUMAN ACT. The page may SUGGEST a pair; it must never join them, because
+  // the three cases above need three different answers and only a person knows which is which.
+  //
+  // ONE TABLE AND ONE COLUMN, NOT A REBUILD. broker_directory already IS the address list -- email
+  // as the key, the agency, first_seen, last_seen, quote_count. It stays exactly as it is and gains
+  // a pointer. Nothing is copied, so nothing can disagree.
+  //
+  // EVERY ADDRESS GETS ITS OWN PERSON AT BACKFILL, one to one. That is the honest starting state:
+  // we know of 139 addresses and have been told about no moves at all. Merging is the exception.
+  //
+  // A MERGE IS REVERSIBLE AND REWRITES NO QUOTE. It repoints broker_directory.person_id, and that is
+  // the whole operation. The quote rows are never touched -- the same rule the acquisition parent
+  // follows, and for the same reason: relabelling history makes an agency appear in a year it did
+  // not trade in.
+  { sql: "CREATE TABLE IF NOT EXISTS people (" +
+         "  id TEXT PRIMARY KEY," +
+         "  name TEXT NOT NULL DEFAULT ''," +
+         "  created_at TEXT," +
+         "  updated_at TEXT)",
+    table: "people", column: "name" },
+
+  // Which human this address belongs to. NULL means nobody has said, and the read side treats an
+  // unlinked address as a person of one -- so the column can be backfilled lazily and a row that
+  // misses the backfill still renders, rather than vanishing off the page.
+  { sql: "ALTER TABLE broker_directory ADD COLUMN person_id TEXT",
+    table: "broker_directory", column: "person_id" },
+
+  // "Show me this person's addresses" runs on every expanded row on the CRM page.
+  { sql: "CREATE INDEX IF NOT EXISTS broker_directory_person ON broker_directory (person_id)",
+    index: "broker_directory_person" },
+
+  // THE AGENCY THIS ADDRESS BELONGED TO, RESOLVED ONCE AND STORED.
+  // "7 while at the prior agency" is a question about the address, not about the person, and it must
+  // survive the person moving. Resolved from the agency NAME already on the row -- the same
+  // case-insensitive match the rest of the admin uses -- and stored so the per-agency split does not
+  // have to re-derive it per render.
+  // 115 of the 139 addresses resolved on the first pass; the other 24 all carry a real firm name
+  // that simply had no agencies row, and the backfill creates those records rather than leaving the
+  // agent unattachable. Eric, 2026-08-23: "I would like to have agents under agencies but need to
+  // resolve the ones with no agency."
+  { sql: "ALTER TABLE broker_directory ADD COLUMN agency_id TEXT",
+    table: "broker_directory", column: "agency_id" },
+
+  // An agency record CREATED so an agent had somewhere to hang, rather than one ABY has dealt with.
+  // Eric asked for these to be flagged: "just repeat the name as the agency with a note that it
+  // needs updating." The name was already there, so what is recorded is the provenance.
+  // ⛔ NOT written into agencies.notes -- that column belongs to the owner-seeding script and 577 of
+  // its 578 populated rows are its output. A human value written there is destroyed on the next run.
+  { sql: "ALTER TABLE agencies ADD COLUMN needs_review TEXT",
+    table: "agencies", column: "needs_review" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column
