@@ -1,0 +1,34 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aby-quote-tool-test",
+  "compatibility_date": "2026-05-08",
+  "main": "worker.js",
+
+  // 🔴 NO "assets" BINDING, AND THAT IS THE WHOLE POINT OF THIS FILE.
+  //
+  // The real wrangler.jsonc sets assets.directory to "." so the worker can serve the front end.
+  // Under `wrangler dev` that makes the dev server WATCH THE ENTIRE REPOSITORY -- including the
+  // .wrangler/state directory it writes to itself on every request. So it reloads forever, every
+  // request hangs, and it reads exactly like a broken worker rather than like a config problem.
+  // (TRAPS #206 ①. It has cost time twice.)
+  //
+  // ⭐ The API routes do not need the assets binding: every one of them answers out of D1. So a
+  // config without it runs the REAL worker against a REAL local D1, which is the only way to
+  // verify a handler without deploying it.
+  //
+  // ⚠️ THIS FILE IS FOR `wrangler dev` AND `d1 execute --local` ONLY. Never deploy with it -- the
+  // name is deliberately different so a slip cannot overwrite the live worker.
+
+  "compatibility_flags": ["nodejs_compat"],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "aby-quotes",
+      // The same id as production, which is what lets `--local` keep its own state under the same
+      // name. ⛔ Nothing here ever touches the remote database: every command that uses this config
+      // passes --local, and `wrangler dev` is local by default.
+      "database_id": "72b0d610-c55f-4b56-af26-613ab047b592"
+    }
+  ]
+}

@@ -42,6 +42,22 @@ if git diff --cached --name-only | grep -q '^worker\.js$'; then
     exit 1
   fi
 
+  # 🔴 THE CRM SPINE BEHAVES OVER REAL HTTP, AGAINST A REAL LOCAL D1 (F-383).
+  # Every check above this line reads SOURCE TEXT. That catches a broken template literal and is
+  # useless against a query that is valid SQL and returns the wrong rows -- which is the defect this
+  # admin has shipped again and again: a lookup routed through an empty table, a filter that matched
+  # nothing, an empty result rendered as a happy state. None of them is visible without asking the
+  # server what it actually returns.
+  # ~18 seconds. It is in the hook rather than in the session checklist because this repo has NO CI
+  # AT ALL and the deploy is a separate manual command, so the commit is the only moment anything is
+  # guaranteed to run.
+  if ! node scripts/check_crm.mjs; then
+    echo ""
+    echo "The CRM notes/tags endpoints do not behave. Commit refused."
+    echo "Run: node scripts/check_crm.mjs --self-test"
+    exit 1
+  fi
+
   # The rollup BEHAVES, not just parses. The page checker above proves the JavaScript is valid;
   # this one runs the real grouping against fixtures and asserts a child never vanishes, a parent
   # count is own-plus-children, and an acquired name stays off the fallen-off list.

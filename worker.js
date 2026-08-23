@@ -52,6 +52,12 @@ export default {
     if (path === '/api/admin/stats'   && method === 'GET')  return withAuth(request, env, () => handleAdminStats(request, env));
     if (path === '/api/admin/pipeline' && method === 'GET')  return withAuth(request, env, () => handleAdminPipeline(request, env));
     if (path === '/api/admin/prospects' && method === 'POST') return withAuth(request, env, () => handleAdminAddProspects(request, env));
+    // The CRM (F-383). Every one is behind withAuth: these are ABY's own notes about who they
+    // are courting, and nothing here is broker-facing.
+    if (path === '/api/admin/crm'        && method === 'GET')  return withAuth(request, env, () => handleCrmList(request, env));
+    if (path === '/api/admin/crm'        && method === 'POST') return withAuth(request, env, () => handleCrmAdd(request, env));
+    if (path === '/api/admin/crm/tags'   && method === 'GET')  return withAuth(request, env, () => handleCrmTags(request, env));
+    if (path === '/api/admin/crm/delete' && method === 'POST') return withAuth(request, env, () => handleCrmDelete(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
     // Referral partners (F-referrals, Eric 2026-08-19)
     if (path === '/api/admin/referrals' && method === 'GET')  return withAuth(request, env, () => handleAdminReferrals(request, env));
@@ -1680,6 +1686,231 @@ async function handleAdminAddProspects(request, env) {
     added.push({ email });
   }
   return jsonResp({ ok: true, added, skipped, failed });
+}
+
+
+// ── THE CRM: notes and tags on an agency or an agent (F-383) ───────────────────────────────────
+//
+// ⭐⭐ ONE WRITE PATH SERVES ONE ROW AND FIVE HUNDRED. Eric asked for bulk apply -- check the rows,
+// pick a tag, set a date, apply -- and a separate bulk endpoint would be a second copy of every
+// validation rule in here. So "entities" is always an ARRAY, even when the screen sent one.
+//
+// 🔴 WHO WROTE IT CANNOT COME FROM THE SESSION, AND SAYING SO IS BETTER THAN GUESSING. The ABY
+// admin has ONE shared password (F-6), so a session proves somebody is ABY and nothing more.
+// created_by therefore arrives from the screen and is validated against the SAME rep vocabulary as
+// everything else -- eric / niels -- with the empty string meaning "nobody said". ⛔ It is NOT
+// authentication and must never be read as though it were. An unattributed note is a real state;
+// stamping a guess would put words in one of their mouths.
+const CRM_REPS = ['eric', 'niels'];
+
+// 🔴 THE ANTI-DRIFT RULE, AND IT IS THE WHOLE REASON TAGS ARE NOT FREE TEXT. A tag is PICKED from
+// the set that already exists; only a genuinely new one is typed. So before inserting, an incoming
+// label is matched case-insensitively against the labels already in use and, if one is found, THE
+// EXISTING SPELLING WINS. "Sent Quoting Tool Email" typed today becomes the "sent quoting tool
+// email" that forty agencies already carry, instead of a second tag nobody can see is a duplicate.
+// ⛔ Do NOT solve this by lowercasing everything on the way in -- Eric types the tags and they are
+// read on screen, so the FIRST spelling is the one to keep, not a flattened one.
+async function crmCanonicalLabel(env, label) {
+  const raw = String(label || '').trim().slice(0, 80);
+  if (!raw) return '';
+  const hit = await env.DB.prepare(
+    "SELECT label FROM crm_events WHERE kind = 'tag' AND lower(trim(label)) = ? LIMIT 1"
+  ).bind(raw.toLowerCase()).first();
+  return hit && hit.label ? hit.label : raw;
+}
+
+// Does this entity actually exist? ⛔ An event written against an id nothing points at is invisible
+// for ever: it never appears on a page, it never appears in a tag filter, and no error was raised.
+// The two branches key differently ON PURPOSE -- an agency has an id, an agent has only an email,
+// because broker_directory's primary key IS the address. Same split as handleAdminAssign.
+async function crmEntityExists(env, type, id) {
+  if (type === 'agency') {
+    const r = await env.DB.prepare('SELECT id FROM agencies WHERE id = ?').bind(id).first();
+    return Boolean(r);
+  }
+  if (type === 'agent') {
+    const r = await env.DB.prepare(
+      'SELECT email FROM broker_directory WHERE lower(trim(email)) = ? ' +
+      'UNION ALL SELECT email FROM brokers WHERE lower(trim(email)) = ? LIMIT 1'
+    ).bind(id, id).first();
+    return Boolean(r);
+  }
+  return false;
+}
+
+/**
+ * Read one entity's history, or everyone carrying one tag.
+ *
+ * ⭐ TWO QUESTIONS, ONE ENDPOINT, because they read the same table from opposite ends:
+ *   ?entity_type=agency&entity_id=<id>   what has happened to THIS firm
+ *   ?label=<tag>                         who carries THIS tag ("show me everyone we emailed")
+ * ⚠️ An empty result is a real answer and is returned as one. It is NOT dressed up as a happy
+ * state -- three pages in this admin have asserted "all done" over a population of zero.
+ */
+async function handleCrmList(request, env) {
+  const u = new URL(request.url).searchParams;
+  const label = (u.get('label') || '').trim();
+  const type = (u.get('entity_type') || '').trim().toLowerCase();
+  const id = (u.get('entity_id') || '').trim();
+
+  try {
+    if (label) {
+      const r = await env.DB.prepare(
+        "SELECT e.*, " +
+        "       CASE WHEN e.entity_type = 'agency' THEN a.name ELSE COALESCE(d.name, e.entity_id) END AS entity_name " +
+        'FROM crm_events e ' +
+        "LEFT JOIN agencies a ON e.entity_type = 'agency' AND a.id = e.entity_id " +
+        "LEFT JOIN broker_directory d ON e.entity_type = 'agent' AND lower(trim(d.email)) = e.entity_id " +
+        "WHERE e.kind = 'tag' AND lower(trim(e.label)) = ? " +
+        'ORDER BY e.happened_at DESC LIMIT 2000'
+      ).bind(label.toLowerCase()).all();
+      const rows = r.results || [];
+      return jsonResp({ events: rows, matched: rows.length, by: 'label' });
+    }
+    if (!type || !id) return jsonResp({ error: 'Which entity?' }, 400);
+    const key = type === 'agent' ? id.toLowerCase() : id;
+    const r = await env.DB.prepare(
+      'SELECT * FROM crm_events WHERE entity_type = ? AND entity_id = ? ' +
+      'ORDER BY happened_at DESC, created_at DESC LIMIT 500'
+    ).bind(type, key).all();
+    const rows = r.results || [];
+    return jsonResp({ events: rows, matched: rows.length, by: 'entity' });
+  } catch (err) {
+    // 🔴 A THROWN QUERY MUST NOT RENDER AS "nothing has happened here". Those are opposite facts and
+    // this admin has confused them before (TRAPS #253, #264). The error travels to the screen.
+    return jsonResp({ events: [], error: String((err && err.message) || err) }, 500);
+  }
+}
+
+/** The tag set, with how many carry each. This IS the picker -- it is what makes a tag picked. */
+async function handleCrmTags(request, env) {
+  try {
+    const r = await env.DB.prepare(
+      'SELECT label, COUNT(*) AS n, MAX(happened_at) AS last_used ' +
+      "FROM crm_events WHERE kind = 'tag' AND trim(COALESCE(label,'')) <> '' " +
+      'GROUP BY lower(trim(label)) ORDER BY n DESC, label'
+    ).all();
+    return jsonResp({ tags: r.results || [] });
+  } catch (err) {
+    return jsonResp({ tags: [], error: String((err && err.message) || err) }, 500);
+  }
+}
+
+/**
+ * Write a note or a tag against one entity or many.
+ *
+ * ⚠️ EVERY ENTITY IS REPORTED INDIVIDUALLY -- written, skipped or failed -- and the screen shows the
+ * counts. A bulk apply that says "done" over forty rows when six were refused is the same defect as
+ * a filter that matches nothing: the number on screen has to be the number in the table. Eric's own
+ * guard for this build says it plainly -- a tag applied to 40 agencies must read back as 40.
+ */
+async function handleCrmAdd(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+
+  const kind = String(body.kind || '').trim().toLowerCase();
+  if (kind !== 'note' && kind !== 'tag') return jsonResp({ error: 'kind must be note or tag.' }, 400);
+
+  const bodyText = String(body.body || '').trim().slice(0, 4000);
+  const label = kind === 'tag' ? await crmCanonicalLabel(env, body.label) : '';
+  // A tag with no label is nothing; a note with no text is nothing. Refused rather than stored,
+  // because an empty row is invisible on screen and still counts in every total.
+  if (kind === 'tag' && !label) return jsonResp({ error: 'A tag needs a label.' }, 400);
+  if (kind === 'note' && !bodyText) return jsonResp({ error: 'A note needs some text.' }, 400);
+
+  // ⭐ THE DATE THE THING HAPPENED, WHICH IS ERIC'S ASK AND IS NOT TODAY BY DEFINITION.
+  // Accepted as a plain YYYY-MM-DD and stored as typed. ⛔ NOT parsed through Date(): the string
+  // 2026-03-01 through new Date() is 2026-02-28 in a US timezone, which is how a compliance anchor
+  // once moved a day nationwide. A date the user typed is stored as the date they typed.
+  const today = new Date().toISOString().slice(0, 10);
+  const wanted = String(body.happened_at || '').trim();
+  if (wanted && !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(wanted)) {
+    return jsonResp({ error: 'happened_at must be YYYY-MM-DD.' }, 400);
+  }
+  const happenedAt = wanted || today;
+
+  const by = String(body.by || '').trim().toLowerCase();
+  if (by && CRM_REPS.indexOf(by) === -1) return jsonResp({ error: 'Unknown person.' }, 400);
+
+  const list = Array.isArray(body.entities) ? body.entities.slice(0, 500) : [];
+  if (!list.length) return jsonResp({ error: 'Nothing selected.' }, 400);
+
+  const written = [], skipped = [], failed = [];
+  const now = new Date().toISOString();
+
+  for (const ent of list) {
+    const type = String((ent && ent.type) || '').trim().toLowerCase();
+    let id = String((ent && ent.id) || '').trim();
+    if (type !== 'agency' && type !== 'agent') {
+      failed.push({ id: id || '(blank)', why: 'unknown entity type' });
+      continue;
+    }
+
+    if (type === 'agent') {
+      id = id.toLowerCase();
+      // 🔴 NEVER INVENT AN ID FOR A NAME. An agent is keyed on their email, so an agent WITHOUT one
+      // cannot be tagged -- and that is a refusal, not a fallback. Attaching to a string is how
+      // "Jason Sandler" is already two rows on the agent list. Roughly 38 people on the quote log
+      // are known by name only; they become taggable when somebody records an address, not before.
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(id)) {
+        failed.push({ id: id || '(blank)', why: 'no email, so no stable key -- record one first' });
+        continue;
+      }
+    }
+    if (!id) { failed.push({ id: '(blank)', why: 'no id' }); continue; }
+
+    if (!(await crmEntityExists(env, type, id))) {
+      failed.push({ id, why: 'no such ' + type });
+      continue;
+    }
+
+    // ⭐ THE SAME TAG TWICE ON THE SAME DAY IS A DOUBLE-CLICK, NOT A SECOND EVENT. Skipped rather
+    // than refused, so a bulk apply re-run over an overlapping selection is safe and says what it
+    // did. ⚠️ A tag applied on a DIFFERENT date is a real second event and is kept -- "invited to
+    // webinar" in March and again in September is exactly the history this table is for.
+    if (kind === 'tag') {
+      const dupe = await env.DB.prepare(
+        "SELECT id FROM crm_events WHERE kind = 'tag' AND entity_type = ? AND entity_id = ? " +
+        'AND lower(trim(label)) = ? AND happened_at = ? LIMIT 1'
+      ).bind(type, id, label.toLowerCase(), happenedAt).first();
+      if (dupe) { skipped.push({ id, why: 'already tagged that day' }); continue; }
+    }
+
+    try {
+      await env.DB.prepare(
+        'INSERT INTO crm_events (id, entity_type, entity_id, kind, label, body, happened_at, created_at, created_by) ' +
+        'VALUES (?,?,?,?,?,?,?,?,?)'
+      ).bind(crypto.randomUUID(), type, id, kind, label || null, bodyText || null, happenedAt, now, by).run();
+      written.push({ id });
+    } catch (err) {
+      failed.push({ id, why: String((err && err.message) || err) });
+    }
+  }
+
+  return jsonResp({
+    ok: true, kind, label: label || null, happened_at: happenedAt,
+    written: written.length, skipped: skipped.length, failed: failed.length,
+    detail: { written, skipped, failed },
+  });
+}
+
+/**
+ * Remove one event.
+ *
+ * ⚠️ A HARD DELETE, DELIBERATELY, AND ONLY HERE. A mistyped note is noise a person wants gone, and
+ * this table holds no money, no compliance record and nothing anybody signed. ⛔ The rule that DOES
+ * apply is the one this whole design rests on: a RECORDED status is never REWRITTEN. Deleting a
+ * wrong entry and writing the right one is fine; silently updating one in place is not, because the
+ * frozen value is the measurement.
+ */
+async function handleCrmDelete(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const id = String(body.id || '').trim();
+  if (!id) return jsonResp({ error: 'Which one?' }, 400);
+  const r = await env.DB.prepare('DELETE FROM crm_events WHERE id = ?').bind(id).run();
+  // A DELETE that matches nothing resolves happily, and the screen would keep showing a row the
+  // server never removed. Assert the change, the same way handleAdminAssign does.
+  if (!r || !r.meta || !r.meta.changes) return jsonResp({ error: 'No such entry.' }, 404);
+  return jsonResp({ ok: true });
 }
 
 /** Set a priority or a note on one person or agency. */
@@ -5678,6 +5909,75 @@ const MIGRATIONS = [
   // importer that can double a client is an importer that silently inflates every count.
   { sql: "CREATE UNIQUE INDEX IF NOT EXISTS aby_clients_match_key ON aby_clients (match_key)",
     index: "aby_clients_match_key" },
+
+  // -- THE CRM SPINE (F-383) --------------------------------------------------------------------
+  //
+  // ERIC, 2026-08-23: "I think I like the idea of brokers and agencies being the crm page
+  // essentially. With tags, notes, etc." ... "I want this to be really good and easy to read and
+  // work with for both me and Niels."
+  //
+  // ONE ROW PER THING THAT HAPPENED TO ONE ENTITY. Notes and tags share a table because they share
+  // a shape -- who, what, when, and who wrote it -- and splitting them would mean two histories to
+  // merge every time a page wants to show what has happened to an agency.
+  //
+  // A NOTE AND A TAG ARE STILL DIFFERENT THINGS, AND kind IS WHAT KEEPS THEM APART.
+  //   note   free text about ONE entity, never listed across firms. "Spoke to Jana, they are
+  //          moving to a PEO in the spring."
+  //   tag    a label repeated VERBATIM across many, whose entire purpose is to pull back everyone
+  //          who carries it. "sent quoting tool email", "invited to webinar".
+  //
+  // THE TAG IS PICKED FROM A GROWING LIST, NEVER RETYPED, AND THAT IS NOT A UI PREFERENCE.
+  // If tags are free text the filter is string matching and it will lie: the first person to type
+  // "Sent quote tool email" instead of "sent quoting tool email" drops out of the list and nothing
+  // says so. This project shipped that exact bug on 2026-08-22 -- product ids are "product-cobra",
+  // a search for "cobra" matched nothing, and the report confidently said every agency had quoted
+  // no products. A value spelled differently is invisible.
+  //
+  // WHY NOT agencies.notes, WHICH ALREADY EXISTS. Measured against live D1 on 2026-08-23: 577 of
+  // the 578 populated rows hold a MACHINE-WRITTEN line -- "owner seeded 2026-08-22: 159 of 159
+  // named-rep quotes run by Niels". That column is the seeder's, and a human note written into it
+  // is destroyed the next time the seeder runs. The build plan listed it as ready-made CRM
+  // infrastructure; it is not. THE CRM NEVER WRITES TO agencies.notes OR brokers.notes.
+  //
+  // happened_at IS SEPARATE FROM created_at AND THAT IS WHAT MAKES HISTORY WORK. Eric asked
+  // directly: "Can I put a past date on the pipeline and the referrals page for notes about when
+  // someone was referred to us?" So happened_at is the date the THING happened and is backdatable;
+  // created_at is when the row was written and is not. Two different facts, both kept.
+  // The same defect exists on brokers.referred_at today, which is stamped with the current time and
+  // cannot be set -- the column is there, the UI simply never offers a date.
+  //
+  // entity_id IS A STABLE KEY AND NEVER A NAME.
+  //   agency -> agencies.id
+  //   agent  -> the LOWERCASED, TRIMMED EMAIL, because broker_directory has no id and its primary
+  //             key IS the address. That matches handleAdminAssign, which already keys an agent
+  //             update on email for the same reason.
+  // A tag attached to a name attaches to a string: "Jason Sandler" is already two rows on the agent
+  // list -- three of his quotes carry his email and three carry an empty one -- and inventing an id
+  // for a name is how one person becomes two records permanently.
+  //
+  // NOTHING IS EVER RECOMPUTED IN THIS TABLE. A recorded status is a tag with a date on it, and the
+  // whole point of Eric's question -- "we tagged this originally as one quote ever and now they
+  // have done six, something is working" -- is that the tag stays FROZEN while the analysis stays
+  // LIVE. Refreshing a recorded value destroys the only thing it was for.
+  { sql: "CREATE TABLE IF NOT EXISTS crm_events (" +
+         "  id TEXT PRIMARY KEY," +
+         "  entity_type TEXT NOT NULL," +      // 'agency' or 'agent' -- same vocabulary as handleAdminAssign
+         "  entity_id TEXT NOT NULL," +        // agencies.id, or the lowercased agent email
+         "  kind TEXT NOT NULL," +             // 'note' or 'tag'
+         "  label TEXT," +                     // the tag, picked from the existing set. NULL on a plain note
+         "  body TEXT," +                      // free text. Optional on a tag
+         "  happened_at TEXT NOT NULL," +      // the date the THING happened. Backdatable
+         "  created_at TEXT NOT NULL," +       // when the row was written. Never backdated
+         "  created_by TEXT NOT NULL DEFAULT '')",
+    table: "crm_events", column: "happened_at" },
+
+  // Reading one entity's history is the commonest query on the page, and it is always newest first.
+  { sql: "CREATE INDEX IF NOT EXISTS crm_events_entity ON crm_events (entity_type, entity_id, happened_at DESC)",
+    index: "crm_events_entity" },
+  // "Show me everyone we sent the quoting tool email to" reads the other way -- by label, across
+  // every entity -- so it needs its own index or the filter degrades into a scan as tags accumulate.
+  { sql: "CREATE INDEX IF NOT EXISTS crm_events_label ON crm_events (kind, label)",
+    index: "crm_events_label" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column

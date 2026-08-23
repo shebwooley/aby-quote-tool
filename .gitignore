@@ -11,3 +11,6 @@ scripts/_import_out/
 
 # The page checker's extracted scripts (it now writes to a temp dir; this is belt and braces).
 _s_*.js
+
+# The CRM checker's sabotage copies of the worker (scripts/check_crm.mjs --self-test).
+scripts/.crm-sabotage.*
