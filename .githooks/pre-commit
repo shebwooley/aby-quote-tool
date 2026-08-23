@@ -53,3 +53,23 @@ if git diff --cached --name-only | grep -q '^worker\.js$'; then
     exit 1
   fi
 fi
+
+# 🔴🔴 CAN A USER REACH WHAT WE BUILT? Added 2026-08-23 after F-367 -- the employer corrects the
+# headcount -- was found to be built, deployed, CORRECT and unreachable for a day. It renders only
+# on a shared quote link, and the only way to mint one was a button buried in an expanded row of
+# the quote log. Eric: "I only see download pdf, download html, and print, not share link."
+#
+# ⛔ EVERY OTHER CHECK HERE ASKS "IS IT CORRECT". A pricing assertion cannot fail when the feature
+# has no door -- the maths is fine and nobody can get to it. This one asks about the door.
+#
+# ⚠️ IT WATCHES THREE FILES, NOT JUST worker.js. The share button lives in assets/js/app.js and
+# depends on save-hook.js keeping the quote id; a check gated on worker.js alone would have sat
+# silent through exactly the change that broke it.
+if git diff --cached --name-only | grep -qE '^(worker\.js|assets/js/app\.js|save-hook\.js)$'; then
+  if ! node scripts/check_reachable.mjs; then
+    echo ""
+    echo "Something built is unreachable from any screen a user is on. Commit refused."
+    echo "Run: node scripts/check_reachable.mjs --self-test"
+    exit 1
+  fi
+fi
