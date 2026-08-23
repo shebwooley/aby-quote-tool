@@ -455,6 +455,76 @@ async function runSuite() {
   check('the other side is unchanged too', [(r.json.addresses || []).length, r.json.totalQuotes], [1, 3]);
 }
 
+/**
+ * Extra addresses, for the concurrency phase ONLY.
+ *
+ * 🔴🔴 READ THIS BEFORE TRUSTING THE CONCURRENCY PHASE: IT CANNOT REPRODUCE THE RACE, AND THE
+ * SELF-TEST IS WHAT PROVED THAT. A sabotage removing the conditional claim was reported MISSED at
+ * three addresses AND at 150 -- because `wrangler dev --local` serialises requests, so four
+ * migrations fired at once still run one after another. The race that broke live data on 2026-08-23
+ * (220 people for 139 addresses) is NOT reproducible on this harness at any size.
+ * ⭐⭐ SO THE PHASE ASSERTS THE INVARIANT, NOT THE RACE, and the difference is stated rather than
+ * quietly enjoyed: "one person per address" is worth asserting on its own, but a green line here is
+ * NOT evidence that concurrent writes are safe. ⛔ Do not add a sabotage for the conditional claim
+ * back -- it will be reported MISSED, correctly, and a permanently-missed sabotage trains everyone
+ * to ignore the number.
+ * ✅ WHAT *IS* PROVEN HERE IS THE SELF-HEALING SWEEP, which is the other half of the live fix and is
+ * deterministic: an orphaned person seeded by hand must be gone after a migration.
+ * ⚠️ The 150 addresses are kept because they make the phase a realistic load test even though they
+ * do not create overlap; it is the slow part, so no other sabotage runs it.
+ */
+function seedConcurrency(cfg) {
+  // An orphan, planted deliberately: a person with no address and no history. ⛔ It must NOT carry a
+  // note or a tag -- one that does is legitimately kept, and seeding one here would assert the
+  // opposite of the rule.
+  d1("INSERT INTO people (id, name, created_at, updated_at) VALUES " +
+     "('crmtest-orphan-person','Orphan Left By A Race','2026-08-23','2026-08-23')", cfg);
+  const rows = [];
+  for (let i = 0; i < 150; i++) {
+    rows.push(`('crmtest.bulk${i}@example.com','Bulk Agent ${i}','Test Agency ${i % 40}',0)`);
+  }
+  d1('INSERT OR IGNORE INTO broker_directory (email, name, agency, quote_count) VALUES ' +
+     rows.join(','), cfg);
+}
+
+/**
+ * CONCURRENT migrations.
+ *
+ * 🔴🔴 THIS EXISTS BECAUSE THE LIVE BACKFILL BROKE IN EXACTLY THIS WAY ON 2026-08-23, WHILE THE
+ * SEQUENTIAL TEST ABOVE WAS GREEN. /api/migrate was opened twice inside a minute; both requests read
+ * the same snapshot of unlinked addresses and both created a person for each, leaving 220 people for
+ * 139 addresses.
+ * ⭐⭐ THE LESSON IS ABOUT THE TEST, NOT THE CODE: "running it twice creates nothing a second time"
+ * is a claim about SEQUENTIAL runs, and it was TRUE. Concurrency is a different property and needs
+ * its own assertion -- a suite that only ever runs things one after another cannot see it.
+ * ⚠️ The invariant is asserted rather than the race, because whether two requests actually overlap is
+ * timing. The invariant holds either way; only a broken implementation can break it.
+ */
+async function runConcurrencySuite() {
+  await login();
+  const runs = await Promise.all([
+    api('GET', '/api/migrate'), api('GET', '/api/migrate'),
+    api('GET', '/api/migrate'), api('GET', '/api/migrate'),
+  ]);
+  const reports = runs.map((r) => (r.json && r.json.people) || {});
+  const last = reports[reports.length - 1];
+  // ⭐ THE SWEEP IS THE TESTABLE HALF OF THE LIVE FIX. An orphaned person -- one nothing points at
+  // and that carries no history -- is exactly what the 2026-08-23 race left 81 of, and a migration
+  // must clear it without anybody writing cleanup SQL.
+  check('a person nothing points at is swept by the next migration',
+        reports.reduce((n, p) => n + (p.orphansRemoved || 0), 0) >= 1, true,
+        'the live cleanup was "run it again" rather than hand-written SQL, and this is why');
+  check('four migrations at once still leave one person per address',
+        [last.people, last.addresses], [153, 153],
+        'both requests read the same snapshot of unlinked addresses and both created a person');
+  check('and no migration reports an error', reports.every((p) => (p.errors || []).length === 0), true);
+  // ⭐ THE SAME RACE DUPLICATED AGENCIES ON LIVE DATA, AND FIXING ONLY THE PEOPLE HALF WAS NOT
+  // ENOUGH: 33 agency records were created where 20 firms needed one. Every find-or-create in the
+  // loop has the race, not just the one that was noticed first.
+  const r = await api('GET', '/api/admin/crm/suggest');
+  check('the concurrent runs did not report an error either', r.status, 200);
+}
+
 // ── sabotage: prove each assertion can actually go red ─────────────────────────────────────────
 //
 // ⭐⭐ EACH SABOTAGE REPRODUCES A REAL DEFECT THIS PROJECT HAS SHIPPED, not an invented one. A
@@ -518,6 +588,20 @@ const SABOTAGES = [
     breaks: '⭐ THE QUOTES DID NOT MOVE AGENCY: still 3 at the old firm and 4 at the new',
   },
   {
+    // ⭐⭐ THE LIVE DEFECT OF 2026-08-23, REPLAYED. An UNCONDITIONAL claim lets two overlapping runs
+    // each create a person for the same address; the loser's row is then orphaned. It produced 220
+    // people for 139 addresses, and the sequential idempotency test above stayed green throughout.
+    // ⛔ THIS DELIBERATELY TARGETS THE SWEEP, NOT THE CONDITIONAL CLAIM. A sabotage removing the
+    // claim is reported MISSED at every fixture size, because wrangler dev --local serialises
+    // requests and the race cannot happen here -- see the note on runConcurrencySuite. A sabotage
+    // that can never fire is worse than none: it trains a reader to discount the score.
+    phase: 'concurrency',
+    name: 'the self-healing sweep removed (an orphaned person survives)',
+    find: "    out.orphansRemoved = (swept && swept.meta && swept.meta.changes) || 0;",
+    with: "    out.orphansRemoved = 0;",
+    breaks: 'a person nothing points at is swept by the next migration',
+  },
+  {
     // A backfill guarded by "has this run before" instead of "is it already set". /api/migrate is
     // opened by hand more than once, so this gives one human several person records -- which is the
     // single thing the people table exists to prevent.
@@ -559,6 +643,12 @@ async function main() {
   seedTest(MAIN_CFG);
   proc = await boot(MAIN_CFG);
   try { await runSuite(); } finally { killTree(proc); }
+
+  // Phase 3: concurrency, on a freshly seeded database so nothing is linked yet.
+  seedTest(MAIN_CFG);
+  seedConcurrency(MAIN_CFG);
+  proc = await boot(MAIN_CFG);
+  try { await runConcurrencySuite(); } finally { killTree(proc); }
 
   console.log('');
   console.log(`  ${checks - failures}/${checks} assertions hold.`);
@@ -606,11 +696,19 @@ async function main() {
     // can neither be published nor committed. It holds the LOCAL values only, and is deleted below.
     writeFileSync(join(REPO, SAB_VARS), readFileSync(join(REPO, '.dev.vars'), 'utf8'));
 
+    // ⭐ ONLY THE PHASE THAT CONTAINS THE TARGET ASSERTION IS RUN. Running every phase for every
+    // sabotage made the self-test take twenty minutes, because the concurrency phase seeds 150
+    // addresses and fires four migrations. ⚠️ A self-test nobody will wait for is a self-test nobody
+    // runs -- which is the same failure as not having one.
     seedTest(MAIN_CFG);
+    if (s.phase === 'concurrency') seedConcurrency(MAIN_CFG);
     results = [];
     const before = failures;
     const p = await boot(SAB_CFG);
-    try { await runSuite(); } catch { /* a crash is also red */ } finally { killTree(p); }
+    try {
+      if (s.phase === 'concurrency') await runConcurrencySuite();
+      else await runSuite();
+    } catch { /* a crash is also red */ } finally { killTree(p); }
     failures = before;
 
     // ⛔ THE TARGET MUST GO RED WHILE THE REST STAYS MOSTLY GREEN. A sabotage that reddens the

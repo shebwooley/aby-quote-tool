@@ -1946,6 +1946,41 @@ async function handleCrmDelete(request, env) {
 // directly whether the name could be changed easily if a better one turned up. It can, as long as
 // nothing else in the codebase spells it out. ⛔ Do not inline these strings into a page.
 // The KEYS are the stored vocabulary and must not change; only the labels are cosmetic.
+// ⭐⭐ METRO IS DERIVED FROM THE CITY, NEVER TYPED AND NEVER STORED. Eric asked for "metro area
+// (closest big city)"; that is a function of the city, so storing it would be a second
+// hand-maintained field answering an overlapping question -- and the two disagree the first time
+// somebody fills in one and not the other.
+// ⛔ AN UNKNOWN CITY RETURNS null AND THE SCREEN SHOWS THE CITY. It does not guess the nearest big
+// name: a wrong metro is worse than none, because it silently drops the firm out of the right
+// filter and into the wrong one.
+// ⚠️ Texas only for now, which is the platform's stated coverage. Add a state's metros when that
+// state is actually worked -- an empty map is honest, a half-guessed one is not.
+const TX_METROS = {
+  'dallas': 'DFW', 'fort worth': 'DFW', 'plano': 'DFW', 'irving': 'DFW', 'arlington': 'DFW',
+  'frisco': 'DFW', 'mckinney': 'DFW', 'richardson': 'DFW', 'addison': 'DFW', 'grapevine': 'DFW',
+  'denton': 'DFW', 'southlake': 'DFW', 'lewisville': 'DFW', 'garland': 'DFW', 'allen': 'DFW',
+  'houston': 'Houston', 'sugar land': 'Houston', 'the woodlands': 'Houston', 'katy': 'Houston',
+  'pearland': 'Houston', 'spring': 'Houston', 'pasadena': 'Houston',
+  'austin': 'Austin', 'round rock': 'Austin', 'cedar park': 'Austin', 'georgetown': 'Austin',
+  'san antonio': 'San Antonio', 'new braunfels': 'San Antonio',
+  'el paso': 'El Paso', 'lubbock': 'Lubbock', 'amarillo': 'Amarillo', 'midland': 'Permian Basin',
+  'odessa': 'Permian Basin', 'corpus christi': 'Corpus Christi', 'waco': 'Waco',
+  'tyler': 'Tyler', 'abilene': 'Abilene', 'wichita falls': 'Wichita Falls',
+  'college station': 'Bryan-College Station', 'bryan': 'Bryan-College Station',
+  'beaumont': 'Beaumont-Port Arthur', 'port arthur': 'Beaumont-Port Arthur',
+  'mcallen': 'Rio Grande Valley', 'brownsville': 'Rio Grande Valley', 'harlingen': 'Rio Grande Valley',
+  'laredo': 'Laredo', 'killeen': 'Killeen-Temple', 'temple': 'Killeen-Temple',
+  'san angelo': 'San Angelo', 'texarkana': 'Texarkana', 'longview': 'Longview',
+};
+
+function metroFor(city, state) {
+  const s = String(state || '').trim().toUpperCase();
+  const c = String(city || '').trim().toLowerCase();
+  if (!c) return null;
+  if (s !== 'TX' && s !== '') return null;
+  return TX_METROS[c] || null;
+}
+
 const CRM_VIEWS = {
   performance: 'Performance',  // what the quote log says they have DONE. Hides never-quoted rows.
   marketing: 'Marketing',      // who we are working. Hides agencies that no longer exist.
@@ -1974,9 +2009,63 @@ const CRM_VIEWS = {
  *     live data has one of each.
  */
 async function backfillPeople(env) {
-  const out = { agenciesCreated: 0, agenciesLinked: 0, peopleCreated: 0, alreadyLinked: 0, errors: [] };
+  const out = { agenciesCreated: 0, agenciesLinked: 0, agenciesConsolidated: 0,
+                strayAgenciesRemoved: 0, peopleCreated: 0, alreadyLinked: 0,
+                lostRace: 0, orphansRemoved: 0, people: 0, addresses: 0, errors: [] };
   const now = new Date().toISOString();
   try {
+    // -- SWEEP FIRST, AND THIS IS WHAT MAKES THE WHOLE THING SELF-HEALING.
+    //
+    // 🔴🔴 IT EXISTS BECAUSE IT HAPPENED, ON LIVE DATA, 2026-08-23: /api/migrate was opened twice
+    // within a minute while the first request was still running. Both read the same snapshot of
+    // unlinked addresses, both created a person for each, and the second run's 139 lost every
+    // UPDATE -- leaving 220 people for 139 addresses, 81 of them pointing at nothing.
+    // ⭐⭐ THE BUG WAS NOT "NOT IDEMPOTENT". It was idempotent across SEQUENTIAL runs, and the local
+    // test proved exactly that, because the test ran them one after another. Concurrency is a
+    // different property and needs its own assertion.
+    //
+    // ⛔ ONLY A PERSON NOTHING POINTS AT *AND* WITH NO HISTORY IS REMOVED. A person carrying a note
+    // or a tag is never deleted here even with no addresses -- that is the state a merge leaves
+    // behind for a moment, and deleting it would throw away something somebody wrote.
+    const swept = await env.DB.prepare(
+      'DELETE FROM people WHERE NOT EXISTS (SELECT 1 FROM broker_directory d WHERE d.person_id = people.id) ' +
+      "AND NOT EXISTS (SELECT 1 FROM crm_events e WHERE e.entity_type = 'person' AND e.entity_id = people.id)"
+    ).run();
+    out.orphansRemoved = (swept && swept.meta && swept.meta.changes) || 0;
+
+    // -- THE SAME RACE DUPLICATED AGENCIES, AND FIXING ONLY THE PEOPLE HALF WAS NOT ENOUGH.
+    //
+    // 🔴 MEASURED LIVE 2026-08-23: 33 agency records were created where 20 distinct firms needed one.
+    // Two agents at the same firm each created their own row -- Assured Partners, Lifetime Insurance
+    // Services and Neldal Insurance Agency all appeared twice -- and nine more were left pointing at
+    // nothing. ⭐ The lesson is that a race fixed in one place is not a race fixed: EVERY find-or-create
+    // in the same loop has it.
+    //
+    // ⛔ ONLY MACHINE-CREATED ROWS ARE TOUCHED (needs_review IS NOT NULL). A firm ABY has actually
+    // dealt with is never consolidated or deleted by a backfill, whatever its name looks like.
+    const dupes = await env.DB.prepare(
+      'SELECT lower(trim(name)) AS key, MIN(id) AS keep FROM agencies ' +
+      'WHERE needs_review IS NOT NULL GROUP BY lower(trim(name)) HAVING COUNT(*) > 1'
+    ).all();
+    for (const d of (dupes.results || [])) {
+      // Point every address at the survivor, then the losers hold nothing and the sweep below takes
+      // them. ⚠️ Addresses are repointed BEFORE anything is deleted, never after.
+      await env.DB.prepare(
+        'UPDATE broker_directory SET agency_id = ? WHERE agency_id IN ' +
+        '(SELECT id FROM agencies WHERE needs_review IS NOT NULL AND lower(trim(name)) = ? AND id <> ?)'
+      ).bind(d.keep, d.key, d.keep).run();
+      out.agenciesConsolidated++;
+    }
+
+    // A machine-created agency that nothing points at, no quote names, and nobody has written a note
+    // about. ⛔ All three conditions, because any one of them alone would delete something real.
+    const sweptAgencies = await env.DB.prepare(
+      'DELETE FROM agencies WHERE needs_review IS NOT NULL ' +
+      'AND NOT EXISTS (SELECT 1 FROM broker_directory d WHERE d.agency_id = agencies.id) ' +
+      'AND NOT EXISTS (SELECT 1 FROM quotes q WHERE lower(trim(q.broker_agency)) = lower(trim(agencies.name))) ' +
+      "AND NOT EXISTS (SELECT 1 FROM crm_events e WHERE e.entity_type = 'agency' AND e.entity_id = agencies.id)"
+    ).run();
+    out.strayAgenciesRemoved = (sweptAgencies && sweptAgencies.meta && sweptAgencies.meta.changes) || 0;
     const { results } = await env.DB.prepare(
       'SELECT email, name, agency, person_id, agency_id FROM broker_directory'
     ).all();
@@ -1998,8 +2087,23 @@ async function backfillPeople(env) {
               'INSERT INTO agencies (id, name, share_quotes, created_at, needs_review) VALUES (?,?,?,?,?)'
             ).bind(newId, agencyName, 0, now,
                    'created 2026-08-23 to hang an agent on -- no quote has ever named this firm').run();
-            a = { id: newId };
-            out.agenciesCreated++;
+            // 🔴 RE-READ AND TAKE THE CANONICAL ROW. A concurrent run may have inserted the same firm
+            // between the SELECT above and this INSERT, and both would then be real rows. MIN(id) is
+            // an arbitrary but STABLE choice, so every racing run picks the same winner -- which is
+            // the property that matters. The loser's row is dropped here rather than left for the
+            // sweep, so a single run never leaves a stray behind.
+            const canon = await env.DB.prepare(
+              'SELECT MIN(id) AS id FROM agencies WHERE lower(trim(name)) = ?'
+            ).bind(agencyName.toLowerCase()).first();
+            const keep = (canon && canon.id) || newId;
+            if (keep !== newId) {
+              await env.DB.prepare(
+                'DELETE FROM agencies WHERE id = ? AND needs_review IS NOT NULL'
+              ).bind(newId).run();
+            } else {
+              out.agenciesCreated++;
+            }
+            a = { id: keep };
           }
           await env.DB.prepare('UPDATE broker_directory SET agency_id = ? WHERE lower(trim(email)) = ?')
             .bind(a.id, email).run();
@@ -2012,10 +2116,29 @@ async function backfillPeople(env) {
       const personId = crypto.randomUUID();
       await env.DB.prepare('INSERT INTO people (id, name, created_at, updated_at) VALUES (?,?,?,?)')
         .bind(personId, String(row.name || '').trim(), now, now).run();
-      await env.DB.prepare('UPDATE broker_directory SET person_id = ? WHERE lower(trim(email)) = ?')
-        .bind(personId, email).run();
+      // 🔴 THE CLAIM IS CONDITIONAL, AND THE ROW COUNT IS THE ANSWER. "AND person_id IS NULL" means
+      // a run that overlaps another cannot take an address a concurrent run has already linked --
+      // and changes === 0 is how it finds out it lost.
+      const claim = await env.DB.prepare(
+        'UPDATE broker_directory SET person_id = ? WHERE lower(trim(email)) = ? AND person_id IS NULL'
+      ).bind(personId, email).run();
+      if (!claim || !claim.meta || !claim.meta.changes) {
+        // ⭐ LOST THE RACE, SO PUT BACK WHAT WE MADE. Leaving it is what produced 81 stray people.
+        // ⚠️ Deleted rather than reused: the winner's row is already correct, and two people rows for
+        // one address is the defect this whole table exists to prevent.
+        await env.DB.prepare('DELETE FROM people WHERE id = ?').bind(personId).run();
+        out.lostRace++;
+        continue;
+      }
       out.peopleCreated++;
     }
+    // ⭐ REPORT THE TWO NUMBERS THAT MUST AGREE. A backfill that says "created 139" tells you what it
+    // did; these say whether the result is RIGHT. They differ only when a person carries history but
+    // no address, which is legitimate and rare.
+    const pc = await env.DB.prepare('SELECT COUNT(*) AS n FROM people').first();
+    const ac = await env.DB.prepare('SELECT COUNT(*) AS n FROM broker_directory').first();
+    out.people = (pc && pc.n) || 0;
+    out.addresses = (ac && ac.n) || 0;
   } catch (e) {
     // ⚠️ REPORTED, NEVER THROWN. This rides along with the schema migration and a failure here must
     // not make /api/migrate look as though the schema did not apply.
@@ -6304,6 +6427,34 @@ const MIGRATIONS = [
   // its 578 populated rows are its output. A human value written there is destroyed on the next run.
   { sql: "ALTER TABLE agencies ADD COLUMN needs_review TEXT",
     table: "agencies", column: "needs_review" },
+
+  // -- WHERE THE FIRM IS (Eric, 2026-08-23) -----------------------------------------------------
+  //
+  // "Should we add city and state to the records? or at least metro area (closest big city) and
+  // state?"
+  //
+  // 🔴 THERE IS NOTHING TO PREFILL FROM, AND THAT IS WORTH KNOWING BEFORE ANYBODY PLANS AROUND IT.
+  // Measured 2026-08-23: only 5 of 6,154 quotes carry a broker phone, and 4 of the 139 known agents
+  // do -- so an area-code inference would reach almost nobody. These get typed, the same
+  // tidy-as-you-go way the acquisition map does.
+  //
+  // ⛔ quotes.state IS NOT THIS. It is the PRICING state, it is on every row, and it defaults to TX.
+  // Reading it as the broker's location would put every agency in Texas with total confidence.
+  //
+  // ⭐⭐ CITY AND STATE ARE STORED; METRO IS DERIVED, AND THAT IS DELIBERATE. Eric asked for "metro
+  // area (closest big city)" -- which is a FUNCTION OF THE CITY, not an independent fact. A typed
+  // metro beside a typed city is two hand-maintained fields that answer overlapping questions, and
+  // they disagree the first time somebody fills in one and not the other.
+  //
+  // ⚠️ IT BELONGS TO THE OFFICE, NOT THE BRAND. HUB Fort Worth and HUB are separate rows already
+  // (relationship = division), so each carries its own location and the parent needs none. An
+  // acquired name (relationship = succeeded) does not need one either -- nobody can visit it.
+  { sql: "ALTER TABLE agencies ADD COLUMN city TEXT",  table: "agencies", column: "city" },
+  { sql: "ALTER TABLE agencies ADD COLUMN state TEXT", table: "agencies", column: "state" },
+  // Filtering the CRM by area is the whole point of collecting it, so it is indexed rather than
+  // scanned once the list is a few hundred rows.
+  { sql: "CREATE INDEX IF NOT EXISTS agencies_location ON agencies (state, city)",
+    index: "agencies_location" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column
