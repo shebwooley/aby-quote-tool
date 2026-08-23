@@ -58,6 +58,9 @@ export default {
     if (path === '/api/admin/crm'        && method === 'POST') return withAuth(request, env, () => handleCrmAdd(request, env));
     if (path === '/api/admin/crm/tags'   && method === 'GET')  return withAuth(request, env, () => handleCrmTags(request, env));
     if (path === '/api/admin/crm/delete' && method === 'POST') return withAuth(request, env, () => handleCrmDelete(request, env));
+    if (path === '/api/admin/crm/person'  && method === 'GET')  return withAuth(request, env, () => handleCrmPerson(request, env));
+    if (path === '/api/admin/crm/link'    && method === 'POST') return withAuth(request, env, () => handleCrmLinkPerson(request, env));
+    if (path === '/api/admin/crm/suggest' && method === 'GET')  return withAuth(request, env, () => handleCrmSuggestPeople(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
     // Referral partners (F-referrals, Eric 2026-08-19)
     if (path === '/api/admin/referrals' && method === 'GET')  return withAuth(request, env, () => handleAdminReferrals(request, env));
@@ -1721,21 +1724,44 @@ async function crmCanonicalLabel(env, label) {
 
 // Does this entity actually exist? ⛔ An event written against an id nothing points at is invisible
 // for ever: it never appears on a page, it never appears in a tag filter, and no error was raised.
-// The two branches key differently ON PURPOSE -- an agency has an id, an agent has only an email,
-// because broker_directory's primary key IS the address. Same split as handleAdminAssign.
 async function crmEntityExists(env, type, id) {
-  if (type === 'agency') {
-    const r = await env.DB.prepare('SELECT id FROM agencies WHERE id = ?').bind(id).first();
-    return Boolean(r);
-  }
-  if (type === 'agent') {
+  const table = type === 'agency' ? 'agencies' : type === 'person' ? 'people' : null;
+  if (!table) return false;
+  const r = await env.DB.prepare('SELECT id FROM ' + table + ' WHERE id = ?').bind(id).first();
+  return Boolean(r);
+}
+
+// 🔴🔴 A HUMAN IS A people.id, NOT AN EMAIL ADDRESS, AND THAT IS THE WHOLE POINT OF THE people TABLE.
+// An address BELONGS TO AN AGENCY, so it changes when somebody moves firm -- exactly the moment the
+// relationship most needs to survive. Eric, 2026-08-23: "the fact that they know and like us
+// recorded without taking their quote history with them."
+//
+// ⭐ AN EMAIL IS STILL ACCEPTED AND IS RESOLVED, never used as the key. Most screens hold an address,
+// and making every caller look up the person first would just move this lookup somewhere it gets
+// written twice. ⛔ Resolution goes THROUGH broker_directory -- an address nobody has recorded does
+// not silently mint a person.
+//
+// Returns { id } or { why } -- the REASON matters, because two different guards refuse a bad value
+// and a caller counting failures cannot tell them apart.
+async function crmResolvePerson(env, raw) {
+  const v = String(raw || '').trim();
+  if (!v) return { why: 'no id' };
+  if (v.indexOf('@') !== -1) {
     const r = await env.DB.prepare(
-      'SELECT email FROM broker_directory WHERE lower(trim(email)) = ? ' +
-      'UNION ALL SELECT email FROM brokers WHERE lower(trim(email)) = ? LIMIT 1'
-    ).bind(id, id).first();
-    return Boolean(r);
+      'SELECT person_id FROM broker_directory WHERE lower(trim(email)) = ?'
+    ).bind(v.toLowerCase()).first();
+    if (!r) return { why: 'no address on file for ' + v.toLowerCase() };
+    if (!r.person_id) return { why: 'that address has no person yet -- run /api/migrate' };
+    return { id: r.person_id };
   }
-  return false;
+  // 🔴 NEVER INVENT AN ID FOR A NAME. A value that is neither an address nor an id is a NAME, and a
+  // tag attached to a name attaches to a string -- which is how "Jason Sandler" is two rows on the
+  // agent list today. Roughly 38 people on the quote log are known by name only; they become
+  // taggable when somebody records an address, not before.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) {
+    return { why: 'no email and no person id, so no stable key -- record an address first' };
+  }
+  return { id: v };
 }
 
 /**
@@ -1757,10 +1783,10 @@ async function handleCrmList(request, env) {
     if (label) {
       const r = await env.DB.prepare(
         "SELECT e.*, " +
-        "       CASE WHEN e.entity_type = 'agency' THEN a.name ELSE COALESCE(d.name, e.entity_id) END AS entity_name " +
+        "       CASE WHEN e.entity_type = 'agency' THEN a.name ELSE COALESCE(NULLIF(trim(pp.name),''), e.entity_id) END AS entity_name " +
         'FROM crm_events e ' +
         "LEFT JOIN agencies a ON e.entity_type = 'agency' AND a.id = e.entity_id " +
-        "LEFT JOIN broker_directory d ON e.entity_type = 'agent' AND lower(trim(d.email)) = e.entity_id " +
+        "LEFT JOIN people pp ON e.entity_type = 'person' AND pp.id = e.entity_id " +
         "WHERE e.kind = 'tag' AND lower(trim(e.label)) = ? " +
         'ORDER BY e.happened_at DESC LIMIT 2000'
       ).bind(label.toLowerCase()).all();
@@ -1768,7 +1794,13 @@ async function handleCrmList(request, env) {
       return jsonResp({ events: rows, matched: rows.length, by: 'label' });
     }
     if (!type || !id) return jsonResp({ error: 'Which entity?' }, 400);
-    const key = type === 'agent' ? id.toLowerCase() : id;
+    // ⭐ A caller may name a person by address; it is resolved, never used as the key.
+    let key = id;
+    if (type === 'person') {
+      const resolved = await crmResolvePerson(env, id);
+      if (!resolved.id) return jsonResp({ error: resolved.why }, 400);
+      key = resolved.id;
+    }
     const r = await env.DB.prepare(
       'SELECT * FROM crm_events WHERE entity_type = ? AND entity_id = ? ' +
       'ORDER BY happened_at DESC, created_at DESC LIMIT 500'
@@ -1840,21 +1872,15 @@ async function handleCrmAdd(request, env) {
   for (const ent of list) {
     const type = String((ent && ent.type) || '').trim().toLowerCase();
     let id = String((ent && ent.id) || '').trim();
-    if (type !== 'agency' && type !== 'agent') {
+    if (type !== 'agency' && type !== 'person') {
       failed.push({ id: id || '(blank)', why: 'unknown entity type' });
       continue;
     }
 
-    if (type === 'agent') {
-      id = id.toLowerCase();
-      // 🔴 NEVER INVENT AN ID FOR A NAME. An agent is keyed on their email, so an agent WITHOUT one
-      // cannot be tagged -- and that is a refusal, not a fallback. Attaching to a string is how
-      // "Jason Sandler" is already two rows on the agent list. Roughly 38 people on the quote log
-      // are known by name only; they become taggable when somebody records an address, not before.
-      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(id)) {
-        failed.push({ id: id || '(blank)', why: 'no email, so no stable key -- record one first' });
-        continue;
-      }
+    if (type === 'person') {
+      const resolved = await crmResolvePerson(env, id);
+      if (!resolved.id) { failed.push({ id: id || '(blank)', why: resolved.why }); continue; }
+      id = resolved.id;
     }
     if (!id) { failed.push({ id: '(blank)', why: 'no id' }); continue; }
 
@@ -1911,6 +1937,233 @@ async function handleCrmDelete(request, env) {
   // server never removed. Assert the change, the same way handleAdminAssign does.
   if (!r || !r.meta || !r.meta.changes) return jsonResp({ error: 'No such entry.' }, 404);
   return jsonResp({ ok: true });
+}
+
+
+// ── PEOPLE: the human behind the address, and moving between agencies (F-383) ──────────────────
+//
+// ⭐⭐ THE VIEW NAMES LIVE HERE, IN ONE PLACE, SO RENAMING ONE IS A SINGLE EDIT. Eric asked
+// directly whether the name could be changed easily if a better one turned up. It can, as long as
+// nothing else in the codebase spells it out. ⛔ Do not inline these strings into a page.
+// The KEYS are the stored vocabulary and must not change; only the labels are cosmetic.
+const CRM_VIEWS = {
+  performance: 'Performance',  // what the quote log says they have DONE. Hides never-quoted rows.
+  marketing: 'Marketing',      // who we are working. Hides agencies that no longer exist.
+};
+
+/**
+ * Backfill, run from /api/migrate alongside the schema.
+ *
+ * ⭐ IDEMPOTENT BY CONSTRUCTION, and that is not a nicety: /api/migrate is opened by hand more than
+ * once, and a backfill that ran twice would give one human two person records -- the exact defect it
+ * exists to prevent. Every step is guarded by "is it already set", never by "has this run before".
+ *
+ * ⛔ IT NEVER OVERWRITES A MERGE. Once somebody has said two addresses are one person, this must not
+ * undo it, so a row with a person_id is skipped entirely.
+ *
+ * Three steps, in this order because each depends on the last:
+ *   ① create the agency records that only an AGENT knows about. 24 of the 139 addresses name a firm
+ *     with no agencies row -- all real names, already typed. Eric, 2026-08-23: "I would like to have
+ *     agents under agencies but need to resolve the ones with no agency." They are flagged
+ *     needs_review so they read as CREATED-TO-HANG-AN-AGENT rather than as a firm ABY has dealt with.
+ *   ② resolve agency_id for every address, so "7 while at the prior agency" is a fact about the
+ *     ADDRESS and survives the person moving.
+ *   ③ give every unlinked address its own person. ⭐ ONE TO ONE IS THE HONEST STARTING STATE: we know
+ *     of 139 addresses and have been told about no moves at all. Merging is the exception, and it is
+ *     always a human act -- a name matcher cannot tell a MOVE from an ACQUISITION from an ALIAS, and
+ *     live data has one of each.
+ */
+async function backfillPeople(env) {
+  const out = { agenciesCreated: 0, agenciesLinked: 0, peopleCreated: 0, alreadyLinked: 0, errors: [] };
+  const now = new Date().toISOString();
+  try {
+    const { results } = await env.DB.prepare(
+      'SELECT email, name, agency, person_id, agency_id FROM broker_directory'
+    ).all();
+    const rows = results || [];
+
+    for (const row of rows) {
+      const email = String(row.email || '').trim().toLowerCase();
+      if (!email) continue;
+
+      // ① + ② the agency this address belonged to
+      if (!row.agency_id) {
+        const agencyName = String(row.agency || '').trim();
+        if (agencyName) {
+          let a = await env.DB.prepare('SELECT id FROM agencies WHERE lower(trim(name)) = ?')
+            .bind(agencyName.toLowerCase()).first();
+          if (!a) {
+            const newId = crypto.randomUUID();
+            await env.DB.prepare(
+              'INSERT INTO agencies (id, name, share_quotes, created_at, needs_review) VALUES (?,?,?,?,?)'
+            ).bind(newId, agencyName, 0, now,
+                   'created 2026-08-23 to hang an agent on -- no quote has ever named this firm').run();
+            a = { id: newId };
+            out.agenciesCreated++;
+          }
+          await env.DB.prepare('UPDATE broker_directory SET agency_id = ? WHERE lower(trim(email)) = ?')
+            .bind(a.id, email).run();
+          out.agenciesLinked++;
+        }
+      }
+
+      // ③ the human
+      if (row.person_id) { out.alreadyLinked++; continue; }
+      const personId = crypto.randomUUID();
+      await env.DB.prepare('INSERT INTO people (id, name, created_at, updated_at) VALUES (?,?,?,?)')
+        .bind(personId, String(row.name || '').trim(), now, now).run();
+      await env.DB.prepare('UPDATE broker_directory SET person_id = ? WHERE lower(trim(email)) = ?')
+        .bind(personId, email).run();
+      out.peopleCreated++;
+    }
+  } catch (e) {
+    // ⚠️ REPORTED, NEVER THROWN. This rides along with the schema migration and a failure here must
+    // not make /api/migrate look as though the schema did not apply.
+    out.errors.push(String((e && e.message) || e));
+  }
+  return out;
+}
+
+/**
+ * One person: their addresses, and their quote history SPLIT BY THE AGENCY THEY WERE AT.
+ *
+ * ⭐⭐ THE SPLIT IS THE WHOLE POINT AND IT IS ERIC'S SENTENCE: "Just a note that they quoted 7 while
+ * at the prior agency." A single total would be the wrong answer twice over -- it would credit the
+ * new agency with work done at the old one, and it would hide the thing that makes the person worth
+ * calling, which is that they have been quoting us for years across two firms.
+ *
+ * ⚠️ COUNTED FROM the quotes table BY EMAIL, which is the only link between a person and their work that
+ * exists on every row ever saved. The quote rows are never touched by a merge, so this figure cannot
+ * be changed by anything the CRM does -- which is the property Eric asked for.
+ */
+async function handleCrmPerson(request, env) {
+  const u = new URL(request.url).searchParams;
+  // A caller may hold either. An ADDRESS is resolved to the person; it is never the key.
+  const resolved = await crmResolvePerson(env, u.get('id') || u.get('email') || '');
+  if (!resolved.id) return jsonResp({ error: resolved.why }, 400);
+  const id = resolved.id;
+  try {
+    const person = await env.DB.prepare('SELECT * FROM people WHERE id = ?').bind(id).first();
+    if (!person) return jsonResp({ error: 'No such person.' }, 404);
+
+    const { results } = await env.DB.prepare(
+      'SELECT d.email, d.name, d.phone, d.agency AS agency_typed, d.agency_id, ' +
+      '       d.first_seen, d.last_seen, d.assigned_rep, ' +
+      '       a.name AS agency_name, ' +
+      "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(d.email)) " +
+      "          AND trim(q.broker_email) <> '') AS quotes, " +
+      '       (SELECT MAX(q.created_at) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(d.email))) AS last_quote ' +
+      'FROM broker_directory d LEFT JOIN agencies a ON a.id = d.agency_id ' +
+      'WHERE d.person_id = ? ORDER BY quotes DESC, d.email'
+    ).bind(id).all();
+
+    const addresses = results || [];
+    const total = addresses.reduce((n, r) => n + (r.quotes || 0), 0);
+    return jsonResp({
+      person, addresses, totalQuotes: total,
+      // ⭐ MORE THAN ONE ADDRESS WITH QUOTES AT DIFFERENT FIRMS IS THE "they moved" SIGNAL, and it is
+      // computed rather than stored -- a stored flag would go stale the moment an address was added.
+      movedBetweenAgencies: new Set(addresses.filter((r) => r.quotes > 0).map((r) => r.agency_id || r.agency_typed)).size > 1,
+    });
+  } catch (err) {
+    return jsonResp({ error: String((err && err.message) || err) }, 500);
+  }
+}
+
+/**
+ * "This address belongs to that person" -- the whole merge, and the whole unmerge.
+ *
+ * ⭐⭐ IT MOVES ONE POINTER AND NOTHING ELSE. No quote is rewritten, no count is recomputed, and no
+ * history moves agency. That is exactly what Eric asked for: the relationship follows the person,
+ * the work stays with the firm where it was done.
+ *
+ * ⚠️ IT IS REVERSIBLE. Post person_id null and the address gets a fresh person of its own, which
+ * is the state the backfill left everything in. ⛔ The one thing that does NOT come back is which
+ * notes and tags belonged to which half -- see below, and that is a deliberate choice rather than an
+ * oversight.
+ */
+async function handleCrmLinkPerson(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const email = String(body.email || '').trim().toLowerCase();
+  if (!email) return jsonResp({ error: 'Which address?' }, 400);
+
+  const addr = await env.DB.prepare(
+    'SELECT email, name, person_id FROM broker_directory WHERE lower(trim(email)) = ?'
+  ).bind(email).first();
+  if (!addr) return jsonResp({ error: 'No such address.' }, 404);
+
+  const now = new Date().toISOString();
+  const target = body.person_id === null || body.person_id === undefined || body.person_id === ''
+    ? null : String(body.person_id).trim();
+
+  // ── SPLIT: give this address a person of its own.
+  if (target === null) {
+    const fresh = crypto.randomUUID();
+    await env.DB.prepare('INSERT INTO people (id, name, created_at, updated_at) VALUES (?,?,?,?)')
+      .bind(fresh, String(addr.name || '').trim(), now, now).run();
+    await env.DB.prepare('UPDATE broker_directory SET person_id = ? WHERE lower(trim(email)) = ?')
+      .bind(fresh, email).run();
+    // ⚠️ THE EVENTS STAY WITH THE PERSON THEY WERE WRITTEN ON, and are NOT copied to the new one.
+    // A note saying "spoke to Rebecca, she is moving" is about a human, and after a split there are
+    // two humans; guessing which one it belongs to would put a real note on the wrong record.
+    return jsonResp({ ok: true, action: 'split', person_id: fresh, note: 'notes and tags stayed with the existing person' });
+  }
+
+  const person = await env.DB.prepare('SELECT id FROM people WHERE id = ?').bind(target).first();
+  if (!person) return jsonResp({ error: 'No such person.' }, 404);
+  if (addr.person_id === target) return jsonResp({ ok: true, action: 'no change' });
+
+  const losing = addr.person_id;
+  await env.DB.prepare('UPDATE broker_directory SET person_id = ? WHERE lower(trim(email)) = ?')
+    .bind(target, email).run();
+  await env.DB.prepare('UPDATE people SET updated_at = ? WHERE id = ?').bind(now, target).run();
+
+  // ── Did that leave a person with no addresses at all?
+  // ⛔ AN ORPHANED PERSON IS NOT DELETED WHILE IT HOLDS HISTORY. Its notes and tags are moved to the
+  // surviving person first -- they are about a HUMAN, and the whole premise of this merge is that the
+  // two records were always the same human. ⚠️ Deleting first and asking later is how "we tagged them
+  // in March" quietly stops being true.
+  let eventsMoved = 0, personRemoved = false;
+  if (losing && losing !== target) {
+    const still = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM broker_directory WHERE person_id = ?'
+    ).bind(losing).first();
+    if (still && Number(still.n) === 0) {
+      const moved = await env.DB.prepare(
+        "UPDATE crm_events SET entity_id = ? WHERE entity_type = 'person' AND entity_id = ?"
+      ).bind(target, losing).run();
+      eventsMoved = (moved && moved.meta && moved.meta.changes) || 0;
+      await env.DB.prepare('DELETE FROM people WHERE id = ?').bind(losing).run();
+      personRemoved = true;
+    }
+  }
+  return jsonResp({ ok: true, action: 'merged', person_id: target, eventsMoved, emptiedPersonRemoved: personRemoved });
+}
+
+/**
+ * Pairs that MIGHT be one person: the same name at two addresses.
+ *
+ * 🔴🔴 SUGGESTIONS, NEVER MERGES, AND THE LIVE DATA IS THE ARGUMENT. All three pairs in the
+ * directory today share a name and need three DIFFERENT answers:
+ *   Rebecca Hearne       two agencies, one quote at each -- a real MOVE, and Eric's case.
+ *   Abby Crain           one agency, two domains -- NOT a move: Patriot ACQUIRED Benefits Texas.
+ *   Jacob Kellum-Hudman  .com and .net at one agency -- an ALIAS.
+ * ⛔ Nothing in the data distinguishes them. An automatic merge would be right once and wrong twice,
+ * and the two wrong ones would be invisible afterwards.
+ */
+async function handleCrmSuggestPeople(request, env) {
+  try {
+    const { results } = await env.DB.prepare(
+      'SELECT lower(trim(d.name)) AS key, COUNT(DISTINCT d.person_id) AS people_count, ' +
+      "       GROUP_CONCAT(d.email, ' | ') AS emails, GROUP_CONCAT(COALESCE(a.name, d.agency), ' | ') AS agencies " +
+      'FROM broker_directory d LEFT JOIN agencies a ON a.id = d.agency_id ' +
+      "WHERE trim(COALESCE(d.name,'')) <> '' " +
+      'GROUP BY lower(trim(d.name)) HAVING people_count > 1 ORDER BY key'
+    ).all();
+    return jsonResp({ suggestions: results || [], note: 'Suggestions only. A name matcher cannot tell a move from an acquisition from an alias.' });
+  } catch (err) {
+    return jsonResp({ suggestions: [], error: String((err && err.message) || err) }, 500);
+  }
 }
 
 /** Set a priority or a note on one person or agency. */
@@ -6191,6 +6444,13 @@ async function handleMigrate(env) {
   // Data tidy-up, not schema. Runs after the columns are proven present, and reports what it moved.
   const notesCleanup = await stripImportedSourceNotes(env);
 
+  // ⭐ THE PEOPLE BACKFILL RUNS ONLY WHEN ITS COLUMNS ARE PROVEN PRESENT. Running it against a
+  // half-migrated database would create person rows it could not then link, and the second run
+  // would create them all again -- giving one human several records, which is the single thing
+  // this design exists to prevent.
+  const people = missing.length ? { skipped: 'schema incomplete', missing }
+                                : await backfillPeople(env);
+
   // ⚠️ `ok` NOW MEANS "every object this migration is responsible for is present", which is the
   // question anybody opening this URL is actually asking. It used to be the constant `true`.
   // Nothing calls this endpoint programmatically (grep: one route, no callers) -- it is opened by
@@ -6202,6 +6462,7 @@ async function handleMigrate(env) {
     // `scanned` is how many imported rows still carried a Source line, `changed` how many were
     // rewritten, `emptied` how many held NOTHING ELSE and are now null. On a second run all zero.
     notesCleanup,
+    people,
     statements,
     // Kept so an older eye still finds what it is looking for in the same payload.
     applied: statements.filter((s) => s.result === "applied").map((s) => s.sql),

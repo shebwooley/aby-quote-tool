@@ -180,6 +180,8 @@ const BACKDATE = '2020-01-01';
 const TAG_FIRST = 'Sent Quoting Tool Email';   // the spelling that must win
 const TAG_SHOUTY = 'SENT QUOTING TOOL EMAIL';  // the same tag typed differently later
 const AGENT_EMAIL = 'crmtest.agent@example.com';
+const MOVER_OLD = 'crmtest.mover.old@example.com';   // 3 quotes at Test Agency 0
+const MOVER_NEW = 'crmtest.mover.new@example.com';   // 4 quotes at a firm with no agencies row
 
 const AGENCIES = [];
 for (let i = 0; i < 42; i++) AGENCIES.push({ id: `test-agency-${i}`, name: `Test Agency ${i}` });
@@ -200,15 +202,37 @@ function seedBase(cfg) {
      'agency TEXT, first_seen TEXT, last_seen TEXT, quote_count INTEGER)', cfg);
 }
 
-/** Test rows. Run with the server DOWN, and after the migration has created `agencies`. */
+/**
+ * Test rows. Run with the server DOWN, and after the migration has created `agencies`.
+ *
+ * ⭐⭐ THE MOVER FIXTURE IS MODELLED ON A REAL CASE, not invented. Rebecca Hearne is in the live
+ * directory twice -- rebecca@ebslp.com and rebecca@legacybenefitservicesllc.com, TWO agencies, a
+ * quote at each. That is Eric's case: "agents who move from one agency to another... the fact that
+ * they know and like us recorded without taking their quote history with them."
+ * ⚠️ The two addresses carry DIFFERENT quote counts (3 and 4) on purpose. Equal counts would let a
+ * bug that halves, doubles or swaps them pass unnoticed.
+ * ⭐ MOVER_NEW also names an agency with NO agencies row -- "Agency With No Record" -- which is the
+ * 24-of-139 case Eric asked about. The backfill must CREATE that record and flag it.
+ */
 function seedTest(cfg) {
   d1('DELETE FROM crm_events', cfg);
-  d1("DELETE FROM agencies WHERE id LIKE 'test-agency-%'", cfg);
-  d1(`DELETE FROM broker_directory WHERE email = '${AGENT_EMAIL}'`, cfg);
+  d1('DELETE FROM people', cfg);
+  d1("DELETE FROM agencies WHERE id LIKE 'test-agency-%' OR name = 'Agency With No Record'", cfg);
+  d1("DELETE FROM broker_directory WHERE email LIKE 'crmtest.%@example.com'", cfg);
+  d1("DELETE FROM quotes WHERE id LIKE 'crmtest-q-%'", cfg);
   d1('INSERT INTO agencies (id, name) VALUES ' +
      AGENCIES.map((a) => `('${a.id}','${a.name}')`).join(','), cfg);
   d1('INSERT INTO broker_directory (email, name, agency, quote_count) VALUES ' +
-     `('${AGENT_EMAIL}','CRM Test Agent','Test Agency 0',0)`, cfg);
+     `('${AGENT_EMAIL}','CRM Test Agent','Test Agency 0',0),` +
+     `('${MOVER_OLD}','Test Mover','Test Agency 0',3),` +
+     `('${MOVER_NEW}','Test Mover','Agency With No Record',4)`, cfg);
+  // The work itself: 3 quotes run at the old firm, 4 at the new one. ⛔ Nothing the CRM does may
+  // ever change one of these rows.
+  const q = [];
+  for (let i = 0; i < 3; i++) q.push(`('crmtest-q-old-${i}','Q${i}','2019-06-0${i + 1}','${MOVER_OLD}','Test Agency 0','','')`);
+  for (let i = 0; i < 4; i++) q.push(`('crmtest-q-new-${i}','R${i}','2026-06-0${i + 1}','${MOVER_NEW}','Agency With No Record','','')`);
+  d1('INSERT INTO quotes (id, quote_number, created_at, broker_email, broker_agency, source_tag, notes) VALUES ' +
+     q.join(','), cfg);
 }
 
 // ── the suite ─────────────────────────────────────────────────────────────────────────────────
@@ -246,6 +270,24 @@ async function runSuite() {
   check('unauthenticated write is refused', r.status, 401);
 
   await login();
+
+  // ── 1b. THE BACKFILL. Run here because the addresses were seeded after the first migration, so
+  //    this is the run that has to give them a person and an agency.
+  let r2 = await api('GET', '/api/migrate');
+  const bf = (r2.json && r2.json.people) || {};
+  check('the backfill creates a person for every address',
+        [bf.peopleCreated, (bf.errors || []).length], [3, 0]);
+  check('and CREATES the agency record an agent-only firm has no row for',
+        bf.agenciesCreated, 1,
+        'Eric: I would like agents under agencies but need to resolve the ones with no agency');
+  // ⭐ IDEMPOTENCY IS NOT A NICETY HERE: /api/migrate is opened by hand more than once, and a second
+  // run that created people again would give one human several records -- the exact defect the
+  // people table exists to prevent.
+  r2 = await api('GET', '/api/migrate');
+  const bf2 = (r2.json && r2.json.people) || {};
+  check('running the migration TWICE creates nothing a second time',
+        [bf2.peopleCreated, bf2.agenciesCreated, bf2.alreadyLinked], [0, 0, 3],
+        'a backfill guarded by "has this run before" instead of "is it already set" doubles people');
 
   // ── 2. shape of a bad request. ⛔ Each must be a 400 with a reason, never a silent 200 that
   //       writes nothing -- "it worked and nothing appeared" is the worst screen to debug.
@@ -312,19 +354,20 @@ async function runSuite() {
   check('a note against a missing agency FAILS rather than orphaning',
         [r.json && r.json.written, r.json && r.json.failed], [0, 1],
         'an event on an id nothing points at is invisible for ever and raises no error');
-  r = await api('POST', '/api/admin/crm', { kind: 'tag', label: TAG_FIRST, entities: [{ type: 'agent', id: 'Jason Sandler' }] });
+  r = await api('POST', '/api/admin/crm', { kind: 'tag', label: TAG_FIRST, entities: [{ type: 'person', id: 'Jason Sandler' }] });
   // ⭐⭐ ASSERT ON THE REASON, NOT ONLY ON THE COUNTS, AND THAT IS THE WHOLE POINT OF THIS ONE.
   // Two guards refuse this input: the email test here, and the existence lookup behind it. Counting
   // failures cannot tell them apart -- so with the email test removed the assertion still passed,
   // and the self-test reported the sabotage MISSED. The REASON is what distinguishes them.
   const nameFail = (r.json && r.json.detail && r.json.detail.failed && r.json.detail.failed[0]) || {};
-  check('an agent identified by NAME is refused, for the RIGHT reason',
+  check('a person identified by NAME is refused, for the RIGHT reason',
         [r.json && r.json.written, r.json && r.json.failed, String(nameFail.why || '').includes('no stable key')],
         [0, 1, true],
         'never invent an id for a name -- that is how one person becomes two records');
   r = await api('POST', '/api/admin/crm',
-                { kind: 'tag', label: TAG_FIRST, entities: [{ type: 'agent', id: AGENT_EMAIL.toUpperCase() }] });
-  check('an agent IS taggable by email, case-insensitively', r.json && r.json.written, 1);
+                { kind: 'tag', label: TAG_FIRST, entities: [{ type: 'person', id: AGENT_EMAIL.toUpperCase() }] });
+  check('a person IS taggable by email, case-insensitively', r.json && r.json.written, 1,
+        'an address is RESOLVED to a person, never used as the key');
 
   // ── 8. BULK APPLY -- the guard the build plan asks for by name.
   const forty = AGENCIES.slice(2, 42).map((a) => ({ type: 'agency', id: a.id }));
@@ -353,6 +396,63 @@ async function runSuite() {
   r = await api('POST', '/api/admin/crm/delete', { id: victim.id });
   check('deleting it again is a 404, not a silent ok', r.status, 404,
         'a DELETE that matches nothing resolves happily and the screen keeps showing the row');
+
+  // ── 12. AN AGENT WHO MOVES AGENCY. This is Eric's requirement in full, and the property being
+  //    proved is the one he stated: the relationship follows the PERSON, the work stays with the
+  //    FIRM. Modelled on Rebecca Hearne, who is in the live directory twice at two agencies.
+  const agencyOf = (p) => (p.addresses || []).map((a) => [a.agency_name, a.quotes]).sort();
+
+  // Tag the newer address BEFORE the merge, so there is history to lose.
+  r = await api('POST', '/api/admin/crm', { kind: 'tag', label: 'met at a conference', entities: [{ type: 'person', id: MOVER_NEW }] });
+  check('the newer address can be tagged before anybody links it', r.json && r.json.written, 1);
+
+  r = await api('GET', '/api/admin/crm/suggest');
+  let names = ((r.json && r.json.suggestions) || []).map((s) => s.key);
+  check('the same name at two addresses is SUGGESTED as one person', names.includes('test mover'), true,
+        'suggested only -- live data has a move, an acquisition and an alias that look identical here');
+
+  r = await api('GET', '/api/admin/crm/person?email=' + encodeURIComponent(MOVER_OLD));
+  const before = r.json || {};
+  check('before the link, the old address is a person of one, with its own quotes',
+        [(before.addresses || []).length, before.totalQuotes, before.movedBetweenAgencies], [1, 3, false]);
+  r = await api('GET', '/api/admin/crm/person?email=' + encodeURIComponent(MOVER_NEW));
+  check('and the new address stands alone with its own quotes and its CREATED agency',
+        [(r.json.addresses || []).length, r.json.totalQuotes, r.json.addresses[0].agency_name],
+        [1, 4, 'Agency With No Record']);
+
+  // ── the merge itself
+  r = await api('POST', '/api/admin/crm/link', { email: MOVER_NEW, person_id: before.person.id });
+  check('linking the two addresses moves the tag rather than losing it',
+        [r.status, r.json && r.json.action, r.json && r.json.eventsMoved, r.json && r.json.emptiedPersonRemoved],
+        [200, 'merged', 1, true],
+        'a note is about a HUMAN, and the premise of the merge is that these were always one human');
+
+  r = await api('GET', '/api/admin/crm/person?email=' + encodeURIComponent(MOVER_NEW));
+  const after = r.json || {};
+  check('both addresses now answer to one person', (after.addresses || []).length, 2);
+  check('the total is the sum of both firms', after.totalQuotes, 7);
+  check('⭐ THE QUOTES DID NOT MOVE AGENCY: still 3 at the old firm and 4 at the new',
+        agencyOf(after), [['Agency With No Record', 4], ['Test Agency 0', 3]],
+        'Eric: without taking their quote history with them - that stays with the agency');
+  check('and the move is visible without anybody recording one', after.movedBetweenAgencies, true);
+
+  r = await api('GET', '/api/admin/crm?entity_type=person&entity_id=' + encodeURIComponent(MOVER_OLD));
+  check('the tag written on the old record now reads on the surviving person',
+        ((r.json && r.json.events) || []).some((e) => e.label === 'met at a conference'), true);
+
+  r = await api('GET', '/api/admin/crm/suggest');
+  names = ((r.json && r.json.suggestions) || []).map((s) => s.key);
+  check('once linked, the pair stops being suggested', names.includes('test mover'), false);
+
+  // ── and it is reversible
+  r = await api('POST', '/api/admin/crm/link', { email: MOVER_NEW, person_id: null });
+  check('an address can be split back out', [r.status, r.json && r.json.action], [200, 'split']);
+  r = await api('GET', '/api/admin/crm/person?email=' + encodeURIComponent(MOVER_NEW));
+  check('and its quote history is exactly what it was before the link',
+        [(r.json.addresses || []).length, r.json.totalQuotes], [1, 4],
+        'a merge that could not be undone would make a wrong guess permanent');
+  r = await api('GET', '/api/admin/crm/person?email=' + encodeURIComponent(MOVER_OLD));
+  check('the other side is unchanged too', [(r.json.addresses || []).length, r.json.totalQuotes], [1, 3]);
 }
 
 // ── sabotage: prove each assertion can actually go red ─────────────────────────────────────────
@@ -397,10 +497,42 @@ const SABOTAGES = [
     breaks: 'a note against a missing agency FAILS rather than orphaning',
   },
   {
-    name: 'an agent may be keyed on a NAME',
-    find: '      if (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(id)) {',
-    with: '      if (false) {',
-    breaks: 'an agent identified by NAME is refused, for the RIGHT reason',
+    name: 'a person may be keyed on a NAME',
+    find: "    return { why: 'no email and no person id, so no stable key -- record an address first' };",
+    with: '    return { id: v };',
+    breaks: 'a person identified by NAME is refused, for the RIGHT reason',
+  },
+  {
+    // ⭐⭐ THE MISTAKE THIS REPLAYS IS THE OBVIOUS ONE: report every address under the person's
+    // CURRENT firm. It reads perfectly on screen and quietly credits the new agency with years of
+    // work done at the old one -- the exact thing Eric asked to be prevented.
+    name: 'a person\'s quotes reported under their CURRENT agency instead of the one they were at',
+    // ⚠️ ANCHORED ON TWO LINES, not one: the join string appears in handleCrmPerson AND in
+    // handleCrmSuggestPeople, and a sabotage that matches twice does not apply at all.
+    find: "AS last_quote ' +\n" +
+          "      'FROM broker_directory d LEFT JOIN agencies a ON a.id = d.agency_id ' +",
+    with: "AS last_quote ' +\n" +
+          "      'FROM broker_directory d LEFT JOIN agencies a ON a.id = " +
+          '(SELECT agency_id FROM broker_directory WHERE person_id = d.person_id ' +
+          "ORDER BY last_seen DESC LIMIT 1) ' +",
+    breaks: '⭐ THE QUOTES DID NOT MOVE AGENCY: still 3 at the old firm and 4 at the new',
+  },
+  {
+    // A backfill guarded by "has this run before" instead of "is it already set". /api/migrate is
+    // opened by hand more than once, so this gives one human several person records -- which is the
+    // single thing the people table exists to prevent.
+    name: 'the backfill stops skipping addresses that already have a person',
+    find: '      if (row.person_id) { out.alreadyLinked++; continue; }',
+    with: '      if (false) { out.alreadyLinked++; continue; }',
+    breaks: 'running the migration TWICE creates nothing a second time',
+  },
+  {
+    // Deleting an emptied person before moving its history. "We tagged them in March" quietly stops
+    // being true, and nothing on any screen says so.
+    name: 'a merge drops the emptied person\'s notes and tags instead of moving them',
+    find: "        \"UPDATE crm_events SET entity_id = ? WHERE entity_type = 'person' AND entity_id = ?\"",
+    with: "        \"SELECT 1 WHERE ? IS NOT NULL AND ? IS NOT NULL\"",
+    breaks: 'linking the two addresses moves the tag rather than losing it',
   },
 ];
 
