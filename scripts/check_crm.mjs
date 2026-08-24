@@ -1255,7 +1255,10 @@ const SABOTAGES = [
     name: 'the orphan sweep forgets that a person can legitimately have no address',
     find: "'AND agency_id IS NULL'",
     with: "'AND 1=1'",
-    breaks: 'and the orphan sweep does NOT delete them',
+    // WARNING: this string must match the assertion's title EXACTLY. It was left pointing at the
+    // old title after the assertion was renamed, so the sabotage fired, the assertion DID go red,
+    // and the harness still reported MISSED because it could not match the two up.
+    breaks: 'and the orphan sweep does NOT delete them, tag or no tag',
   },
   {
     // ⛔ THE SAME ASSUMPTION, ONE SCREEN LOWER, AND IT IS THE ONE I MISSED ON THE FIRST PASS.
@@ -1649,8 +1652,16 @@ async function main() {
     // from a real catch if you only look at the one line (TRAPS #266).
     const red = results.filter((x) => !x.ok).length;
     const hit = results.some((x) => x.name === s.breaks && !x.ok);
+    // \u26d4\u26d4 A `breaks` THAT NAMES NO ASSERTION IS A STALE POINTER, NOT A MISSED GUARD, AND THE
+    // TWO USED TO PRINT THE SAME WORD. 2026-08-24: the sweep assertion was renamed and this string
+    // was left behind. The sabotage fired, the assertion DID go red, and the harness reported
+    // MISSED -- sending me to re-examine a guard that was working perfectly.
+    // \u26a0\ufe0f "The assertion did not fail" and "there is no such assertion" are opposite findings:
+    // one means the code is unguarded, the other means the TEST is misfiled. Say which.
+    const named = results.some((x) => x.name === s.breaks);
     if (hit && red <= 3) { console.log(`  caught  ${s.name}`); caught++; }
     else if (hit) { console.log(`  SUSPECT ${s.name}  (${red} assertions red -- the harness broke, not the rule)`); }
+    else if (!named) { console.log(`  STALE   ${s.name}  (no assertion is called "${s.breaks}" -- renamed?)`); }
     else { console.log(`  MISSED  ${s.name}  (expected "${s.breaks}" to fail)`); }
   }
 

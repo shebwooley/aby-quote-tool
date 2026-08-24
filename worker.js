@@ -9198,6 +9198,36 @@ const MIGRATIONS = [
   // NULL means the original source: derived from the quote log.
   { sql: "ALTER TABLE broker_directory ADD COLUMN source TEXT",
     table: "broker_directory", column: "source" },
+  // -- WHAT KIND OF PERSON IS THIS (F-388) ------------------------------------------------------
+  //
+  // ERIC, 2026-08-24: "There apparently is no possible way to track people we are doing business
+  // with (firms and the people) and other people we might want to do business with at some point."
+  //
+  // \U0001F534\U0001F534 THE ROOT CAUSE, MEASURED: EVERY RECORD OF A PERSON OR A FIRM WAS DERIVED FROM THE
+  // QUOTE LOG. 628 of 672 agencies exist ONLY because somebody quoted. The quote log says who
+  // ASKED -- and somebody you might want to do business with has never asked, which is what makes
+  // them a prospect. So the model could not hold one, and each time that came up a new table and a
+  // new page were added instead: brokers (0 rows), referral_partners (2), referral_contacts (4).
+  //
+  // ERIC GAVE THE VOCABULARY: broker | referral | aby | other.
+  // \u26a0\ufe0f BROKER MEANS ANYONE AT AN AGENCY -- "broker, account manager, etc" (Eric, same day).
+  // It is NOT restricted to producers and a future session must not narrow it to one.
+  // \u26a0\ufe0f referral is kept apart from broker because F-369 forbids flattening them: "One is a
+  // broker, others are potential referral partners." A broker would SELL; a partner would
+  // INTRODUCE. Different asks, and a single list cannot hold both without losing the distinction.
+  //
+  // \U0001F534\U0001F534 AND THE CORRECTION THAT MATTERS, ERIC THE SAME DAY: "You do realize clients and
+  // former clients are employers, they are not brokers, right?" \u26d4 PROSPECT | CLIENT | FORMER
+  // CLIENT IS THE **EMPLOYER** AXIS -- aby_clients, 2,213 active and 977 termed -- and it does NOT
+  // belong on an agency. A BROKER IS NEVER A CLIENT; an agency is the CHANNEL. A stage column was
+  // nearly added to agencies here, and it would have been the wrong population AND a duplicate of
+  // the DERIVED status that already answers how active a channel relationship is.
+  // \u2b50 THE TWO AXES, SO THEY ARE NOT FORCED TOGETHER AGAIN:
+  //     EMPLOYERS  quoted / RFP prospect -> client -> former client   (aby_clients)
+  //     CHANNEL    producing / quoting / dormant / prospect, DERIVED  (agencies + people)
+  { sql: "ALTER TABLE people ADD COLUMN kind TEXT", table: "people", column: "kind" },
+  { sql: "CREATE INDEX IF NOT EXISTS people_kind ON people (kind)", index: "people_kind" },
+
   // -- aby_sales HAS EXISTED ONLY IN PRODUCTION, AND THAT IS A REAL HAZARD --------------------
   //
   // \U0001F534 FOUND 2026-08-24 by adding a Sales column to the CRM list: the query threw on a fresh
