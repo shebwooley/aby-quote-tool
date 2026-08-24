@@ -362,6 +362,100 @@ two, and only you and Niels know.
 
 ---
 
+## RFP Watch
+
+**Cities, counties, school districts and colleges buy these services directly, by putting them out
+to bid.** ABY has more than two dozen municipal references, which is what makes this a credible lane.
+This page is where those opportunities are tracked.
+
+⛔ **IT IS A DIFFERENT CHANNEL FROM BROKERS AND AGENCIES, AND THE TWO LISTS NEVER MERGE.** An
+agency is an insurance firm ABY quotes through. A public entity here is buying direct. Nothing on
+this page is an agency record and nothing on Brokers and Agencies belongs here.
+
+### What it is actually for
+
+⭐⭐ **THE VALUE IS NOT FINDING THE RFP. IT IS NEVER LOOKING AT THE SAME DEAD ONE TWICE, AND
+REMEMBERING WHY YOU PASSED.** A weekly document you read and close cannot do that. A year from now,
+*"did we look at this county last time, and why did we not bid?"* is the question worth answering,
+and it is the reason a pass has to say why.
+
+### Getting opportunities onto the list
+
+**Paste a list.** Any table with a heading row: tabs, pipes or commas. It works out which column is
+which, shows you what it read, and **refuses anything it cannot map instead of guessing.** It reports
+the split (*3 added, 1 already known, 1 refused*), never just a total, and pasting the same list next
+week recognizes what it already holds rather than duplicating it.
+
+⚠️ **A date it cannot read is dropped and SAID, never guessed.** An unreadable deadline that
+silently became blank is exactly how a closed solicitation reads as open.
+
+**Or add one by hand**, for something that arrived by phone or word of mouth. That is how Corpus
+Christi and College Station arrived, so it is not the exception.
+
+### The screening rules, and why the negative half matters most
+
+Some things look like a match to a keyword search and are not: medical claims administration,
+stop-loss, dental or vision or life lines, brokerage and consulting, retirement and deferred
+compensation, and benefits administration *software*. **Four of the ten items reviewed in a real week
+died on exactly those grounds.**
+
+⭐ **A screened-out row is kept and shown, never deleted.** The rules can be wrong, and a row that
+vanished cannot be argued with. Open **Screened out** at the bottom, and if one is really a fit,
+press **This one is real**.
+
+🔴 **One rule is deliberately narrower than it looks: the dental and vision test reads the
+TITLE only.** A genuine FSA solicitation lists dental and vision as eligible expenses in its scope.
+Reading that word across the whole scope would throw away the best fit on the page.
+
+### The badges
+
+| Badge | What it means |
+|---|---|
+| **Mandatory pre-proposal already held** | There was a required conference and it has happened. If attendance was truly required, ABY is not eligible and every hour after this point is wasted. |
+| **Sources conflict** | Something does not add up, usually a stated weekday that does not match the stated date. |
+| **Looks like last year** | The plan year had already started before proposals were due, which is what last year's solicitation looks like when it resurfaces. |
+| **Deadline not confirmed** | Nobody has opened the issuing entity's own page yet. |
+| **Closing soon** | Two weeks or less. |
+
+### 🔴🔴 The verification gate, which is the whole point
+
+**Nothing on this page is trusted because a search result or a digest said so.** In one real week,
+two confident wrong answers came back: a solicitation that had closed nearly a year earlier, and a
+deadline that was invented and dressed with a weekday that fell on a Saturday.
+
+⛔ **So a deadline only becomes trustworthy when a person opens the issuing entity's own page and
+says what they saw.** That is the **I checked their own page** button.
+
+⭐ **If what they see disagrees with what was imported, BOTH are kept and both are shown.** The
+tool does not pick a winner.
+
+⭐⭐ **AND "I COULD NOT TELL" IS A REAL ANSWER, NOT A FAILURE.** Leave the date blank and say what
+happened. That is how you record *their vendor page says there is no RFP right now, but the listing
+says it closes in two weeks* -- which means somebody should make a phone call. In that real week,
+two of the three live opportunities landed exactly there, and the phone call was the right next move
+both times.
+
+### Recording what ABY decided
+
+Set the disposition on the row: reviewing, pursuing, submitted, won, lost, or passed.
+
+⛔ **PASSING ASKS YOU WHY, AND WILL NOT SAVE WITHOUT AN ANSWER.** A blank reason a year from now
+is indistinguishable from never having looked, and that is the one thing this page exists to prevent.
+
+### A quiet week is the system working
+
+⚠️ **Expect most weeks to be empty, especially in Texas.** In one measured week, fourteen
+searches across Texas, Oklahoma, Louisiana, Arkansas and New Mexico produced **zero** qualifying
+opportunities, and three nationwide. **That is the base rate for a niche service line, not a fault.**
+The counts at the top of the page say how many are tracked and how many were screened out, so a quiet
+week and a broken page do not look the same.
+
+### What it does not do yet
+
+There is **no automatic feed** -- ABY has no bid-site subscription, so everything arrives by paste or
+by hand. There is **no AI** on this page: the screening is plain rules you can read, and nothing
+writes an email or contacts anybody.
+
 ## ⏳ Not built yet, and worth knowing about
 
 - Nobody has yet registered a real account, so the agency side has been only ever been tested. It has never been used by a real agency. **The first agency that signs up is the real test.**

@@ -31,6 +31,67 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
 
 const RULES = [
+  // ── RFP WATCH (F-384) ───────────────────────────────────────────────────────────────────
+  // Written in the SAME commit as the endpoints, not after them. Every one of these fails until a
+  // control exists that calls the thing, which is the only version of this rule that has ever
+  // worked here: three endpoints in one day were built, tested, deployed and unreachable.
+  {
+    name: "RFP Watch is in the admin navigation",
+    why: "A page nobody can click is a route nobody visits. There is no other way in: it is not"
+       + " linked from the quote log and it is not on the CRM.",
+    holds: (f) => /href: '\/admin\/rfp-watch'/.test(f.worker)
+               && /path === '\/admin\/rfp-watch'/.test(f.worker),
+  },
+  {
+    name: "the page asks for its rows",
+    why: "A table that renders before it fetches shows an empty list, and an empty list reads as"
+       + " 'no opportunities' rather than as a broken screen. That is the base rate here, so a"
+       + " quiet week and a dead page must not look the same.",
+    holds: (f) => /fetch\('\/api\/admin\/rfp'/.test(f.worker) && /function load\(\)/.test(f.worker),
+  },
+  {
+    name: "a pasted list can be previewed AND committed from the page",
+    why: "The preview endpoint is useless without a control that then writes. Half a door is the"
+       + " same as no door.",
+    holds: (f) => /onclick="preview\(\)"/.test(f.worker)
+               && /onclick="commitPaste\(\)"/.test(f.worker)
+               && /\/api\/admin\/rfp\/import/.test(f.worker),
+  },
+  {
+    name: "one opportunity can be added by hand",
+    why: "The phone-call and word-of-mouth path. Without it the module only works for things that"
+       + " arrive as a table, which is not how Corpus Christi or College Station arrived.",
+    holds: (f) => /onclick="addOne\(\)"/.test(f.worker) && /function addOne\(/.test(f.worker),
+  },
+  {
+    name: "a disposition can be set, and passing asks why",
+    why: "Recording that ABY looked at an entity and passed, with the reason, is the whole value"
+       + " of the module. An endpoint that refuses a blank reason needs a control that collects one.",
+    holds: (f) => /setDisposition\(/.test(f.worker)
+               && /\/api\/admin\/rfp\/decision/.test(f.worker)
+               && /Why are we passing/.test(f.worker),
+  },
+  {
+    name: "the verification gate has a button",
+    why: "🔴 THE GATE IS THE MODULE. Nothing reaches verified_open except by somebody opening the"
+       + " issuing entity's own page and saying what they saw. An endpoint with no button means"
+       + " every row stays unverified for ever and the badge stops meaning anything.",
+    holds: (f) => /onclick="verify\(/.test(f.worker)
+               && /\/api\/admin\/rfp\/verify/.test(f.worker),
+  },
+  {
+    name: "could-not-verify is offered, not just success",
+    why: "Two of the three real items on 2026-08-17 could not be resolved without a phone call."
+       + " If the only control is 'I confirmed the date', that outcome has nowhere to go and the"
+       + " most useful finding of the week is silently lost.",
+    holds: (f) => /unresolved:\s*true/.test(f.worker),
+  },
+  {
+    name: "screened-out rows can be seen and overruled",
+    why: "The negative rules are the half that earns its keep and they will sometimes be wrong."
+       + " A row that vanished cannot be argued with.",
+    holds: (f) => /id="dropped"/.test(f.worker) && /function keep\(/.test(f.worker),
+  },
   // ── THE MARKETING VIEW (F-383) ──────────────────────────────────────────────────────────
   // Everything else this repo guards asks whether the CRM is CORRECT. These ask whether anybody
   // can get to it. The endpoints were built, tested with 74 assertions and deployed before the
@@ -145,6 +206,18 @@ const RULES = [
 ];
 
 const SABOTAGES = [
+  {
+    why: "the RFP Watch nav link is gone, so the page has no door at all",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/href: '.admin.rfp-watch'/g, "href: '/admin/gone'") }),
+  },
+  {
+    why: "the verify button is orphaned while the endpoint stays",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/onclick="verify/g, 'onclick="noop') }),
+  },
+  {
+    why: "could-not-verify loses its control, so a phone-call outcome has nowhere to go",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/unresolved:\s*true/g, "unresolved: false") }),
+  },
   {
     why: "the record-status control is orphaned from its endpoint",
     apply: (f) => ({ ...f, worker: f.worker.replace(/function recordStatus\(/g, "function unusedRec(") }),

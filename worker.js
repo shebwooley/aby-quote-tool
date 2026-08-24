@@ -65,6 +65,11 @@ export default {
     if (path === '/api/admin/prospects' && method === 'POST') return withAuth(request, env, () => handleAdminAddProspects(request, env));
     // The CRM (F-383). Every one is behind withAuth: these are ABY's own notes about who they
     // are courting, and nothing here is broker-facing.
+    if (path === '/api/admin/rfp'          && method === 'GET')  return withAuth(request, env, () => handleRfpList(request, env));
+    if (path === '/api/admin/rfp'          && method === 'POST') return withAuth(request, env, () => handleRfpAdd(request, env));
+    if (path === '/api/admin/rfp/import'   && method === 'POST') return withAuth(request, env, () => handleRfpImport(request, env));
+    if (path === '/api/admin/rfp/decision' && method === 'POST') return withAuth(request, env, () => handleRfpDecision(request, env));
+    if (path === '/api/admin/rfp/verify'   && method === 'POST') return withAuth(request, env, () => handleRfpVerify(request, env));
     if (path === '/api/admin/crm'        && method === 'GET')  return withAuth(request, env, () => handleCrmList(request, env));
     if (path === '/api/admin/crm'        && method === 'POST') return withAuth(request, env, () => handleCrmAdd(request, env));
     if (path === '/api/admin/crm/tags'   && method === 'GET')  return withAuth(request, env, () => handleCrmTags(request, env));
@@ -172,6 +177,10 @@ export default {
     }
     if (path === '/admin/brokers') {
       return withAuth(request, env, () => new Response(adminBrokersHTML(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
+    }
+    if (path === '/admin/rfp-watch') {
+      return withAuth(request, env, () => new Response(adminRfpHTML(), {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
     }
     if (path === '/admin/referrals') {
@@ -1747,7 +1756,11 @@ async function crmCanonicalLabel(env, label) {
 // Does this entity actually exist? ⛔ An event written against an id nothing points at is invisible
 // for ever: it never appears on a page, it never appears in a tag filter, and no error was raised.
 async function crmEntityExists(env, type, id) {
-  const table = type === 'agency' ? 'agencies' : type === 'person' ? 'people' : null;
+  // ⭐ 'rfp' JOINED THIS LIST RATHER THAN GETTING ITS OWN NOTES TABLE (F-384). A dated,
+  // backdatable note with a tag on it is exactly what crm_events already is, and a second copy
+  // would need its own write path, its own validation and its own bugs.
+  const table = type === 'agency' ? 'agencies' : type === 'person' ? 'people'
+              : type === 'rfp' ? 'rfp_opportunity' : null;
   if (!table) return false;
   const r = await env.DB.prepare('SELECT id FROM ' + table + ' WHERE id = ?').bind(id).first();
   return Boolean(r);
@@ -1894,7 +1907,7 @@ async function handleCrmAdd(request, env) {
   for (const ent of list) {
     const type = String((ent && ent.type) || '').trim().toLowerCase();
     let id = String((ent && ent.id) || '').trim();
-    if (type !== 'agency' && type !== 'person') {
+    if (type !== 'agency' && type !== 'person' && type !== 'rfp') {
       failed.push({ id: id || '(blank)', why: 'unknown entity type' });
       continue;
     }
@@ -7294,6 +7307,837 @@ header .logout:hover{background:rgba(255,255,255,.15);color:white}
 
 // Eric, 2026-08-21: "On the page where ABY runs quotes /aby is it possible to add the same header
 // navigation that the other admin panels have?"
+
+// ═══ RFP WATCH (F-384) ════════════════════════════════════════════════════════════════════════════
+//
+// Public-entity solicitations for the services ABY administers: cities, counties, school districts,
+// higher ed. ABY has two dozen municipal references, which is what makes this a credible lane.
+//
+// 🔴🔴 THE RULE THAT EVERYTHING ELSE HANGS OFF, AND IT WAS EARNED RATHER THAN REASONED. One week of
+// running this search by hand (2026-08-17) produced two confident wrong answers:
+//
+//   1. Tarrant Appraisal District's "2026 Group and Retiree Insurance RFP" came back with a due date
+//      of "Wednesday, August 20, 2026". It was the 2025 solicitation for the 2026 PLAN YEAR, closed
+//      nearly a year earlier. Two tells: August 20 2026 was a THURSDAY, and the plan year had
+//      already started before the claimed deadline.
+//   2. Two searches asserted a September 12 deadline where the structured record said September 10.
+//      September 12 2026 was a SATURDAY. The summary invented a plausible date and dressed it with a
+//      weekday.
+//
+// ⛔ SO A DATE HERE CARRIES ITS SOURCE, AND A SUMMARY IS NOT A SOURCE. Only somebody opening the
+// issuing entity's own page makes a deadline trustworthy, and until that happens the row says so on
+// its face. A tool that reports a dead RFP as live is worse than no tool: it burns a week and it
+// teaches Eric to distrust the page.
+
+// Where a date came from, worst to best. 'summary' is a digest or a search result and is the one
+// that lied twice in a single week.
+const RFP_DATE_SOURCES = ['summary', 'manual', 'feed', 'official_page'];
+
+const RFP_DISPOSITIONS = ['new', 'reviewing', 'pursuing', 'submitted', 'won', 'lost', 'passed'];
+
+const RFP_ENTITY_TYPES = ['city', 'county', 'school_district', 'higher_ed', 'state_agency',
+                          'special_district', 'federal', 'other'];
+
+// Texas first, then the states ABY already reaches, then everywhere else. Eric's priority order.
+const RFP_TX_ADJACENT = ['OK', 'LA', 'AR', 'NM'];
+
+function rfpRegion(state) {
+  const s = String(state || '').trim().toUpperCase();
+  if (s === 'TX') return 'tx';
+  if (RFP_TX_ADJACENT.indexOf(s) !== -1) return 'tx_adjacent';
+  return 'national';
+}
+
+// ⭐⭐ THE SERVICE LIST REUSES THE QUOTE TOOL'S OWN PRODUCT IDS WHERE ONE EXISTS, and says so where
+// one does not. Inventing a parallel spelling is how a value becomes invisible to every query that
+// already exists: 'sec125' and 'pop' are the same thing to a person and different strings to SQL.
+// ⚠️ THREE OF THESE ARE DELIBERATELY NOT PRODUCT IDS. ABY answers RFPs for DCAP, limited-purpose
+// FSA and Form 5500 work, and the quote tool does not sell them as separate products. They are
+// marked product:false rather than forced into a product id that does not mean them.
+const RFP_SERVICES = [
+  { id: 'fsa',      product: true,  label: 'FSA',
+    re: /flexible spending|health care spending account|\bfsa\b|\bhcsa\b/i },
+  { id: 'lfsa',     product: false, label: 'Limited-purpose FSA',
+    re: /limited[- ]purpose|\blfsa\b/i },
+  { id: 'dcap',     product: false, label: 'Dependent care',
+    re: /dependent care|\bdcap\b|dependent care advantage/i },
+  { id: 'hra',      product: true,  label: 'HRA',
+    re: /health reimbursement|\bhra\b|\bqsehra\b/i },
+  { id: 'ichra',    product: true,  label: 'ICHRA',   re: /\bichra\b/i },
+  { id: 'hsa',      product: true,  label: 'HSA',     re: /health savings|\bhsa\b/i },
+  { id: 'cobra',    product: true,  label: 'COBRA',   re: /\bcobra\b|continuation coverage/i },
+  { id: 'pop',      product: true,  label: 'Section 125 / POP',
+    re: /section 125|cafeteria plan|premium only|\bpop\b/i },
+  { id: 'aca',      product: true,  label: 'ACA reporting',
+    re: /\baca\b|1094[- ]?c|1095[- ]?c|affordable care act report/i },
+  { id: 'erisa',    product: true,  label: 'ERISA',   re: /\berisa\b|wrap document|\bhipaa\b/i },
+  { id: 'form5500', product: false, label: 'Form 5500', re: /form 5500|\b5500\b/i },
+  { id: 'section132', product: true, label: 'Commuter',
+    re: /commuter|qualified transportation|section 132|transit benefit/i },
+  { id: 'section127', product: true, label: 'Student loan / tuition',
+    re: /student loan|tuition (reimbursement|assistance)|section 127/i },
+  { id: 'lifestyle', product: true, label: 'Lifestyle',
+    re: /lifestyle (spending|benefit)|\blsa\b|\blsb\b/i },
+  { id: 'directBilling', product: true, label: 'Direct / retiree billing',
+    re: /retiree billing|direct billing|premium billing/i },
+];
+
+// ⛔ THINGS THAT LOOK LIKE A MATCH TO A KEYWORD SEARCH AND ARE NOT. Four of the ten items surfaced
+// on 2026-08-17 died here. These are NEGATIVE RULES, not low scores: a medical-claims TPA bid is not
+// a weak fit, it is a different business.
+//
+// ⚠️ 'field' MATTERS AND IS NOT FUSSINESS. The carrier-line rule reads the TITLE ONLY, because
+// "dental" and "vision" appear perfectly innocently inside the scope of a real FSA solicitation
+// (they are eligible expenses). Reading it across the scope would screen out the best fits.
+const RFP_DISQUALIFIERS = [
+  { id: 'medical_claims', field: 'all',
+    why: 'medical claims administration, which ABY does not adjudicate',
+    re: /medical claims|claims adjudication|self[- ]?funded (health|medical)|health plan administration/i },
+  { id: 'stop_loss', field: 'all', why: 'stop-loss or reinsurance',
+    re: /stop[- ]?loss|reinsurance/i },
+  { id: 'carrier_line', field: 'title',
+    why: 'an insurance carrier line (dental, vision, life, disability)',
+    re: /\b(dental|vision|life insurance|disability|long[- ]term care)\b/i },
+  { id: 'brokerage', field: 'all', why: 'brokerage or consulting, where ABY is the administrator',
+    re: /broker(age)? (of record|services)|benefits? consult(ing|ant)|agent of record/i },
+  { id: 'retirement', field: 'all', why: 'retirement or deferred compensation',
+    re: /\b457\b|403\(b\)|401\(k\)|deferred comp|pension|retirement plan/i },
+  { id: 'benadmin_software', field: 'all',
+    why: 'benefits administration software rather than the administration itself',
+    re: /benefits? (administration|enrollment) (software|platform|system)|technology platform/i },
+];
+
+const RFP_WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+/** The weekday an ISO date actually falls on, computed in UTC so a timezone cannot shift it. */
+function rfpWeekdayOf(iso) {
+  const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(String(iso || ''));
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (isNaN(d.getTime())) return null;
+  return RFP_WEEKDAYS[d.getUTCDay()];
+}
+
+/**
+ * ⭐ THE CHEAPEST LIE DETECTOR IN THE SYSTEM. When a source states both a weekday and a date, they
+ * have to agree. "Wednesday, August 20, 2026" does not, and that one mismatch is what exposed a
+ * closed solicitation being sold as open.
+ */
+function rfpWeekdayMismatch(iso, statedText) {
+  const actual = rfpWeekdayOf(iso);
+  if (!actual) return null;
+  const said = String(statedText || '').toLowerCase();
+  for (const w of RFP_WEEKDAYS) {
+    if (said.indexOf(w) !== -1 && w !== actual) {
+      return { stated: w, actual: actual };
+    }
+  }
+  return null;
+}
+
+function rfpDaysBetween(fromIso, toIso) {
+  const a = Date.parse(fromIso + 'T00:00:00Z'), b = Date.parse(toIso + 'T00:00:00Z');
+  if (isNaN(a) || isNaN(b)) return null;
+  return Math.round((b - a) / 86400000);
+}
+
+/**
+ * Reads one opportunity and says what it is. PURE: no database, no clock of its own, no network --
+ * today is passed in, which is what makes the whole thing testable against a fixed week.
+ *
+ * Returns { services, disqualified, flags, status, daysToClose }.
+ *
+ * ⭐⭐ THERE IS NO FIT SCORE, DELIBERATELY. A weighted score ranks a list, and this list is three
+ * items long in a good week (2026-08-17: zero in Texas across fourteen searches, three nationwide).
+ * What earns its keep is the NEGATIVE half -- the rules that killed four of ten -- and the badges
+ * that stop a week being wasted. Ranking machinery for a three-row table is machinery for a problem
+ * ABY does not have.
+ */
+function rfpScreen(rec, todayIso) {
+  const title = String((rec && rec.title) || '');
+  const scope = String((rec && rec.scope) || '');
+  const all = title + ' ' + scope;
+
+  const services = RFP_SERVICES.filter((s) => s.re.test(all)).map((s) => s.id);
+
+  const disqualified = [];
+  for (const rule of RFP_DISQUALIFIERS) {
+    const hay = rule.field === 'title' ? title : all;
+    if (rule.re.test(hay)) disqualified.push({ id: rule.id, why: rule.why });
+  }
+
+  const flags = [];
+  const closes = String((rec && rec.closes_at) || '').trim();
+  let daysToClose = null;
+
+  if (closes) {
+    daysToClose = rfpDaysBetween(todayIso, closes);
+    if (daysToClose !== null && daysToClose < 0) flags.push('closed');
+    else if (daysToClose !== null && daysToClose <= 14) flags.push('closing_soon');
+
+    // THE STALE-CYCLE TELL. A plan year that started BEFORE proposals are due means this is last
+    // year's solicitation resurfacing with this year's plan year in its title. Kept as a flag rather
+    // than a rejection because a mid-year award is a real thing, just a rare one worth looking at.
+    const py = String((rec && rec.plan_year) || '').trim();
+    if (/^[0-9]{4}$/.test(py) && closes > py + '-01-01') flags.push('stale_cycle');
+
+    const mm = rfpWeekdayMismatch(closes, (rec && rec.source_note) || '');
+    if (mm) flags.push('date_conflict');
+  }
+
+  const pre = String((rec && rec.pre_proposal_at) || '').trim();
+  const mandatory = Number((rec && rec.pre_proposal_mandatory) || 0) === 1;
+  // The LACCD failure: a mandatory pre-proposal conference that had already happened by the time the
+  // opportunity surfaced. If it was truly mandatory, ABY is ineligible and every hour after this
+  // point is wasted. It must be impossible to miss.
+  if (mandatory && pre && pre < todayIso) flags.push('pre_proposal_passed');
+
+  const src = String((rec && rec.closes_at_source) || 'summary');
+  if (src !== 'official_page') flags.push('unverified');
+
+  const override = String((rec && rec.override_screen) || '');
+  const screenedOut = override === 'drop' || (disqualified.length > 0 && override !== 'keep');
+
+  let status;
+  if (screenedOut) status = 'screened_out';
+  else if (flags.indexOf('closed') !== -1) status = 'closed';
+  else if (flags.indexOf('date_conflict') !== -1 || flags.indexOf('stale_cycle') !== -1) status = 'conflicting';
+  else if (flags.indexOf('unverified') !== -1) status = 'needs_verification';
+  else status = 'verified_open';
+
+  return { services: services, disqualified: disqualified, flags: flags,
+           status: status, daysToClose: daysToClose };
+}
+
+function rfpToday() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** One row, screened and ready for the page. */
+function rfpDecorate(row, todayIso) {
+  const s = rfpScreen(row, todayIso);
+  return Object.assign({}, row, {
+    region: rfpRegion(row.state),
+    services: s.services,
+    disqualified: s.disqualified,
+    flags: s.flags,
+    status: s.status,
+    daysToClose: s.daysToClose,
+  });
+}
+
+// ── The paste importer ───────────────────────────────────────────────────────────────────────────
+//
+// ⭐⭐ IT DOES NOT PARSE PROSE, AND THAT IS A DECISION RATHER THAN A LIMITATION. The weekly digest is
+// written by a model, so its shape is stable enough to read and never stable enough to depend on.
+// Guessing at prose is exactly how a confident-wrong row reaches a sales pipeline. So this reads a
+// TABLE -- tab, pipe or comma separated, with a header row it works out for itself -- and REFUSES
+// anything it cannot map, out loud, rather than filling in a blank.
+//
+// ▶️ The weekly task should emit that block alongside its prose. That is a prompt change, not a
+// parser.
+
+const RFP_COLUMNS = [
+  { field: 'entity_name', names: ['entity', 'entity name', 'issuer', 'agency', 'organization', 'organisation', 'buyer', 'client'] },
+  { field: 'state', names: ['state', 'st'] },
+  { field: 'title', names: ['title', 'rfp title', 'solicitation', 'description', 'opportunity'] },
+  { field: 'solicitation_number', names: ['number', 'rfp number', 'rfp #', 'solicitation number', 'bid number', 'rfp no'] },
+  { field: 'scope', names: ['scope', 'services', 'services requested', 'service lines'] },
+  { field: 'posted_at', names: ['posted', 'posted at', 'released', 'issued', 'posted date'] },
+  { field: 'closes_at', names: ['closes', 'closes at', 'close date', 'deadline', 'due', 'due date', 'proposals due'] },
+  { field: 'plan_year', names: ['plan year'] },
+  { field: 'questions_due_at', names: ['questions due', 'questions'] },
+  { field: 'pre_proposal_at', names: ['pre-proposal', 'pre proposal', 'preproposal', 'conference'] },
+  { field: 'pre_proposal_mandatory', names: ['mandatory', 'pre-proposal mandatory'] },
+  { field: 'estimated_value', names: ['value', 'estimated value', 'amount'] },
+  { field: 'official_url', names: ['official url', 'official link', 'entity url', 'official page'] },
+  { field: 'listing_url', names: ['listing', 'listing url', 'aggregator', 'aggregator url', 'link', 'url'] },
+  { field: 'entity_type', names: ['entity type', 'type'] },
+  { field: 'source_note', names: ['note', 'notes', 'relevance', 'comment'] },
+];
+
+function rfpSplitRow(line, delim) {
+  let cells = line.split(delim).map((c) => c.trim());
+  // A markdown table writes a leading and trailing pipe, which produces two empty cells.
+  if (delim === '|') {
+    if (cells.length && cells[0] === '') cells = cells.slice(1);
+    if (cells.length && cells[cells.length - 1] === '') cells = cells.slice(0, -1);
+  }
+  return cells;
+}
+
+function rfpDetectDelimiter(line) {
+  if (line.indexOf('\t') !== -1) return '\t';
+  if (line.indexOf('|') !== -1) return '|';
+  if (line.indexOf(',') !== -1) return ',';
+  return null;
+}
+
+/**
+ * Parses a pasted block. Returns { rows, refused, header }.
+ * ⛔ Never invents a value: a row missing an entity or a title is REFUSED with a reason, and the
+ * caller reports how many, exactly like the CRM event-list import does.
+ */
+function rfpParsePaste(text) {
+  const lines = String(text || '').split(/\r?\n/)
+    .filter((l) => l.trim() && !/^[|\s:-]+$/.test(l.trim()));
+  if (!lines.length) return { rows: [], refused: [], header: [] };
+
+  const delim = rfpDetectDelimiter(lines[0]);
+  if (!delim) return { rows: [], refused: [{ line: lines[0], why: 'no columns found (needs tabs, pipes or commas)' }], header: [] };
+
+  const rawHeader = rfpSplitRow(lines[0], delim).map((h) => h.toLowerCase().replace(/[*_]/g, '').trim());
+  const map = rawHeader.map((h) => {
+    const hit = RFP_COLUMNS.find((c) => c.names.indexOf(h) !== -1);
+    return hit ? hit.field : null;
+  });
+  if (map.every((m) => m === null)) {
+    return { rows: [], refused: [{ line: lines[0], why: 'no column heading recognised' }], header: rawHeader };
+  }
+
+  const rows = [], refused = [];
+  for (const line of lines.slice(1)) {
+    const cells = rfpSplitRow(line, delim);
+    const rec = {};
+    map.forEach((field, i) => {
+      if (!field) return;
+      const v = (cells[i] || '').replace(/^\*+|\*+$/g, '').trim();
+      if (v) rec[field] = v;
+    });
+    if (!rec.entity_name || !rec.title) {
+      refused.push({ line: line.slice(0, 120), why: !rec.entity_name ? 'no entity' : 'no title' });
+      continue;
+    }
+    for (const f of ['posted_at', 'closes_at', 'questions_due_at', 'pre_proposal_at']) {
+      if (rec[f] && !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(rec[f])) {
+        // A date we cannot read is dropped and SAID, not guessed at. An unreadable deadline that
+        // silently becomes blank is how a closed RFP reads as open.
+        rec.source_note = (rec.source_note ? rec.source_note + ' ' : '') +
+                          '[' + f + ' not read: ' + rec[f] + ']';
+        delete rec[f];
+      }
+    }
+    if (rec.state) rec.state = rec.state.toUpperCase().slice(0, 2);
+    rows.push(rec);
+  }
+  return { rows: rows, refused: refused, header: rawHeader };
+}
+
+
+// ── Endpoints ────────────────────────────────────────────────────────────────────────────────────
+
+const RFP_FIELDS = ['entity_name', 'entity_type', 'state', 'title', 'solicitation_number', 'scope',
+                    'posted_at', 'closes_at', 'plan_year', 'questions_due_at', 'pre_proposal_at',
+                    'estimated_value', 'official_url', 'listing_url', 'source_note', 'conflict_note'];
+
+function rfpClean(rec) {
+  const out = {};
+  for (const f of RFP_FIELDS) {
+    const v = rec && rec[f];
+    if (v === undefined || v === null) continue;
+    const s = String(v).trim();
+    if (s) out[f] = s.slice(0, 2000);
+  }
+  // A pasted column says 'yes', a JSON body says 1. Both mean the gate is real.
+  const m = String((rec && rec.pre_proposal_mandatory) || '').trim().toLowerCase();
+  out.pre_proposal_mandatory = (m === '1' || m === 'yes' || m === 'y' || m === 'true') ? 1 : 0;
+  return out;
+}
+
+function rfpDateProblem(rec) {
+  for (const f of ['posted_at', 'closes_at', 'plan_year', 'questions_due_at', 'pre_proposal_at']) {
+    const v = rec[f];
+    if (!v) continue;
+    const ok = f === 'plan_year' ? /^[0-9]{4}$/.test(v) : /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v);
+    if (!ok) return f + ' must be ' + (f === 'plan_year' ? 'YYYY' : 'YYYY-MM-DD');
+  }
+  if (rec.entity_type && RFP_ENTITY_TYPES.indexOf(rec.entity_type) === -1) {
+    return 'entity_type must be one of: ' + RFP_ENTITY_TYPES.join(', ');
+  }
+  return null;
+}
+
+/** Find an existing row for the same solicitation. Entity plus number, else entity plus title. */
+async function rfpFindExisting(env, rec) {
+  if (rec.solicitation_number) {
+    const hit = await env.DB.prepare(
+      'SELECT id FROM rfp_opportunity WHERE lower(trim(entity_name)) = ? ' +
+      "AND lower(trim(COALESCE(solicitation_number,''))) = ? LIMIT 1"
+    ).bind(rec.entity_name.toLowerCase(), rec.solicitation_number.toLowerCase()).first();
+    if (hit) return hit.id;
+  }
+  const hit2 = await env.DB.prepare(
+    'SELECT id FROM rfp_opportunity WHERE lower(trim(entity_name)) = ? AND lower(trim(title)) = ? LIMIT 1'
+  ).bind(rec.entity_name.toLowerCase(), rec.title.toLowerCase()).first();
+  return hit2 ? hit2.id : null;
+}
+
+async function rfpInsert(env, rec, source) {
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const cols = RFP_FIELDS.concat(['pre_proposal_mandatory']);
+  const names = ['id'].concat(cols).concat(['source', 'closes_at_source', 'created_at', 'updated_at']);
+  const vals = [id].concat(cols.map((c) => (rec[c] === undefined ? null : rec[c])))
+                   .concat([source, 'summary', now, now]);
+  const stmt = env.DB.prepare(
+    'INSERT INTO rfp_opportunity (' + names.join(', ') + ') VALUES (' +
+    names.map(() => '?').join(', ') + ')'
+  );
+  await stmt.bind(...vals).run();
+  await env.DB.prepare(
+    'INSERT INTO rfp_decision (opportunity_id, disposition, updated_at) VALUES (?,?,?)'
+  ).bind(id, 'new', now).run();
+  return id;
+}
+
+/** GET /api/admin/rfp -- every opportunity, screened, grouped the way Eric reads them. */
+async function handleRfpList(request, env) {
+  const u = new URL(request.url).searchParams;
+  const today = rfpToday();
+
+  const rows = (await env.DB.prepare(
+    'SELECT o.*, d.disposition, d.pass_reason, d.owner, ' +
+    "       (SELECT COUNT(*) FROM crm_events e WHERE e.entity_type = 'rfp' AND e.entity_id = o.id) AS notes " +
+    'FROM rfp_opportunity o LEFT JOIN rfp_decision d ON d.opportunity_id = o.id ' +
+    "ORDER BY COALESCE(o.closes_at, '9999-99-99') ASC"
+  ).all()).results || [];
+
+  const all = rows.map((r) => rfpDecorate(r, today));
+
+  const region = (u.get('region') || '').trim().toLowerCase();
+  const disposition = (u.get('disposition') || '').trim().toLowerCase();
+  let shown = all.filter((r) => r.status !== 'screened_out');
+  if (region) shown = shown.filter((r) => r.region === region);
+  if (disposition) shown = shown.filter((r) => String(r.disposition || 'new') === disposition);
+
+  const counts = {
+    total: all.length,
+    screened_out: all.filter((r) => r.status === 'screened_out').length,
+    open: all.filter((r) => r.status !== 'screened_out' && r.status !== 'closed').length,
+    needs_call: all.filter((r) => r.status === 'conflicting' || r.status === 'needs_verification').length,
+  };
+
+  return jsonResp({
+    today: today,
+    rows: shown,
+    screenedOut: all.filter((r) => r.status === 'screened_out'),
+    counts: counts,
+    dispositions: RFP_DISPOSITIONS,
+    entityTypes: RFP_ENTITY_TYPES,
+  });
+}
+
+/** POST /api/admin/rfp -- one opportunity, typed in. The phone-call and word-of-mouth path. */
+async function handleRfpAdd(request, env) {
+  let body;
+  try { body = await request.json(); } catch (e) { return jsonResp({ error: 'Bad JSON.' }, 400); }
+  const rec = rfpClean(body);
+  if (!rec.entity_name) return jsonResp({ error: 'Who is issuing it?' }, 400);
+  if (!rec.title) return jsonResp({ error: 'What is it called?' }, 400);
+  const bad = rfpDateProblem(rec);
+  if (bad) return jsonResp({ error: bad }, 400);
+
+  const existing = await rfpFindExisting(env, rec);
+  if (existing) return jsonResp({ error: 'Already on the list.', id: existing }, 409);
+
+  const id = await rfpInsert(env, rec, 'manual');
+  return jsonResp({ ok: true, id: id, screen: rfpScreen(rec, rfpToday()) });
+}
+
+/**
+ * POST /api/admin/rfp/import -- paste a block of rows.
+ *
+ * ⭐ TWO STEPS ON PURPOSE. commit:false previews what it read, what it would refuse, and what it
+ * already holds; commit:true writes. Nothing is ever written from a paste without a person seeing
+ * the parse first, because a mis-read deadline is the exact failure this module exists to prevent.
+ */
+async function handleRfpImport(request, env) {
+  let body;
+  try { body = await request.json(); } catch (e) { return jsonResp({ error: 'Bad JSON.' }, 400); }
+  const parsed = rfpParsePaste(body.text);
+  if (!parsed.rows.length && !parsed.refused.length) {
+    return jsonResp({ error: 'Nothing to read.' }, 400);
+  }
+
+  const today = rfpToday();
+  const commit = body.commit === true;
+  const added = [], known = [], refused = parsed.refused.slice();
+
+  for (const row of parsed.rows) {
+    const rec = rfpClean(row);
+    if (!rec.entity_name || !rec.title) { refused.push({ line: rec.title || rec.entity_name || '(blank)', why: 'no entity or title' }); continue; }
+    const bad = rfpDateProblem(rec);
+    if (bad) { refused.push({ line: rec.entity_name + ' - ' + rec.title, why: bad }); continue; }
+
+    const existing = await rfpFindExisting(env, rec);
+    if (existing) { known.push({ entity: rec.entity_name, title: rec.title }); continue; }
+
+    if (commit) await rfpInsert(env, rec, 'digest');
+    added.push({ entity: rec.entity_name, title: rec.title, screen: rfpScreen(rec, today) });
+  }
+
+  return jsonResp({
+    committed: commit,
+    header: parsed.header,
+    added: added, known: known, refused: refused,
+    // ⛔ THE SPLIT, NEVER A TOTAL. "5 added" hides the four it could not read.
+    summary: added.length + (commit ? ' added' : ' new') + ', ' + known.length +
+             ' already known, ' + refused.length + ' refused',
+  });
+}
+
+/** POST /api/admin/rfp/decision -- what ABY decided. Separate from what the world is doing. */
+async function handleRfpDecision(request, env) {
+  let body;
+  try { body = await request.json(); } catch (e) { return jsonResp({ error: 'Bad JSON.' }, 400); }
+  const id = String(body.id || '').trim();
+  const disposition = String(body.disposition || '').trim().toLowerCase();
+  if (!id) return jsonResp({ error: 'Which opportunity?' }, 400);
+  if (RFP_DISPOSITIONS.indexOf(disposition) === -1) {
+    return jsonResp({ error: 'Unknown disposition.' }, 400);
+  }
+  const owner = String(body.owner || '').trim().toLowerCase();
+  if (owner && CRM_REPS.indexOf(owner) === -1) return jsonResp({ error: 'Unknown person.' }, 400);
+
+  const reason = String(body.pass_reason || '').trim();
+  // ⭐⭐ PASSING WITHOUT A REASON IS THE ONE THING THIS MODULE MUST NOT ALLOW. "Did we look at this
+  // entity last year, and why did we not bid?" is the question Eric cannot answer today, and a
+  // blank reason a year from now is indistinguishable from never having looked.
+  if (disposition === 'passed' && !reason) {
+    return jsonResp({ error: 'Say why you passed. A year from now that is the whole value.' }, 400);
+  }
+
+  const exists = await env.DB.prepare('SELECT id FROM rfp_opportunity WHERE id = ?').bind(id).first();
+  if (!exists) return jsonResp({ error: 'No such opportunity.' }, 404);
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    'INSERT INTO rfp_decision (opportunity_id, disposition, pass_reason, owner, updated_at) ' +
+    'VALUES (?,?,?,?,?) ON CONFLICT(opportunity_id) DO UPDATE SET ' +
+    'disposition = excluded.disposition, pass_reason = excluded.pass_reason, ' +
+    'owner = excluded.owner, updated_at = excluded.updated_at'
+  ).bind(id, disposition, reason || null, owner || null, now).run();
+  return jsonResp({ ok: true });
+}
+
+/**
+ * POST /api/admin/rfp/verify -- somebody opened the issuing entity's own page and looked.
+ *
+ * 🔴🔴 THIS IS THE GATE, AND IT IS THE WHOLE POINT OF THE MODULE. Nothing reaches verified_open any
+ * other way. It records WHAT WAS SEEN (the deadline on the official page) and WHO SAW IT, and if
+ * that disagrees with what was imported it keeps BOTH and says so rather than picking a winner.
+ */
+async function handleRfpVerify(request, env) {
+  let body;
+  try { body = await request.json(); } catch (e) { return jsonResp({ error: 'Bad JSON.' }, 400); }
+  const id = String(body.id || '').trim();
+  const seen = String(body.closes_at || '').trim();
+  const by = String(body.by || '').trim().toLowerCase();
+  if (!id) return jsonResp({ error: 'Which opportunity?' }, 400);
+  if (by && CRM_REPS.indexOf(by) === -1) return jsonResp({ error: 'Unknown person.' }, 400);
+  if (seen && !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(seen)) {
+    return jsonResp({ error: 'closes_at must be YYYY-MM-DD.' }, 400);
+  }
+
+  const row = await env.DB.prepare('SELECT * FROM rfp_opportunity WHERE id = ?').bind(id).first();
+  if (!row) return jsonResp({ error: 'No such opportunity.' }, 404);
+
+  // ⛔ COULD NOT VERIFY IS A REAL OUTCOME, NOT AN ERROR TO HIDE. Two of the three live items on
+  // 2026-08-17 needed a phone call, and saying so is more useful than a confident wrong answer.
+  if (body.unresolved === true) {
+    const note = String(body.conflict_note || '').trim() || 'Could not confirm from the official page.';
+    await env.DB.prepare(
+      'UPDATE rfp_opportunity SET conflict_note = ?, updated_at = ? WHERE id = ?'
+    ).bind(note, new Date().toISOString(), id).run();
+    return jsonResp({ ok: true, status: 'conflicting', note: note });
+  }
+
+  const now = new Date().toISOString();
+  let conflict = null;
+  if (seen && row.closes_at && seen !== row.closes_at) {
+    conflict = 'Imported deadline said ' + row.closes_at + '; the official page says ' + seen + '.';
+  }
+  await env.DB.prepare(
+    'UPDATE rfp_opportunity SET closes_at = COALESCE(?, closes_at), ' +
+    "closes_at_source = 'official_page', verified_at = ?, verified_by = ?, " +
+    'conflict_note = COALESCE(?, conflict_note), updated_at = ? WHERE id = ?'
+  ).bind(seen || null, now, by || null, conflict, now, id).run();
+
+  const after = await env.DB.prepare('SELECT * FROM rfp_opportunity WHERE id = ?').bind(id).first();
+  return jsonResp({ ok: true, conflict: conflict, row: rfpDecorate(after, rfpToday()) });
+}
+
+
+/**
+ * /admin/rfp-watch
+ *
+ * ⭐ GROUPED THE WAY ERIC READS THE DIGEST, not the way the database stores it: Texas, then the
+ * states around it, then everywhere else, then a section for the ones that need a phone call.
+ * ⛔ THE PHONE-CALL SECTION IS NOT AT THE BOTTOM. Two of the three real items on 2026-08-17 landed
+ * there, and burying them is how the useful half of the week goes unread.
+ */
+function adminRfpHTML() {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>RFP Watch — ABY admin</title>
+<style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
+${ADMIN_HEADER_CSS}
+ main{max-width:1180px;margin:0 auto;padding:20px}
+ .card{background:#fff;border:1px solid #e3e9f0;border-radius:9px;padding:16px 18px;margin-bottom:16px}
+ h2{margin:0 0 4px;font-size:15px} .sub{margin:0 0 12px;color:#5b6b7f;font-size:13px}
+ table{width:100%;border-collapse:collapse;font-size:14px}
+ th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
+ td{padding:9px 6px;border-bottom:1px solid #eef2f6;vertical-align:top}
+ td.date,th.date{white-space:nowrap;width:1%}
+ .muted{color:#8a97a8} .n{text-align:right}
+ input,select,textarea{padding:6px 8px;border:1px solid #c8d2de;border-radius:6px;font-size:13px;font-family:inherit}
+ textarea{width:100%;min-height:120px}
+ button{padding:6px 12px;border:1px solid #1a5c3a;background:#1a5c3a;color:#fff;border-radius:6px;font-size:13px;cursor:pointer}
+ button.ghost{background:#fff;color:#1a5c3a}
+ .chip{display:inline-block;padding:1px 7px;border-radius:10px;background:#eef3ee;color:#1a5c3a;font-size:11.5px;margin:1px 3px 1px 0}
+ .badge{display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;margin:1px 4px 1px 0;text-transform:uppercase;letter-spacing:.02em}
+ .b-red{background:#fdecea;color:#a1160a;border:1px solid #f5c6c0}
+ .b-amber{background:#fff6e5;color:#8a5a00;border:1px solid #f2dcb3}
+ .b-grey{background:#eef2f6;color:#5b6b7f;border:1px solid #dfe5ec}
+ .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+ .sec{margin:18px 0 6px;font-size:13px;font-weight:700;color:#1a5c3a;text-transform:uppercase;letter-spacing:.04em}
+ details summary{cursor:pointer;color:#5b6b7f;font-size:13px}
+ .note{font-size:12.5px;color:#5b6b7f;margin-top:3px}
+</style></head><body>
+${abyAdminNav('/admin/rfp-watch')}
+<main>
+  <div class="card">
+    <h2>RFP Watch</h2>
+    <p class="sub" id="counts">Loading…</p>
+    <p class="sub">Public entities buying these services direct: cities, counties, school districts, higher ed.
+       This is a different channel from Brokers &amp; Agencies and the two lists never merge.</p>
+    <div>
+      <select id="fRegion" onchange="load()">
+        <option value="">Everywhere</option><option value="tx">Texas</option>
+        <option value="tx_adjacent">OK, LA, AR, NM</option><option value="national">National</option>
+      </select>
+      <select id="fDisp" onchange="load()"><option value="">Any disposition</option></select>
+    </div>
+  </div>
+
+  <div id="lists"></div>
+
+  <div class="card">
+    <h2>Paste a list</h2>
+    <p class="sub">A table with a heading row: tabs, pipes or commas. It works out the columns itself,
+       shows you what it read, and refuses anything it cannot map rather than guessing.
+       Headings it knows include entity, state, title, number, closes, posted, scope, official url, listing.</p>
+    <textarea id="paste" placeholder="entity	state	title	closes	listing"></textarea>
+    <p><button class="ghost" onclick="preview()">Read it</button>
+       <button id="commitBtn" onclick="commitPaste()" style="display:none">Add these</button></p>
+    <div id="pasteOut"></div>
+  </div>
+
+  <div class="card">
+    <h2>Add one</h2>
+    <p class="sub">For an opportunity that arrived by phone or word of mouth.</p>
+    <div class="grid">
+      <input id="aEntity" placeholder="Issuing entity"><input id="aState" placeholder="State" maxlength="2">
+      <input id="aTitle" placeholder="Title"><input id="aNumber" placeholder="Solicitation number">
+      <input id="aCloses" placeholder="Closes YYYY-MM-DD"><input id="aUrl" placeholder="Official page URL">
+    </div>
+    <p><input id="aScope" placeholder="Services requested" style="width:100%;margin-top:10px"></p>
+    <p><button onclick="addOne()">Add</button> <span id="addOut" class="muted"></span></p>
+  </div>
+
+  <div class="card">
+    <details><summary id="dropSummary">Screened out</summary><div id="dropped"></div></details>
+  </div>
+</main>
+<script>
+var DATA = null;
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+var BADGES = {
+  pre_proposal_passed: ['b-red',  'Mandatory pre-proposal already held'],
+  closed:              ['b-grey', 'Closed'],
+  date_conflict:       ['b-red',  'Sources conflict'],
+  stale_cycle:         ['b-red',  'Looks like last year'],
+  closing_soon:        ['b-amber','Closing soon'],
+  unverified:          ['b-amber','Deadline not confirmed']
+};
+
+function load(){
+  var q = [];
+  var r = document.getElementById('fRegion').value; if (r) q.push('region=' + r);
+  var d = document.getElementById('fDisp').value;   if (d) q.push('disposition=' + d);
+  fetch('/api/admin/rfp' + (q.length ? '?' + q.join('&') : ''))
+    .then(function(res){ return res.json(); })
+    .then(function(j){ DATA = j; render(j); })
+    .catch(function(e){ document.getElementById('counts').textContent = 'Could not load: ' + e; });
+}
+
+function render(j){
+  var sel = document.getElementById('fDisp');
+  if (sel.options.length === 1) {
+    j.dispositions.forEach(function(d){
+      var o = document.createElement('option'); o.value = d; o.textContent = d; sel.appendChild(o); });
+  }
+  document.getElementById('counts').textContent =
+    j.counts.total + ' tracked, ' + j.counts.open + ' still open, ' +
+    j.counts.needs_call + ' need a look at the official page, ' +
+    j.counts.screened_out + ' screened out.';
+
+  var call = j.rows.filter(function(r){ return r.status === 'conflicting'; });
+  var rest = j.rows.filter(function(r){ return r.status !== 'conflicting'; });
+  var html = '';
+  html += section('Needs a phone call', call);
+  html += section('Texas', rest.filter(function(r){ return r.region === 'tx'; }));
+  html += section('Oklahoma, Louisiana, Arkansas, New Mexico',
+                  rest.filter(function(r){ return r.region === 'tx_adjacent'; }));
+  html += section('National', rest.filter(function(r){ return r.region === 'national'; }));
+  document.getElementById('lists').innerHTML = html;
+
+  document.getElementById('dropSummary').textContent =
+    'Screened out (' + j.screenedOut.length + ') - the rules can be wrong, so they are kept and shown';
+  document.getElementById('dropped').innerHTML = j.screenedOut.length
+    ? table(j.screenedOut, true) : '<p class="sub">Nothing screened out yet.</p>';
+}
+
+function section(title, rows){
+  var body = rows.length ? table(rows, false)
+    : '<p class="sub">Nothing here. That is the system working, not a fault: a quiet week is the base rate.</p>';
+  return '<div class="card"><div class="sec">' + esc(title) + ' (' + rows.length + ')</div>' + body + '</div>';
+}
+
+function table(rows, dropped){
+  var h = '<table><tr><th>Entity</th><th>What they want</th><th class="date">Closes</th>' +
+          (dropped ? '<th>Screened out because</th>' : '<th>Decision</th>') + '</tr>';
+  rows.forEach(function(r){ h += rowHtml(r, dropped); });
+  return h + '</table>';
+}
+
+function rowHtml(r, dropped){
+  var badges = (r.flags || []).map(function(f){
+    var b = BADGES[f]; return b ? '<span class="badge ' + b[0] + '">' + b[1] + '</span>' : ''; }).join('');
+  var chips = (r.services || []).map(function(s){ return '<span class="chip">' + esc(s) + '</span>'; }).join('');
+  var where = esc(r.entity_name) + (r.state ? ' <span class="muted">' + esc(r.state) + '</span>' : '');
+  var when = r.closes_at ? esc(r.closes_at) : '<span class="muted">not stated</span>';
+  if (r.daysToClose !== null && r.daysToClose >= 0) when += '<div class="note">' + r.daysToClose + ' days</div>';
+
+  var last = '';
+  if (dropped) {
+    last = (r.disqualified || []).map(function(d){ return esc(d.why); }).join('<br>') +
+           '<div class="note"><button class="ghost" onclick="keep(&quot;' + r.id + '&quot;)">This one is real</button></div>';
+  } else {
+    last = '<select onchange="setDisposition(&quot;' + r.id + '&quot;, this.value)">' +
+      (DATA.dispositions || []).map(function(d){
+        return '<option value="' + d + '"' + ((r.disposition || 'new') === d ? ' selected' : '') + '>' + d + '</option>';
+      }).join('') + '</select>' +
+      '<div class="note"><button class="ghost" onclick="verify(&quot;' + r.id + '&quot;)">I checked their own page</button></div>';
+    if (r.conflict_note) last += '<div class="note">' + esc(r.conflict_note) + '</div>';
+    if (r.pass_reason) last += '<div class="note">Passed: ' + esc(r.pass_reason) + '</div>';
+  }
+
+  var links = '';
+  if (r.official_url) links += ' <a href="' + esc(r.official_url) + '" target="_blank" rel="noopener">their page</a>';
+  if (r.listing_url) links += ' <a href="' + esc(r.listing_url) + '" target="_blank" rel="noopener">listing</a>';
+
+  return '<tr><td>' + where + '</td><td>' + esc(r.title) +
+         (r.solicitation_number ? ' <span class="muted">' + esc(r.solicitation_number) + '</span>' : '') +
+         '<div>' + chips + '</div><div>' + badges + '</div>' +
+         (links ? '<div class="note">' + links + '</div>' : '') +
+         '</td><td class="date">' + when + '</td><td>' + last + '</td></tr>';
+}
+
+function post(url, body){
+  return fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
+    .then(function(res){ return res.json().then(function(j){ return { ok: res.ok, j: j }; }); });
+}
+
+function setDisposition(id, disposition){
+  var reason = '';
+  if (disposition === 'passed') {
+    reason = window.prompt('Why are we passing? A year from now this is the whole value.') || '';
+    if (!reason.trim()) { alert('Not recorded: a pass needs a reason.'); load(); return; }
+  }
+  post('/api/admin/rfp/decision', { id:id, disposition:disposition, pass_reason:reason })
+    .then(function(r){ if (!r.ok) alert(r.j.error || 'Did not save.'); load(); });
+}
+
+function verify(id){
+  var seen = window.prompt('What deadline does the ISSUING ENTITY own page show? YYYY-MM-DD, or leave blank if you could not tell.');
+  if (seen === null) return;
+  if (!seen.trim()) {
+    var why = window.prompt('What happened? (for example: their page does not list it, or it needs a phone call)') || '';
+    post('/api/admin/rfp/verify', { id:id, unresolved:true, conflict_note:why }).then(function(){ load(); });
+    return;
+  }
+  post('/api/admin/rfp/verify', { id:id, closes_at:seen.trim() }).then(function(r){
+    if (!r.ok) { alert(r.j.error || 'Did not save.'); return; }
+    if (r.j.conflict) alert(r.j.conflict + ' Both are kept. Neither is thrown away.');
+    load();
+  });
+}
+
+function keep(id){
+  post('/api/admin/rfp/decision', { id:id, disposition:'reviewing' }).then(function(){
+    alert('Moved to reviewing. The screening rules still show their reason.'); load(); });
+}
+
+function preview(){ paste(false); }
+function commitPaste(){ paste(true); }
+
+function paste(commit){
+  var text = document.getElementById('paste').value;
+  post('/api/admin/rfp/import', { text:text, commit:commit }).then(function(r){
+    var j = r.j;
+    if (!r.ok) { document.getElementById('pasteOut').innerHTML = '<p class="sub">' + esc(j.error || 'Could not read that.') + '</p>'; return; }
+    var h = '<p class="sub"><strong>' + esc(j.summary) + '</strong></p>';
+    if (j.header && j.header.length) h += '<p class="note">Columns read: ' + esc(j.header.join(', ')) + '</p>';
+    if (j.added.length) {
+      h += '<table><tr><th>Entity</th><th>Title</th><th>Screening</th></tr>';
+      j.added.forEach(function(a){
+        var flags = (a.screen.flags || []).join(', ');
+        var dq = (a.screen.disqualified || []).map(function(d){ return d.why; }).join('; ');
+        h += '<tr><td>' + esc(a.entity) + '</td><td>' + esc(a.title) + '</td><td>' +
+             esc(dq ? 'screened out: ' + dq : (flags || 'looks like a fit')) + '</td></tr>';
+      });
+      h += '</table>';
+    }
+    if (j.refused.length) {
+      h += '<p class="sub">Refused, and not guessed at:</p><ul class="sub">';
+      j.refused.forEach(function(f){ h += '<li>' + esc(f.why) + ' - ' + esc(f.line) + '</li>'; });
+      h += '</ul>';
+    }
+    document.getElementById('pasteOut').innerHTML = h;
+    document.getElementById('commitBtn').style.display = (!commit && j.added.length) ? '' : 'none';
+    if (commit) { document.getElementById('paste').value = ''; load(); }
+  });
+}
+
+function addOne(){
+  var body = {
+    entity_name: document.getElementById('aEntity').value,
+    state: document.getElementById('aState').value,
+    title: document.getElementById('aTitle').value,
+    solicitation_number: document.getElementById('aNumber').value,
+    closes_at: document.getElementById('aCloses').value,
+    official_url: document.getElementById('aUrl').value,
+    scope: document.getElementById('aScope').value
+  };
+  post('/api/admin/rfp', body).then(function(r){
+    document.getElementById('addOut').textContent = r.ok ? 'Added.' : (r.j.error || 'Not added.');
+    if (r.ok) {
+      ['aEntity','aState','aTitle','aNumber','aCloses','aUrl','aScope'].forEach(function(i){
+        document.getElementById(i).value = ''; });
+      load();
+    }
+  });
+}
+
+function logout(){ fetch('/api/admin/logout',{method:'POST'}).then(function(){ location.href='/admin'; }); }
+load();
+</script>
+</body></html>`;
+}
+
 const ABY_ADMIN_LINKS = [
   { href: '/aby',              label: 'Run a quote',          cls: 'act',
     title: 'Run a quote as ABY, with the internal price adjustments' },
@@ -7303,6 +8147,9 @@ const ABY_ADMIN_LINKS = [
   { href: '/admin/clients',    label: 'Clients' },
   { href: '/admin/brokers',    label: 'Brokers &amp; Agencies' },
   { href: '/admin/pipeline',   label: 'Pipeline' },
+  // Public entities buying direct. Next to Pipeline because both answer 'what should we chase',
+  // and deliberately NOT next to Brokers and Agencies, which is the other channel entirely.
+  { href: '/admin/rfp-watch',  label: 'RFP Watch' },
   { href: '/admin/referrals',  label: 'Referrals' },
   { href: '/admin/rates',      label: 'Rates' },
   // Last on purpose: it is a reference, not a place work happens. ⛔ It is behind withAuth like
@@ -7942,6 +8789,65 @@ const MIGRATIONS = [
   // scanned once the list is a few hundred rows.
   { sql: "CREATE INDEX IF NOT EXISTS agencies_location ON agencies (state, city)",
     index: "agencies_location" },
+
+  // -- RFP WATCH (F-384) -------------------------------------------------------------------------
+  //
+  // Public-entity solicitations for the services ABY administers. A DIFFERENT CHANNEL from the rest
+  // of this admin: the CRM is agencies and agents, the broker channel; an RFP is a city, a county or
+  // a school district buying direct. Eric, 2026-08-23: "this has nothing to do with going through
+  // agents." So an opportunity is never an agency row and the two lists never merge.
+  //
+  // NOTE THERE IS NO status COLUMN, AND THAT IS THE DESIGN. Status is DERIVED at read time from
+  // facts a human actually established -- did somebody open the issuing entity's own page, and when.
+  // A stored status is a value that rots the moment a deadline passes; the same lesson the recorded
+  // broker status taught the other way round. What IS stored is the observation: closes_at_source,
+  // verified_at, verified_by.
+  { sql: "CREATE TABLE IF NOT EXISTS rfp_opportunity (" +
+         "  id TEXT PRIMARY KEY," +
+         "  entity_name TEXT NOT NULL," +
+         "  entity_type TEXT," +               // city | county | school_district | higher_ed | state_agency | special_district | federal | other
+         "  state TEXT," +
+         "  title TEXT NOT NULL," +
+         "  solicitation_number TEXT," +
+         "  scope TEXT," +                     // the services text the screen reads
+         "  posted_at TEXT," +
+         "  closes_at TEXT," +
+         "  closes_at_source TEXT NOT NULL DEFAULT 'summary'," +
+         "  plan_year TEXT," +                 // kept SEPARATE from the dates on purpose. See rfpScreen
+         "  questions_due_at TEXT," +
+         "  pre_proposal_at TEXT," +
+         "  pre_proposal_mandatory INTEGER NOT NULL DEFAULT 0," +
+         "  estimated_value TEXT," +
+         "  official_url TEXT," +              // the ISSUING ENTITY's own page, not a listing
+         "  listing_url TEXT," +
+         "  source TEXT NOT NULL DEFAULT 'manual'," +
+         "  source_note TEXT," +
+         "  verified_at TEXT," +
+         "  verified_by TEXT," +
+         "  conflict_note TEXT," +
+         "  override_screen TEXT," +           // 'keep' or 'drop'. A human overruling the rules
+         "  created_at TEXT NOT NULL," +
+         "  updated_at TEXT NOT NULL)",
+    table: "rfp_opportunity", column: "closes_at_source" },
+
+  { sql: "CREATE INDEX IF NOT EXISTS rfp_opp_closes ON rfp_opportunity (closes_at)",
+    index: "rfp_opp_closes" },
+  // Re-importing the same digest next week must recognise what it already holds, and it matches on
+  // the entity plus the solicitation number.
+  { sql: "CREATE INDEX IF NOT EXISTS rfp_opp_ident ON rfp_opportunity (entity_name, solicitation_number)",
+    index: "rfp_opp_ident" },
+
+  // WHAT THE WORLD IS DOING AND WHAT ABY DECIDED ARE DIFFERENT FACTS, so they are different tables.
+  // Merge them and a solicitation closing erases the record that you looked at this entity and
+  // passed, which is the single thing a weekly markdown file can never do. Eric's value is here.
+  { sql: "CREATE TABLE IF NOT EXISTS rfp_decision (" +
+         "  opportunity_id TEXT PRIMARY KEY," +
+         "  disposition TEXT NOT NULL DEFAULT 'new'," +
+         "  pass_reason TEXT," +
+         "  owner TEXT," +
+         "  updated_at TEXT NOT NULL)",
+    table: "rfp_decision", column: "disposition" },
+
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column

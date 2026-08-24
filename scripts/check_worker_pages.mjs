@@ -123,6 +123,7 @@ function scanTemplateText(name, fnSrc) {
 // refused to pass. Second time that mechanism has paid for itself.
 const PAGES = ["adminHTML", "adminBrokersHTML", "adminRatesHTML", "adminPipelineHTML",
                "adminReferralsHTML", "adminClientsHTML", "brokerPageHTML", "setPasswordPageHTML",
+               "adminRfpHTML",
                "loginHTML",
                // The admin guide. Its BODY is generated from docs/admin-guide.md, so what is checked
                // here is the page SHELL -- that the wrapper still emits valid HTML around it.

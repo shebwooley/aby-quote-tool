@@ -295,6 +295,10 @@ function seedTest(cfg) {
   // the previous run's record and reads 1 where it should have created it.
   d1("DELETE FROM agencies WHERE name IN ('A Firm Nobody Has Quoted','Shared Firm From A List')", cfg);
   d1("DELETE FROM quotes WHERE id LIKE 'crmtest-q-%'", cfg);
+  // RFP WATCH fixtures. Left behind, they make the NEXT run read every row as already known,
+  // which is a green-looking pass over an import that never imported anything.
+  d1("DELETE FROM rfp_decision WHERE opportunity_id IN (SELECT id FROM rfp_opportunity WHERE entity_name LIKE 'RFPTEST%')", cfg);
+  d1("DELETE FROM rfp_opportunity WHERE entity_name LIKE 'RFPTEST%'", cfg);
   d1('INSERT INTO agencies (id, name) VALUES ' +
      AGENCIES.map((a) => `('${a.id}','${a.name}')`).join(','), cfg);
   d1('INSERT INTO broker_directory (email, name, agency, quote_count) VALUES ' +
@@ -404,7 +408,11 @@ async function runSuite() {
   check('the note reads back', r.json && r.json.matched, 1);
   const note = (r.json && r.json.events && r.json.events[0]) || {};
   check('the note text survived the round trip', note.body, 'Spoke to Jana, moving to a PEO in the spring.');
-  check('happened_at defaults to today', note.happened_at, TODAY);
+  // ⚠️ COMPUTED HERE, NOT AT PROCESS START. TODAY is captured when the module loads, and the
+  // self-test runs for twenty minutes. A run that crosses UTC midnight had this assertion red in
+  // EVERY sabotage pass on 2026-08-23, which inflated one sabotage's red count until the harness
+  // called it SUSPECT -- a clock boundary reported as a broken test.
+  check('happened_at defaults to today', note.happened_at, new Date().toISOString().slice(0, 10));
   check('created_by is recorded', note.created_by, 'eric');
 
   // ── 4. BACKDATING, which is the reason happened_at exists at all.
@@ -877,6 +885,175 @@ async function runSuite() {
   check('and the address-less row keys on the name, joining neither',
         amb.some((a) => a.key === 'ambiguous person'), true,
         'live, this is Rebecca Hearne -- two agencies, and the quotes must stay with each');
+  let rq;
+  // ══ RFP WATCH (F-384) ═══════════════════════════════════════════════════════════════════════
+  //
+  // ⭐⭐ THE FIXTURES ARE THE REAL WEEK, NOT INVENTED ONES. Every row below is an item that actually
+  // surfaced on 2026-08-17, with the outcome that week's human review reached. Three qualified and
+  // seven did not, and the seven are the valuable half: a screen that only ever says yes is not a
+  // screen.
+  //
+  // ⚠️ EVERY ASSERTION HERE IS CLOCK-INDEPENDENT OR MOVES WITH THE CLOCK IN ONE DIRECTION ONLY.
+  // A past date stays past and a missed pre-proposal stays missed, so those are safe to pin. A
+  // "closing soon" fixture is computed FROM today instead, because a fixed date would quietly change
+  // meaning next month and the test would rot without ever going red.
+  const TAB = String.fromCharCode(9);
+  const plusDays = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+
+  const rfpRows = [
+    ['entity', 'state', 'title', 'scope', 'closes', 'plan year', 'pre-proposal', 'mandatory', 'note'],
+    // The three that qualified.
+    ['RFPTEST City of Newton', 'MA', 'Flexible Spending Plan Account Administration',
+     'flexible spending plan account administration', plusDays(11), '', '', '', 'cleanest fit of the week'],
+    ['RFPTEST LACCD', 'CA', 'Administration of HRA, FSA and COBRA',
+     'health reimbursement arrangement, flexible spending and COBRA continuation',
+     plusDays(18), '', '2026-08-11', 'yes', 'mandatory conference already held'],
+    ['RFPTEST NYS OER', 'NY', 'FSA, HRA, COBRA Administration and Retiree Billing',
+     'flexible spending, health reimbursement, COBRA event administration, retiree billing',
+     plusDays(10), '', '', '', 'sources disagree on whether it is open'],
+    // ⛔ THE PRECISION CASE, AND THE REASON THE CARRIER RULE READS THE TITLE ONLY. A real FSA
+    // solicitation lists dental and vision as ELIGIBLE EXPENSES. Screening it out on that word would
+    // throw away the best fit on the page.
+    ['RFPTEST City of Kerrville', 'TX', 'Flexible Spending Account Administration',
+     'FSA administration covering dental, vision and medical expenses under Section 125',
+     plusDays(20), '', '', '', ''],
+    // The seven that did not.
+    ['RFPTEST Hidalgo County', 'TX', 'Self-Funded Health Plan Stop-Loss Reinsurance Services',
+     'stop-loss reinsurance', plusDays(9), '', '', '', ''],
+    ['RFPTEST Hidalgo County', 'TX', 'Self-Funded Dental Insurance RFP',
+     'dental insurance', plusDays(10), '', '', '', ''],
+    ['RFPTEST Delaware SEBC', 'DE', 'Medical Third Party Administrator',
+     'medical claims administration for the state health plan', plusDays(30), '', '', '', ''],
+    ['RFPTEST State of Texas', 'TX', 'Self-funded Health Plan Administration',
+     'self-funded health plan administration with stop-loss', '2026-07-20', '', '', '', ''],
+    ['RFPTEST Anytown Retirement Board', 'IL', 'Deferred Compensation 457(b) Administration',
+     'deferred compensation plan administration', plusDays(40), '', '', '', ''],
+    ['RFPTEST Glynn County Schools', 'GA', 'Employee Flexible Benefits Administration',
+     'flexible benefits administration', '2026-05-15', '', '', '', ''],
+    // ⭐⭐ THE STALE-CYCLE TRAP, VERBATIM. Last year's solicitation resurfacing with this year's plan
+    // year in its title, and the stated weekday does not match the stated date. August 20 2026 was a
+    // Thursday. Both tells fire and neither needs a network call.
+    ['RFPTEST Tarrant Appraisal District', 'TX', '2026 Group and Retiree Insurance RFP',
+     'group and retiree insurance administration', '2026-08-20', '2026', '', '',
+     'listed as Wednesday, August 20, 2026'],
+    // Refused rather than guessed at.
+    [ '', 'TX', 'A row with no issuing entity', 'fsa', plusDays(12), '', '', '', ''],
+  ].map((r) => r.join(TAB)).join(NEWLINE);
+
+  rq = await api('POST', '/api/admin/rfp/import', { text: rfpRows, commit: false });
+  check('a pasted table is read without a schema being declared', rq.status, 200);
+  const rfpSeen = {};
+  ((rq.json && rq.json.added) || []).forEach((a) => { rfpSeen[a.title] = a.screen; });
+
+  const dq = (title) => ((rfpSeen[title] && rfpSeen[title].disqualified) || []).map((d) => d.id).sort();
+  const fl = (title) => ((rfpSeen[title] && rfpSeen[title].flags) || []).sort();
+  const sv = (title) => ((rfpSeen[title] && rfpSeen[title].services) || []).sort();
+
+  check('a stop-loss solicitation is screened out',
+        dq('Self-Funded Health Plan Stop-Loss Reinsurance Services'),
+        ['medical_claims', 'stop_loss'],
+        'it is a self-funded health plan bid AND a stop-loss one; both reasons are true and both are kept');
+  check('a dental RFP is screened out on its title',
+        dq('Self-Funded Dental Insurance RFP'), ['carrier_line']);
+  check('a medical claims TPA is screened out',
+        dq('Medical Third Party Administrator'), ['medical_claims'],
+        'ABY does not adjudicate medical claims; this is a different business, not a weak fit');
+  check('deferred compensation is screened out', dq('Deferred Compensation 457(b) Administration'), ['retirement']);
+
+  // ⛔⛔ THE ONE THAT MATTERS MOST. Widening the carrier rule to the scope would look like a
+  // tightening and would silently throw away the best-fitting opportunity on the page.
+  // ⚠️ THE ROW HAS TO BE THERE FOR ITS EMPTY DISQUALIFY LIST TO MEAN ANYTHING. An import that
+  // failed outright also produces an empty list, so the naive form of this check passes on a total
+  // failure -- the same shape as an assertion that compares two failures and finds them equal.
+  check('an FSA solicitation that merely MENTIONS dental is NOT screened out',
+        [Boolean(rfpSeen['Flexible Spending Account Administration']),
+         dq('Flexible Spending Account Administration')], [true, []],
+        'dental and vision are eligible EXPENSES in a real FSA scope; the rule reads the title only');
+
+  check('services are tagged with the quote tool own product ids',
+        sv('Administration of HRA, FSA and COBRA'), ['cobra', 'fsa', 'hra'],
+        'inventing a parallel spelling is how a value becomes invisible to every query that exists');
+  check('retiree billing is recognised as a service ABY sells',
+        sv('FSA, HRA, COBRA Administration and Retiree Billing').indexOf('directBilling') !== -1, true,
+        'the biggest item of the week; a taxonomy without directBilling scores it low');
+
+  check('a mandatory pre-proposal already held is flagged',
+        fl('Administration of HRA, FSA and COBRA').indexOf('pre_proposal_passed') !== -1, true,
+        'if attendance was required and missed, every hour after this point is wasted');
+  check('last year cycle resurfacing is flagged',
+        fl('2026 Group and Retiree Insurance RFP').indexOf('stale_cycle') !== -1, true,
+        'the plan year had already started before proposals were due');
+  check('a stated weekday that contradicts the date is flagged',
+        fl('2026 Group and Retiree Insurance RFP').indexOf('date_conflict') !== -1, true,
+        'August 20 2026 was a Thursday; the source said Wednesday');
+  check('a deadline that has passed reads as closed',
+        fl('Employee Flexible Benefits Administration').indexOf('closed') !== -1, true);
+  check('a deadline inside two weeks is badged',
+        fl('Flexible Spending Plan Account Administration').indexOf('closing_soon') !== -1, true);
+  check('nothing imported is treated as verified',
+        fl('Flexible Spending Plan Account Administration').indexOf('unverified') !== -1, true,
+        'a digest is a summary, and a summary invented a Saturday deadline in this very week');
+
+  check('a row with no issuing entity is refused, not guessed at',
+        ((rq.json && rq.json.refused) || []).length, 1);
+  check('and the split is reported rather than a total',
+        /refused/.test((rq.json && rq.json.summary) || ''), true);
+
+  const rfpBefore = await api('GET', '/api/admin/rfp');
+  check('a preview writes nothing at all',
+        ((rfpBefore.json && rfpBefore.json.rows) || []).filter((x) => /^RFPTEST/.test(x.entity_name)).length, 0,
+        'nothing reaches the list from a paste until a person has seen the parse');
+
+  rq = await api('POST', '/api/admin/rfp/import', { text: rfpRows, commit: true });
+  check('committing the same paste writes the rows', rq.status, 200);
+  const rfpWrote = ((rq.json && rq.json.added) || []).length;
+  rq = await api('POST', '/api/admin/rfp/import', { text: rfpRows, commit: true });
+  check('the commit actually wrote something', rfpWrote > 0, true,
+        'zero added and zero added again agree, so the next check would pass on two failures');
+  check('and pasting the same list again recognises every row instead of duplicating it',
+        [((rq.json && rq.json.added) || []).length, ((rq.json && rq.json.known) || []).length], [0, rfpWrote]);
+
+  const rfpList = await api('GET', '/api/admin/rfp');
+  const rfpRowsOut = ((rfpList.json && rfpList.json.rows) || []).filter((x) => /^RFPTEST/.test(x.entity_name));
+  const rfpByTitle = {};
+  rfpRowsOut.forEach((x) => { rfpByTitle[x.title] = x; });
+  check('a screened-out row is kept and shown, never deleted',
+        ((rfpList.json && rfpList.json.screenedOut) || []).filter((x) => /^RFPTEST/.test(x.entity_name)).length >= 4, true,
+        'the rules can be wrong, and a row that vanished cannot be argued with');
+
+  const newton = rfpByTitle['Flexible Spending Plan Account Administration'];
+  check('an imported row starts as needing verification', newton && newton.status, 'needs_verification');
+
+  // ── the decision, which is the half a weekly markdown file can never keep ──────────────────────
+  rq = await api('POST', '/api/admin/rfp/decision', { id: newton.id, disposition: 'passed' });
+  check('passing without a reason is refused', rq.status, 400,
+        'a blank reason a year from now is indistinguishable from never having looked');
+  rq = await api('POST', '/api/admin/rfp/decision',
+                { id: newton.id, disposition: 'passed', pass_reason: 'no municipal reference in MA' });
+  check('passing with a reason is recorded', rq.status, 200);
+  const rfpAfter = await api('GET', '/api/admin/rfp');
+  const rfpNn = ((rfpAfter.json && rfpAfter.json.rows) || []).find((x) => x.id === newton.id);
+  check('and the reason survives to the page', rfpNn && rfpNn.pass_reason, 'no municipal reference in MA');
+
+  // ── the gate ──────────────────────────────────────────────────────────────────────────────────
+  const laccd = rfpByTitle['Administration of HRA, FSA and COBRA'];
+  rq = await api('POST', '/api/admin/rfp/verify', { id: laccd.id, closes_at: plusDays(19) });
+  check('checking the official page records a conflict rather than picking a winner',
+        /official page says/.test((rq.json && rq.json.conflict) || ''), true,
+        'the feed said one date and the entity said another; both are kept');
+  check('and only then does it read as verified', rq.json && rq.json.row && rq.json.row.status, 'verified_open');
+
+  const nys = rfpByTitle['FSA, HRA, COBRA Administration and Retiree Billing'];
+  rq = await api('POST', '/api/admin/rfp/verify', { id: nys.id, unresolved: true, conflict_note: 'their vendor page says no RFP at this time' });
+  check('could not verify is a real outcome, not an error', rq.status, 200,
+        'it tells Eric to make a phone call, which was genuinely the right next action twice that week');
+
+  // ── notes reuse the CRM table rather than a second one ────────────────────────────────────────
+  rq = await api('POST', '/api/admin/crm',
+                { kind: 'note', body: 'called purchasing', entities: [{ type: 'rfp', id: nys.id }] });
+  check('an opportunity takes a dated note through the same table as everything else', rq.status, 200);
+  rq = await api('GET', '/api/admin/crm?entity_type=rfp&entity_id=' + encodeURIComponent(nys.id));
+  check('and it reads back', ((rq.json && rq.json.events) || []).length >= 1, true);
 }
 
 /**
@@ -947,6 +1124,8 @@ async function runConcurrencySuite() {
   // loop has the race, not just the one that was noticed first.
   const r = await api('GET', '/api/admin/crm/suggest');
   check('the concurrent runs did not report an error either', r.status, 200);
+
+
 }
 
 // ── sabotage: prove each assertion can actually go red ─────────────────────────────────────────
@@ -955,6 +1134,41 @@ async function runConcurrencySuite() {
 // self-test whose sabotages are artificial proves the harness runs; one that replays the historical
 // bug proves the harness would have CAUGHT it.
 const SABOTAGES = [
+  {
+    // ⛔⛔ THE TIGHTENING THAT IS ACTUALLY A LOSS. Reading the carrier rule across the whole scope
+    // looks stricter and throws away real FSA solicitations, because dental and vision are eligible
+    // expenses in every one of them.
+    name: 'the carrier-line rule is widened from the title to the whole scope',
+    find: "  { id: 'carrier_line', field: 'title',",
+    with: "  { id: 'carrier_line', field: 'all',",
+    breaks: 'an FSA solicitation that merely MENTIONS dental is NOT screened out',
+  },
+  {
+    name: 'a pass no longer has to say why',
+    find: "  if (disposition === 'passed' && !reason) {",
+    with: '  if (false) {',
+    breaks: 'passing without a reason is refused',
+  },
+  {
+    // The quiet one: treat an imported deadline as though somebody had checked it. Everything still
+    // renders, and the page starts lying about which rows are trustworthy.
+    name: 'an imported row is treated as though the official page had been checked',
+    find: "                   .concat([source, 'summary', now, now]);",
+    with: "                   .concat([source, 'official_page', now, now]);",
+    breaks: 'an imported row starts as needing verification',
+  },
+  {
+    name: 'a mandatory pre-proposal that has already happened stops being flagged',
+    find: "  if (mandatory && pre && pre < todayIso) flags.push('pre_proposal_passed');",
+    with: "  if (false) flags.push('pre_proposal_passed');",
+    breaks: 'a mandatory pre-proposal already held is flagged',
+  },
+  {
+    name: 'the stale-cycle check stops comparing the plan year with the deadline',
+    find: "    if (/^[0-9]{4}$/.test(py) && closes > py + '-01-01') flags.push('stale_cycle');",
+    with: "    if (false) flags.push('stale_cycle');",
+    breaks: 'last year cycle resurfacing is flagged',
+  },
   {
     // ⭐⭐ THE DANGEROUS DIRECTION. Without the HAVING, a name that belongs to two people folds
     // their quote histories into one row -- silently, permanently, and looking tidier than before.
