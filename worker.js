@@ -84,6 +84,7 @@ export default {
     if (path === '/api/admin/crm/agency-dupes' && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyDupes(request, env));
     if (path === '/api/admin/crm/people'       && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyPeople(request, env));
     if (path === '/api/admin/tidy-note'        && method === 'POST') return withAuth(request, env, () => handleTidyNote(request, env));
+    if (path === '/api/admin/tidy-dismiss'     && method === 'POST') return withAuth(request, env, () => handleTidyDismiss(request, env));
     if (path === '/api/admin/tidy-note/delete' && method === 'POST') return withAuth(request, env, () => handleTidyNoteDelete(request, env));
     if (path === '/api/admin/crm/status'       && method === 'POST') return withAuth(request, env, () => handleCrmRecordStatus(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
@@ -3193,6 +3194,28 @@ function deriveStatus(quotes, lastQuoteIso) {
   return 'regular';
 }
 
+// "These are different firms." An answer, kept.
+async function handleTidyDismiss(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const key = String(body.group_key || '').trim();
+  const names = String(body.names || '').trim().slice(0, 400);
+  if (!key) return jsonResp({ error: 'Which group?' }, 400);
+  try {
+    // Saying it twice is not an error. The second click means the same thing as the first.
+    await env.DB.prepare(
+      'INSERT INTO tidy_dismissed (group_key, names, created_at) VALUES (?,?,?) ' +
+      'ON CONFLICT(group_key) DO UPDATE SET names = excluded.names'
+    ).bind(key, names, new Date().toISOString()).run();
+    return jsonResp({ ok: true });
+  } catch (err) {
+    const msg = String((err && err.message) || err);
+    if (/no such table/i.test(msg)) {
+      return jsonResp({ error: 'The database is behind the code. Open /api/migrate once.' }, 503);
+    }
+    return jsonResp({ error: msg }, 500);
+  }
+}
+
 // A working message about one tidy-up group. It is not a note on a firm: it is an instruction
 // with a lifespan, and it disappears from the screen the moment it is marked done.
 async function handleTidyNote(request, env) {
@@ -3326,6 +3349,14 @@ async function handleCrmAgencyDupes(request, env) {
         if (near1(keys[i], keys[j])) { byKey[keys[i]] = byKey[keys[i]].concat(byKey[keys[j]]); merged[keys[j]] = 1; }
       }
     }
+    // ⭐ EVERY ANSWER ALREADY GIVEN, READ BACK BEFORE ANYTHING IS PROPOSED. A group he has already
+    // ruled on is not offered again, in either section.
+    let dismissed = {};
+    try {
+      const dr = await env.DB.prepare('SELECT group_key FROM tidy_dismissed').all();
+      for (const d of (dr.results || [])) dismissed[d.group_key] = 1;
+    } catch (err) { /* the table arrives with the next migration */ }
+    const gkey = (g) => g.map((r) => r.id).slice().sort().join('|');
     const order = (g) => g.slice().sort((x, y) => (y.quotes - x.quotes) || String(x.name).localeCompare(y.name));
     // ⛔⛔ THE SAME PAIR CAME OUT TWICE, ONE GROUP AFTER THE OTHER -- Eric spotted it on the screen.
     // Filing every row under BOTH its stripped and unstripped key is what lets 'Assured Partners'
@@ -3336,11 +3367,11 @@ async function handleCrmAgencyDupes(request, env) {
     const madeAlready = {};
     const pairs = keys.filter((k) => !merged[k] && byKey[k].length > 1).map((k) => order(byKey[k]))
       .filter((g) => {
-        const sig = g.map((r) => r.id).slice().sort().join('|');
+        const sig = gkey(g);
         if (madeAlready[sig]) return false;
         madeAlready[sig] = 1;
         g.forEach((r) => { seen[r.id] = 1; });
-        return true;
+        return !dismissed[sig];
       }).sort((a, b) => (b[0].quotes || 0) - (a[0].quotes || 0));
 
     // ── PASS TWO: the same FIRST WORD. Weaker, and offered as such.
@@ -3370,6 +3401,7 @@ async function handleCrmAgencyDupes(request, env) {
       const g = byPre[w];
       if (g.length < 2 || g.length > 6) return false;
       if (g.every((r) => seen[r.id])) return false;          // pass one already has them
+      if (dismissed[gkey(order(byPre[w]))]) return false;    // already ruled on
       return new Set(g.map((r) => key(r.name))).size > 1;    // and it is not just pass one again
     }).map((w) => order(byPre[w])).sort((a, b) => (b[0].quotes || 0) - (a[0].quotes || 0));
 
@@ -5639,7 +5671,27 @@ ${abyAdminNav('/admin/brokers')}
 
  // ⚠️ Dismissed for this sitting only, and it says so. Storing "not a duplicate" would be a fourth
  // kind of relationship to reason about, and the finder is cheap to re-run.
- function notDupes(kind, g){ (kind === 'maybe' ? maybes : dupes).splice(g, 1); paintDupes(); }
+ // ⛔ THIS USED TO SPLICE THE ARRAY AND NOTHING ELSE, so the answer lived until the next reload
+ // and the same pair came back. Eric answered several of them more than once before saying so.
+ async function notDupes(kind, g){
+   var list = (kind === 'maybe') ? maybes : dupes;
+   var grp = list[g];
+   if (!grp) return;
+   var r = await fetch('/api/admin/tidy-dismiss', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ group_key: groupKey(grp),
+                            names: grp.map(function(x){ return x.name; }).join(' / ') }),
+   });
+   // ⛔ IF IT DID NOT SAVE, SAY SO AND LEAVE THE ROW. Hiding it locally after a failed write is how
+   // somebody answers the same question a third time.
+   if (!r.ok){
+     var d = await r.json().catch(function(){ return {}; });
+     q('tidyMsg').innerHTML = '<span style="color:#a12622">' + esc(d.error || 'That did not save.') + '</span>';
+     return;
+   }
+   list.splice(g, 1);
+   paintDupes();
+ }
 
  // ⚠️ THE KEY IS THE ROW IDS, SORTED -- not the position in the list and not the name. Resolving a
  // group above this one renumbers everything, and a note pinned to an index would jump to a
@@ -9809,6 +9861,26 @@ const MIGRATIONS = [
   { sql: "ALTER TABLE aby_sales ADD COLUMN agency_id TEXT", table: "aby_sales", column: "agency_id" },
   { sql: "CREATE INDEX IF NOT EXISTS quotes_agency_id ON quotes (agency_id)", index: "quotes_agency_id" },
   { sql: "CREATE INDEX IF NOT EXISTS aby_sales_agency_id ON aby_sales (agency_id)", index: "aby_sales_agency_id" },
+
+  // -- "THESE ARE DIFFERENT FIRMS" HAS TO STICK ------------------------------------------------
+  //
+  // ERIC, 2026-08-24: "there are some that I've answered multiple times that keep showing up on the
+  // tidy up list."
+  //
+  // MY FAULT, AND IT WAS A DELIBERATE CHOICE THAT WAS WRONG. The dismiss control removed the group
+  // from the array in the browser and nothing else -- I wrote "dismissed for this sitting only" in
+  // the comment and reasoned that storing it would be a fourth kind of relationship to think about.
+  // So every judgement he made was thrown away on reload, and the finder cheerfully proposed the
+  // same pair again the next morning.
+  //
+  // A SUGGESTION ENGINE THAT CANNOT BE TOLD NO IS AN ENGINE THAT WASTES THE ONLY EXPENSIVE THING
+  // HERE, which is his attention. "Not a duplicate" is an ANSWER, exactly as much as "keep this
+  // one" is, and it has to survive the page.
+  { sql: "CREATE TABLE IF NOT EXISTS tidy_dismissed (" +
+         "  group_key TEXT PRIMARY KEY," +
+         "  names TEXT NOT NULL DEFAULT \'\'," +
+         "  created_at TEXT NOT NULL)",
+    table: "tidy_dismissed" },
 
   // -- A MESSAGE TO WHOEVER IS FIXING THE DATA, NOT A RECORD ABOUT THE FIRM ---------------------
   //
