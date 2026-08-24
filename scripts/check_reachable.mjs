@@ -240,6 +240,27 @@ const RULES = [
   // Eric, 2026-08-22: the admin is for quoting, keeping up with quotes, AND targeting marketing.
   // This is the screen that turns the agency cleanup into calls, so it is exactly the kind of thing
   // that gets built, gets deployed, and gets no door -- which is what this whole file exists for.
+  // -- THE NEWEST ANSWER IS NOT THE NEWEST QUESTION ----------------------------------------------
+  // Found on the live page 2026-08-24, not by any checker: stepping the product picker fired a
+  // fetch per keystroke, an earlier response arrived last, and the screen showed the ACA heading
+  // over the twelve firms that have never quoted HSA. Everything on it was real; it was answering
+  // a question nobody had asked any more.
+  // This is not a reachability rule in the strict sense, and it lives here anyway because this is
+  // the file that asks whether the screen a person is looking at is the screen they think it is.
+  {
+    name: "the cross-sell list ignores a response its own picker has already superseded",
+    why: "The picker said ACA over the HSA list. A confidently wrong marketing list makes a call that insults somebody.",
+    holds: (f) => /var nqSeq = 0;/.test(f.worker)
+               && /var mine = \+\+nqSeq;/.test(f.worker)
+               && /if \(mine !== nqSeq\) return;/.test(f.worker),
+  },
+  {
+    name: "the marketing list does the same with its four filters",
+    why: "Same shape, same race: rows from the first request under the filters of the second.",
+    holds: (f) => /var mktSeq = 0;/.test(f.worker)
+               && /var mine = \+\+mktSeq;/.test(f.worker)
+               && /if \(mine !== mktSeq\) return;/.test(f.worker),
+  },
   {
     name: "the never-quoted cross-sell list is reachable from the marketing view",
     why: "A marketing list nobody can open produces no calls, which is the same as not having it.",

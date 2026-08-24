@@ -5621,6 +5621,13 @@ ${abyAdminNav('/admin/brokers')}
    await loadMkt();
  }
 
+ // THE SAME RACE AS THE CROSS-SELL LIST, AND FOR THE SAME REASON: four filters, each firing this
+ // on change, each awaiting a fetch. Whichever response ARRIVES last paints, so a quick change of
+ // owner-then-tag can leave the rows from the first request under the filters of the second.
+ // Quieter here than on the never-quoted list -- these filters narrow one population rather than
+ // swapping it for another -- but it is the same defect and the fix is three lines.
+ var mktSeq = 0;
+
  async function loadMkt(){
    var p = [];
    // ⛔ THIS VIEW USES ITS OWN OWNER FILTER, NOT THE ONE ON THE HIDDEN PERFORMANCE BAR. Reusing
@@ -5631,9 +5638,14 @@ ${abyAdminNav('/admin/brokers')}
    if (pr) p.push('priority=' + encodeURIComponent(pr));
    if (tg) p.push('tag=' + encodeURIComponent(tg));
    if (mr) p.push('rep=' + encodeURIComponent(mr));
+   var mine = ++mktSeq;
    q('mkt').innerHTML = '<p class="muted">Loading...</p>';
    var r = await fetch('/api/admin/crm/agencies' + (p.length ? '?' + p.join('&') : ''));
    var d = await r.json().catch(function(){ return {}; });
+   // A response that a later request has already superseded is dropped, errors included: the
+   // request that replaced it is in flight and will paint, and an error from a filter combination
+   // nobody is looking at any more is noise on top of the right answer.
+   if (mine !== mktSeq) return;
    // 🔴 AN ERROR IS NOT AN EMPTY LIST. Three pages in this admin have rendered a failed query as a
    // cheerful empty state; the two must never look the same.
    if (d.error) {
@@ -5717,15 +5729,30 @@ ${abyAdminNav('/admin/brokers')}
  // is the context that makes the answer readable: 22 of 65 have never asked for ACA is a campaign,
  // and it only means something beside "99 firms have ever quoted ACA at all".
  var nqLoaded = false;
+ // \ud83d\udd34\ud83d\udd34 THE NEWEST ANSWER IS NOT THE NEWEST QUESTION, AND ON THIS SCREEN THAT IS THE WORST
+ // POSSIBLE BUG. Found by opening the page: stepping the picker down to ACA fired a fetch per
+ // keystroke, the HSA request resolved AFTER the ACA one, and the page ended up showing
+ // "ACA 1094/1095 Reporting" over the twelve firms that have never quoted HSA.
+ // Nothing looked wrong. The heading agreed with the picker, the rows were real firms with real
+ // quote counts, and the list was for a different product -- so somebody would ring a firm about
+ // something they already buy, holding a screen that says otherwise.
+ // \u26a0\ufe0f An out-of-order response is not rare here: the picker has fifteen options and a keyboard
+ // user passes through several on the way to the one they want.
+ // Every request takes a number; a response whose number is not the latest is DISCARDED.
+ var nqSeq = 0;
 
  async function loadNeverQuoted(){
    var box = q('nqBox');
    var pid = q('nqProduct').value;
    var min = q('nqMin').value || 15;
+   var mine = ++nqSeq;
    box.innerHTML = '<p class="muted">Looking...</p>';
    var r = await fetch('/api/admin/crm/never-quoted?min=' + encodeURIComponent(min)
                        + (pid ? '&product=' + encodeURIComponent(pid) : ''));
    var d = await r.json().catch(function(){ return {}; });
+   // \u26d4 A STALE ANSWER IS DROPPED IN SILENCE, and that is right: the request that replaced it is
+   // already in flight and will paint. Showing an error here would blame the user for typing.
+   if (mine !== nqSeq) return;
    // \ud83d\udd34 AN ERROR IS NOT AN EMPTY LIST. An empty list here reads as "everybody has already
    // been asked", which is the shape of a finished job -- the most expensive thing to get wrong on
    // a screen whose whole purpose is to produce work.
@@ -5766,7 +5793,12 @@ ${abyAdminNav('/admin/brokers')}
      return;
    }
 
-   var h = '<div style="overflow-x:auto"><table class="grid" style="min-width:640px">'
+   // \u26a0\ufe0f COLUMN WIDTHS ARE DECLARED, NOT LEFT TO THE BROWSER. Without a colgroup the firm
+   // names took all the room and squeezed the date column until its heading rendered as "L" and
+   // the dates as "2" -- a column that is present, wrong, and easy to read straight past.
+   var h = '<div style="overflow-x:auto"><table class="grid" style="min-width:720px"><colgroup>'
+         + '<col><col style="width:120px"><col style="width:72px">'
+         + '<col style="width:104px"><col style="width:78px"><col style="width:78px"></colgroup>'
          + '<thead><tr><th>Firm</th><th>Where</th><th class="c">Quotes</th>'
          + '<th class="date">Last quote</th><th>Priority</th><th>Owner</th></tr></thead><tbody>';
    for (var k = 0; k < rows.length; k++){
