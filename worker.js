@@ -9518,6 +9518,25 @@ const MIGRATIONS = [
   // which is built from the quotes themselves and had no owner column at all.
   // A field that exists on the empty table and not on the populated one is the same defect as the
   // Owner column joining through brokers -- built, correct, and unreachable.
+  // -- broker_directory HAS EXISTED ONLY IN PRODUCTION, AND NOTHING CREATED IT ANYWHERE -------
+  //
+  // FOUND 2026-08-24 by rehearsing this whole list against a real SQLite engine. FOUR ALTERs and
+  // one INDEX below name this table, the worker reads and writes it on the CRM, the agent list and
+  // the quote-save path -- and no CREATE TABLE for it existed in this list, in schema.sql, or
+  // anywhere else in the repo. The only copy of its shape was a FIXTURE inside a checker
+  // (scripts/check_crm.mjs), which is the one place a shape cannot help a real database.
+  // It was made by hand on live D1 and never written down. Same defect as aby_sales below and as
+  // quotes.agency_id above, and it is the FOURTH instance: production is the one environment
+  // somebody is always looking at, which is exactly why this survives.
+  // COPIED VERBATIM FROM PRODUCTION (sqlite_master, 2026-08-24), not written from memory. Only the
+  // seven ORIGINAL columns are here; assigned_rep, person_id, agency_id and source stay as the
+  // ALTERs that already add them, so each of those facts is still stated exactly once.
+  { sql: "CREATE TABLE IF NOT EXISTS broker_directory (email TEXT PRIMARY KEY, " +
+         "name TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', " +
+         "agency TEXT NOT NULL DEFAULT '', first_seen TEXT NOT NULL DEFAULT '', " +
+         "last_seen TEXT NOT NULL DEFAULT '', quote_count INTEGER NOT NULL DEFAULT 0)",
+    table: "broker_directory", column: "quote_count" },
+
   { sql: "ALTER TABLE broker_directory ADD COLUMN assigned_rep TEXT", table: "broker_directory", column: "assigned_rep" },
 
   { sql: "ALTER TABLE agencies ADD COLUMN parent_id TEXT",         table: "agencies", column: "parent_id" },
@@ -9880,7 +9899,7 @@ const MIGRATIONS = [
          "  group_key TEXT PRIMARY KEY," +
          "  names TEXT NOT NULL DEFAULT \'\'," +
          "  created_at TEXT NOT NULL)",
-    table: "tidy_dismissed" },
+    table: "tidy_dismissed", column: "group_key" },
 
   // -- A MESSAGE TO WHOEVER IS FIXING THE DATA, NOT A RECORD ABOUT THE FIRM ---------------------
   //
@@ -9902,7 +9921,7 @@ const MIGRATIONS = [
          "  body TEXT NOT NULL," +
          "  created_at TEXT NOT NULL," +
          "  done_at TEXT)",
-    table: "tidy_message" },
+    table: "tidy_message", column: "body" },
   { sql: "CREATE INDEX IF NOT EXISTS tidy_message_open ON tidy_message (done_at, group_key)",
     index: "tidy_message_open" },
 
@@ -9954,7 +9973,7 @@ const MIGRATIONS = [
          "announced_at TEXT NOT NULL DEFAULT '', quote_id TEXT, quote_number TEXT NOT NULL DEFAULT '', " +
          "source TEXT NOT NULL DEFAULT 'email-sweep-2026-08', note TEXT NOT NULL DEFAULT '', " +
          "quote_match TEXT NOT NULL DEFAULT '', effective_date_is_estimate INTEGER)",
-    table: "aby_sales" },
+    table: "aby_sales", column: "employer" },
   { sql: "CREATE INDEX IF NOT EXISTS aby_sales_agency ON aby_sales (agency)", index: "aby_sales_agency" },
   { sql: "ALTER TABLE agencies ADD COLUMN city TEXT",  table: "agencies", column: "city" },
   { sql: "ALTER TABLE agencies ADD COLUMN state TEXT", table: "agencies", column: "state" },
@@ -10039,6 +10058,54 @@ const MIGRATIONS = [
          "  updated_at TEXT NOT NULL)",
     table: "rfp_decision", column: "disposition" },
 
+  // -- EVERYTHING BELOW EXISTED IN PRODUCTION ONLY, AND IN NO MIGRATION ------------------------
+  //
+  // FOUND 2026-08-24 by rehearsing this whole list against a real SQLite engine and diffing the
+  // result against live sqlite_master. FIVE COLUMNS and THREE INDEXES were on the live database
+  // and created by nothing, anywhere. Added by hand as each feature was built, and never written
+  // down -- the same defect as broker_directory above, as aby_sales, and as quotes.agency_id.
+  // PRODUCTION IS THE ONE ENVIRONMENT SOMEBODY IS ALWAYS LOOKING AT. That is why this keeps
+  // surviving, and it is why the checker now diffs against a snapshot of the live schema rather
+  // than trusting that somebody remembered.
+  // TWO OF THESE FAIL SILENTLY RATHER THAN LOUDLY, WHICH IS WORSE. The writes for
+  // resolved_pricing and employer_counts are already wrapped in a try/catch that console.warns
+  // "column missing?" and carries on -- so on any database but production the share link quietly
+  // loses its stored pricing and the employer's headcount is quietly not saved. The feature looks
+  // built and does nothing.
+  // COPIED VERBATIM FROM PRODUCTION (sqlite_master, 2026-08-24), not written from memory: a
+  // migration that creates a DIFFERENT shape from the live one is worse than no migration.
+
+  // The quote's disposition. schema.sql has only ever carried this as a COMMENT telling a human to
+  // paste an ALTER by hand -- so it has never been part of any automated migration at all.
+  // P Pending (default), I In process, S Sold, D Dead. ABY's internal vocabulary, deliberately
+  // not the broker-facing five words.
+  { sql: "ALTER TABLE quotes ADD COLUMN status TEXT DEFAULT 'P'", table: "quotes", column: "status" },
+
+  // The share link (2026-08-21). The token is what lets an employer open a quote with no login,
+  // and adjust their own participant count on it.
+  { sql: "ALTER TABLE quotes ADD COLUMN share_token TEXT", table: "quotes", column: "share_token" },
+  // UNIQUE, and PARTIAL so the many rows with no token do not collide with each other. This is
+  // what makes the "claim a token WHERE share_token IS NULL" write safe under a race.
+  { sql: "CREATE UNIQUE INDEX IF NOT EXISTS quotes_share_token_unique ON quotes(share_token) " +
+         "WHERE share_token IS NOT NULL",
+    index: "quotes_share_token_unique" },
+
+  // The prices as they were RESOLVED when the quote ran, so a shared link re-prices against what
+  // the employer was actually shown rather than against today's rate card.
+  { sql: "ALTER TABLE quotes ADD COLUMN resolved_pricing TEXT", table: "quotes", column: "resolved_pricing" },
+
+  // What the EMPLOYER said their participant counts really are, and when they said it. Kept apart
+  // from the broker's original figures: they are two different people's answers to one question.
+  { sql: "ALTER TABLE quotes ADD COLUMN employer_counts TEXT", table: "quotes", column: "employer_counts" },
+  { sql: "ALTER TABLE quotes ADD COLUMN employer_counts_at TEXT", table: "quotes", column: "employer_counts_at" },
+
+  // THE IDEMPOTENCY KEY FOR THE SALES IMPORT, and the most expensive of these to be missing.
+  // Without it a re-run of the mailbox sweep duplicates every sale it has already loaded, and the
+  // Sales column beside Quotes on the marketing list silently doubles.
+  { sql: "CREATE UNIQUE INDEX IF NOT EXISTS aby_sales_key ON aby_sales(employer, announced_at, products)",
+    index: "aby_sales_key" },
+  { sql: "CREATE INDEX IF NOT EXISTS aby_sales_contact ON aby_sales(broker_contact)",
+    index: "aby_sales_contact" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column
@@ -10046,9 +10113,36 @@ const MIGRATIONS = [
 // message names the exact problem ("no such column" vs "no such table").
 // ⚠️ Deliberately NOT reused for the index: an index is invisible to a SELECT.
 async function columnExists(env, table, column) {
+  // THIS ASKED THE QUESTION IN A WAY D1 CANNOT ANSWER, AND IT COULD NOT RETURN FALSE.
+  // It used to run  SELECT "<column>" FROM "<table>" LIMIT 1  and treat a thrown error as absent.
+  // SQLite's double-quoted-string misfeature is ON in D1: where the identifier does not resolve
+  // to a column, the double-quoted text degrades to a STRING LITERAL and the query SUCCEEDS.
+  // MEASURED AGAINST LIVE D1, 2026-08-24:
+  //     SELECT "no_such_column_at_all" AS probe FROM "quotes" LIMIT 1
+  //   returns one row with probe = no_such_column_at_all, and success: true.
+  // So this returned ok for EVERY column name on any table that exists. An assertion that reads
+  // the value under test cannot fail.
+  // THAT IS THE EVIDENCE F-357 WAS CLOSED ON, and that SITE_LOCKED was lifted on: "missing came
+  // back empty" is what this function returns whether or not the columns landed. Production is in
+  // fact correct -- all 46 declared columns and 16 indexes were re-verified against sqlite_master
+  // on 2026-08-24 -- so nothing was broken by it. The PROOF was worthless, not the schema.
+  // pragma_table_info is a real catalogue lookup and discriminates: 1 for a column that exists,
+  // 0 for one that does not. Both directions verified on live D1 before this was changed.
+  // THE TABLE NAME IS INTERPOLATED AND THE COLUMN IS BOUND, DELIBERATELY. D1's authorizer refuses
+  // a non-constant argument to pragma_table_info with SQLITE_AUTH -- measured, by trying it -- so
+  // the table cannot be a parameter. It comes from the hard-coded MIGRATIONS list, never from a
+  // request, and it is still validated here rather than trusted.
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(table || ''))) {
+    return { ok: false, error: 'unsafe table name: ' + String(table) };
+  }
+  // An entry that declares no column cannot be verified at all, and must not read as present.
+  if (!String(column || '')) return { ok: false, error: 'migration entry declares no column' };
   try {
-    await env.DB.prepare(`SELECT "${column}" FROM "${table}" LIMIT 1`).all();
-    return { ok: true };
+    const r = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM pragma_table_info('" + table + "') WHERE name = ?"
+    ).bind(column).all();
+    const rows = (r && r.results) || [];
+    return { ok: Boolean(rows.length && Number(rows[0].n) > 0) };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }
@@ -10145,20 +10239,44 @@ async function stripImportedSourceNotes(env) {
   }
 }
 
-async function handleMigrate(env) {
-  const statements = [];
+function migrationPhase(sql) {
+  // 0 CREATE TABLE, 1 ALTER TABLE (add a column), 2 CREATE INDEX. Every entry is one of the three.
+  if (/^\s*CREATE\s+TABLE/i.test(sql)) return 0;
+  if (/^\s*ALTER\s+TABLE/i.test(sql)) return 1;
+  return 2;
+}
 
-  for (const m of MIGRATIONS) {
+async function handleMigrate(env) {
+  // THREE PHASES, AND THAT IS A FIX FOR THE CLASS RATHER THAN FOR EIGHT LINES.
+  // Run in declaration order, an ALTER or an INDEX written ABOVE its own CREATE TABLE fails on
+  // every database that does not already have that table -- which means production, where somebody
+  // made the table by hand, and nowhere else. The gap only shows up when a NEW feature touches the
+  // column, and then it looks like the new feature is broken.
+  // MEASURED 2026-08-24 by rehearsing this list against a real SQLite engine: EIGHT statements
+  // failed on a fresh database, across THREE tables -- aby_clients, broker_directory and aby_sales.
+  // A fresh D1 came up with a DIFFERENT SHAPE from production and nothing said so.
+  // Reordering those eight would fix those eight and leave the trap armed for the next entry
+  // somebody appends. Sorting by KIND removes the ordering question: a table cannot be altered
+  // before it is created, whatever order the lines are written in.
+  // THE REPORT IS PUT BACK INTO DECLARATION ORDER, because that is the order a human reading this
+  // list expects, and the checkers index into it positionally.
+  const order = MIGRATIONS.map(function (m, i) { return i; }).sort(function (a, b) {
+    return migrationPhase(MIGRATIONS[a].sql) - migrationPhase(MIGRATIONS[b].sql) || a - b;
+  });
+  const statements = new Array(MIGRATIONS.length);
+
+  for (const i of order) {
+    const m = MIGRATIONS[i];
     try {
       await env.DB.prepare(m.sql).run();
-      statements.push({ sql: m.sql, result: "applied" });
+      statements[i] = { sql: m.sql, result: "applied" };
     } catch (e) {
       const msg = String((e && e.message) || e);
       // "duplicate column name: x" is SQLite saying the migration already ran. It is the ONLY
       // benign failure here, so it is the only one matched by name -- anything else is reported
       // as a failure with its message, rather than being assumed harmless.
       const benign = /duplicate column name/i.test(msg) || /already exists/i.test(msg);
-      statements.push({ sql: m.sql, result: benign ? "already" : "failed", error: msg });
+      statements[i] = { sql: m.sql, result: benign ? "already" : "failed", error: msg };
     }
   }
 
