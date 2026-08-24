@@ -83,6 +83,8 @@ export default {
     if (path === '/api/admin/crm/import'       && method === 'POST') return withAuth(request, env, () => handleCrmImport(request, env));
     if (path === '/api/admin/crm/agency-dupes' && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyDupes(request, env));
     if (path === '/api/admin/crm/people'       && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyPeople(request, env));
+    if (path === '/api/admin/tidy-note'        && method === 'POST') return withAuth(request, env, () => handleTidyNote(request, env));
+    if (path === '/api/admin/tidy-note/delete' && method === 'POST') return withAuth(request, env, () => handleTidyNoteDelete(request, env));
     if (path === '/api/admin/crm/status'       && method === 'POST') return withAuth(request, env, () => handleCrmRecordStatus(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
     // Referral partners (F-referrals, Eric 2026-08-19)
@@ -2548,6 +2550,25 @@ async function handleCrmRelationship(request, env) {
   const me = await env.DB.prepare('SELECT id, name FROM agencies WHERE id = ?').bind(id).first();
   if (!me) return jsonResp({ error: 'No such agency.' }, 404);
 
+  // 🔴🔴 A CHAIN IS SILENT AND THE ROLLUP TRUNCATES IT. The rollup joins the parent with a
+  // SINGLE join, so A -> B -> C loses A entirely. Eric built two chains within minutes of the
+  // tidy-up screen shipping, just by resolving groups in the order they appeared: he aliased
+  // Rogers to Rogers Benefit Group, then Rogers Benefit Group to Emerson Rogers.
+  // ⛔ THE UI CANNOT PREVENT THIS -- the second click is legitimate on its own and the chain only
+  // exists afterwards. So the rule lives here: a parent that is itself a child is climbed past.
+  let realParent = parentId;
+  if (realParent) {
+    for (let hop = 0; hop < 5; hop++) {
+      const up = await env.DB.prepare('SELECT parent_id FROM agencies WHERE id = ?').bind(realParent).first();
+      if (!up || !up.parent_id) break;
+      realParent = up.parent_id;
+    }
+    // ⚠️ AND ANY CHILDREN THIS ROW ALREADY HAS COME WITH IT, or they are orphaned onto a row
+    // that is about to disappear from the list.
+    await env.DB.prepare('UPDATE agencies SET parent_id = ? WHERE parent_id = ?')
+      .bind(realParent, id).run();
+  }
+
   // Clearing it is a real action: somebody recorded a relationship and was wrong.
   if (!rel) {
     await env.DB.prepare(
@@ -2591,7 +2612,51 @@ async function handleCrmRelationship(request, env) {
 
   await env.DB.prepare(
     'UPDATE agencies SET parent_id = ?, relationship = ?, relationship_note = ? WHERE id = ?'
-  ).bind(parentId, rel, note || null, id).run();
+  ).bind(realParent, rel, note || null, id).run();
+
+  // ⭐⭐ AND THE QUOTES AND SALES ARE CORRECTED IN THE SAME CLICK.
+  //
+  // ERIC, 2026-08-24: "I'd rather you change the name of the firm and add to the note that the
+  // quote itself was saved with a different firm name (and say the misspelling or the way it was
+  // written)." He asked first whether the logs were being updated at all -- they were not. The
+  // lists followed the alias link at READ time, which works only where somebody remembered to
+  // follow it, and twice they had not.
+  //
+  // ⛔ THE OBVIOUS OBJECTION IS ANSWERED BY HIS OWN DESIGN. Overwriting the typed name would
+  // normally destroy the evidence that tells a typo from a rename -- so the original spelling is
+  // written into the quote's own note, in words, where somebody reading that quote can see it.
+  // Nothing is lost and nothing has to be inferred later.
+  //
+  // ⚠️ ONLY FOR AN ALIAS. A division still trades under its own name and a quote it wrote was
+  // correctly attributed; renaming those would be rewriting history rather than correcting a typo.
+  // An acquisition is a real event and its old quotes belong to the old name.
+  if (rel === 'alias' && realParent) {
+    const survivor = await env.DB.prepare('SELECT name FROM agencies WHERE id = ?')
+      .bind(realParent).first();
+    const to = (survivor && survivor.name) || '';
+    const from = String(me.name || '').trim();
+    if (to && from && to.toLowerCase() !== from.toLowerCase()) {
+      const stamp = new Date().toISOString().slice(0, 10);
+      for (const t of [['quotes', 'broker_agency', 'notes', 'quote'],
+                       ['aby_sales', 'agency', 'note', 'sale']]) {
+        try {
+          // Every SET expression reads the OLD row, so the previous name can be quoted into the
+          // note while the column holding it is being replaced.
+          await env.DB.prepare(
+            'UPDATE ' + t[0] + ' SET ' + t[2] + " = TRIM(COALESCE(" + t[2] + ",'') " +
+            " || CASE WHEN TRIM(COALESCE(" + t[2] + ",'')) = '' THEN '' ELSE '  ' END " +
+            " || 'Agency name corrected to \"' || ? || '\" on ' || ? || '. This " + t[3] +
+            " was saved as \"' || trim(" + t[1] + ") || '\".'), " +
+            t[1] + ' = ?, agency_id = ? WHERE lower(trim(' + t[1] + ')) = ?'
+          ).bind(to, stamp, to, realParent, from.toLowerCase()).run();
+        } catch (err) {
+          // Reported, never thrown: the relationship is already saved, and half a save that looks
+          // like a failure is worse than a warning nobody sees on a good day.
+          console.warn('could not correct ' + t[0] + ':', String((err && err.message) || err));
+        }
+      }
+    }
+  }
   return jsonResp({ ok: true, relationship: rel });
 }
 
@@ -3106,82 +3171,14 @@ async function handleCrmAgencyPeople(request, env) {
   }
 }
 
-async function handleCrmAgencyDupes(request, env) {
-  try {
-    const { results } = await env.DB.prepare(
-      'SELECT a.id, a.name, a.created_at, ' +
-      '       (SELECT COUNT(*) FROM brokers b WHERE b.agency_id = a.id) AS accounts, ' +
-      '       (SELECT COUNT(*) FROM broker_directory d WHERE d.agency_id = a.id) AS agents ' +
-      "FROM agencies a WHERE COALESCE(a.relationship,'') NOT IN ('succeeded','alias') " +
-      "  AND a.name NOT LIKE '%;%' ORDER BY a.name"
-    ).all();
-    const rows = results || [];
-    // \U0001F534 THIS ONLY EVER CAUGHT PUNCTUATION. Stripping non-letters makes 'Polaris' and
-    // 'Polaris Benefits' DIFFERENT keys, so it found a handful of rows while 57 real clusters sat
-    // in front of it. \u26a0\ufe0f A duplicate finder that misses the duplicates reads as 'the list is
-    // clean', which is worse than not having one.
-    // \u2b50 The words dropped below are the ones that carry NO identity: legal suffixes and the
-    // industry nouns every agency in the book shares. What survives is the actual name.
-    // \u26d4 SUGGESTIONS ONLY, AND THE NOTE BELOW SAYS SO. 'Lone Star Benefits' and 'Lone Star
-    // Insurance' may be one firm or two and only a person knows -- so this proposes, never merges.
-    const NOISE = [' llc',' l.l.c.',' inc.',' inc',' co.',' company',' agency',' agencies',
-      ' insurance',' services',' service',' group',' benefits',' benefit',' solutions',
-      ' partners',' & associates',' and associates',' associates',' of texas'];
-    const key = (s) => {
-      let t = ' ' + String(s || '').toLowerCase().replace(/[^a-z0-9&. ]+/g, ' ') + ' ';
-      for (const w of NOISE) t = t.split(w + ' ').join(' ');
-      return t.replace(/[^a-z0-9]+/g, '');
-    };
-    const byKey = {};
-    for (const r of rows) {
-      const k = key(r.name);
-      if (!k) continue;
-      (byKey[k] = byKey[k] || []).push(r);
-    }
-    const pairs = Object.keys(byKey).filter((k) => byKey[k].length > 1).map((k) => byKey[k]);
-    return jsonResp({
-      pairs, matched: pairs.length,
-      note: 'Suggestions only. Two similar names may be one firm or two, and only a person knows.',
-    });
-  } catch (err) {
-    return jsonResp({ pairs: [], error: String((err && err.message) || err) }, 500);
-  }
-}
-
-
-/**
- * THE RECORDED STATUS, BESIDE THE LIVE ONE.
- *
- * ERIC, 2026-08-23: "We could do an analysis to see we tagged this originally as one quote ever and
- * now they have done six, something is working."
- *
- * THAT QUESTION IS UNANSWERABLE FROM A DERIVED STATUS ALONE, and the reason is worth stating once:
- * by the time you ask it, the derivation has already moved. If the tool recomputes "one quote ever"
- * every time you look, then the day they reach six it silently stops saying one -- and the thing you
- * wanted to measure is gone.
- *
- * SO A FIRM CARRIES BOTH:
- *   RECORDED  what somebody said they were, ON A DATE. Frozen. Never recomputed, never migrated
- *             when the rules change. This is the MEASUREMENT.
- *   DERIVED   what the quote log says about them TODAY. Computed on read, never stored. This is
- *             the RESULT.
- *
- * IT IS A TAG, NOT A NEW MECHANISM. A recorded status is exactly a tag with a happened_at, so it
- * lives in crm_events with the rest of the history and needs no second table, no second write path
- * and no second thing to keep in step. What it needs is the DISCIPLINE of never being rewritten.
- *
- * THE VOCABULARY IS DELIBERATELY SHORT AND IS ABOUT VOLUME, NOT INTENT. Priority already answers
- * "how much would we like them" -- a judgment. This answers "what were they doing when we looked",
- * which is an observation, and the two must not be collapsed into one column.
- */
-const RECORDED_STATUSES = ['never quoted', 'quoted once', 'occasional', 'regular', 'former'];
-const RECORDED_PREFIX = 'status: ';
-
-/**
- * What the quote log says TODAY. Derived on read, never stored.
- * The bands match the recorded vocabulary so the two can be compared at a glance -- that comparison
- * is the entire feature, and it fails if one side counts in different buckets from the other.
- */
+// 🔴🔴 RESTORED 2026-08-24 AFTER A SPLICE ATE IT AND TOOK THE LIVE PAGE DOWN.
+// The edit replaced handleCrmAgencyDupes by cutting from its opening line to the NEXT
+// 'async function' -- and this helper sat in between, so it went with it. The marketing list
+// then rendered 'Could not load the list: deriveStatus is not defined' for every visitor.
+// ⛔ CUTTING TO THE NEXT DECLARATION ASSUMES NOTHING LIVES BETWEEN THE TWO. Replace a function
+// by matching its own braces, or anchor on the exact last line of the thing being replaced.
+// ⭐ It was caught in one look at the page. No parser could: the syntax was valid and the
+// reference only fails at RUN time -- which is why 'all pages emit valid JS' stayed green.
 function deriveStatus(quotes, lastQuoteIso) {
   const n = Number(quotes || 0);
   if (!n) return 'never quoted';
@@ -3196,16 +3193,278 @@ function deriveStatus(quotes, lastQuoteIso) {
   return 'regular';
 }
 
-/**
- * Record what a firm looks like today, so it can be compared with what it looks like later.
- *
- * IT IS WRITTEN AS A TAG and therefore inherits everything tags already do: a date you can backdate,
- * one row per event, and the same-day duplicate guard.
- *
- * IT REFUSES TO OVERWRITE. There is no update path on purpose. Recording a second status on a later
- * date is a second observation and is exactly what makes the history worth having; rewriting the
- * first would destroy the only thing it was for.
- */
+// A working message about one tidy-up group. It is not a note on a firm: it is an instruction
+// with a lifespan, and it disappears from the screen the moment it is marked done.
+async function handleTidyNote(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const key = String(body.group_key || '').trim();
+  const text = String(body.body || '').trim().slice(0, 1000);
+  const names = String(body.names || '').trim().slice(0, 400);
+  if (!key || !text) return jsonResp({ error: 'Which group, and what about it?' }, 400);
+  try {
+    await env.DB.prepare(
+      'INSERT INTO tidy_message (id, group_key, names, body, created_at) VALUES (?,?,?,?,?)'
+    ).bind(crypto.randomUUID(), key, names, text, new Date().toISOString()).run();
+    return jsonResp({ ok: true });
+  } catch (err) {
+    const msg = String((err && err.message) || err);
+    if (/no such table/i.test(msg)) {
+      return jsonResp({ error: 'The database is behind the code. Open /api/migrate once.' }, 503);
+    }
+    return jsonResp({ error: msg }, 500);
+  }
+}
+
+// Deleting is how Eric takes one back before it has been acted on. Marking done is what I do
+// AFTER acting -- that keeps a record of what was asked without it reappearing on the screen.
+async function handleTidyNoteDelete(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const id = String(body.id || '').trim();
+  if (!id) return jsonResp({ error: 'Which note?' }, 400);
+  try {
+    const r = await env.DB.prepare('DELETE FROM tidy_message WHERE id = ?').bind(id).run();
+    // A delete that matched nothing is not a success. It usually means two tabs are open.
+    const n = (r && r.meta && r.meta.changes) || 0;
+    if (!n) return jsonResp({ error: 'That note was already gone.' }, 404);
+    return jsonResp({ ok: true });
+  } catch (err) {
+    return jsonResp({ error: String((err && err.message) || err) }, 500);
+  }
+}
+
+// RESTORED 2026-08-24. A splice replacing a nearby function swallowed these, and the marketing
+// list then threw on every request -- the handler's catch turned it into an empty agency list,
+// so the page looked like a book with no firms in it rather than a broken query.
+// THIS IS THE SECOND TIME IN ONE SESSION. deriveStatus went the same way, and the check I added
+// afterwards compared top-level FUNCTIONS only -- these are consts, so it saw nothing missing.
+// Compare every top-level declaration, not just the ones that look like code.
+const RECORDED_STATUSES = ['never quoted', 'quoted once', 'occasional', 'regular', 'former'];
+const RECORDED_PREFIX = 'status: ';
+
+async function handleCrmAgencyDupes(request, env) {
+  try {
+    // ⭐⭐ THE QUOTE HISTORY IS WHAT DECIDES WHICH NAME TO KEEP. Eric, 2026-08-24: "I think it would
+    // be helpful to see some stats next to the rest so I know how often they have quoted." It had
+    // already cost him a wrong answer: with every row reading "0 agents" he aliased Marsh & McLennan
+    // into a 2-quote row when MMA (743) was the one to keep.
+    // ⚠️ GROUPED CTEs, NOT PER-ROW SUBQUERIES -- the earlier version locked the page for fifteen
+    // seconds. The whole query runs in about 20ms.
+    const { results } = await env.DB.prepare(
+      "WITH q AS (SELECT lower(trim(broker_agency)) k, COUNT(*) n, MAX(created_at) last " +
+      "           FROM quotes WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1), " +
+      '     pe AS (SELECT agency_id, COUNT(*) n FROM broker_directory GROUP BY 1), ' +
+      '     px AS (SELECT agency_id, COUNT(*) n FROM people WHERE agency_id IS NOT NULL GROUP BY 1) ' +
+      'SELECT a.id, a.name, a.created_at, COALESCE(q.n, 0) AS quotes, q.last AS last_quote, ' +
+      '       (COALESCE(pe.n, 0) + COALESCE(px.n, 0)) AS agents ' +
+      'FROM agencies a ' +
+      'LEFT JOIN q  ON q.k = lower(trim(a.name)) ' +
+      'LEFT JOIN pe ON pe.agency_id = a.id ' +
+      'LEFT JOIN px ON px.agency_id = a.id ' +
+      "WHERE COALESCE(a.relationship,'') NOT IN ('succeeded','alias') " +
+      "  AND a.name NOT LIKE '%;%' ORDER BY a.name"
+    ).all();
+    const rows = results || [];
+
+    const NOISE = ['llc', 'l.l.c.', 'inc', 'inc.', 'co', 'co.', 'company', 'agency', 'agencies',
+      'insurance', 'services', 'service', 'group', 'benefits', 'benefit', 'solutions',
+      'partners', 'associates'];
+    const FILLER = ['and', 'the', 'of', 'a'];
+
+    function near1(a, b) {
+      if (Math.abs(a.length - b.length) > 1) return false;
+      let i = 0, j = 0, diff = 0;
+      while (i < a.length && j < b.length) {
+        if (a[i] === b[j]) { i++; j++; continue; }
+        if (++diff > 1) return false;
+        if (a.length > b.length) i++;
+        else if (b.length > a.length) j++;
+        else { i++; j++; }
+      }
+      return true;
+    }
+    // A NOISE WORD WITH A TYPO IN IT IS STILL A NOISE WORD. Eric: "you also need to find more that
+    // should be on the tidy up list, like Baldwin." Baldwin Group (21) and Baldwin Grouup (0) were
+    // never offered, because "grouup" is not in the list and the tail was never stripped.
+    const nearNoise = (w) => NOISE.indexOf(w) !== -1
+      || (w.length >= 5 && NOISE.some((n) => near1(w, n)));
+    // ⚠️ AMPERSAND IS A SPELLING OF "AND". "DFW Health & Life" and "DFW Health and Life LLC" are one
+    // firm, and stripping punctuation alone left one with an extra word. Eric found this one too.
+    const words = (s) => String(s || '').toLowerCase().replace(/&/g, ' and ')
+      .replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/)
+      .filter((w) => w && FILLER.indexOf(w) === -1);
+    const key = (s) => {
+      const t = words(s);
+      while (t.length > 1 && nearNoise(t[t.length - 1])) t.pop();
+      return t.join('');
+    };
+
+    // ── PASS ONE: the same name. Confident enough to lead with.
+    // ⚠️ TWO KEYS PER ROW, because a noise word can be FUSED to the name. 'Assured Partners'
+    // strips to 'assured' while 'AssuredPartners' is one word and keeps its tail -- so the tail rule
+    // alone put a 65-quote firm and its own name in different buckets. Keying on the unstripped
+    // form as well catches it, and a row joins every group either of its keys lands in.
+    const byKey = {};
+    for (const r of rows) {
+      const ks = key(r.name);
+      const kf = words(r.name).join('');
+      for (const k of (ks === kf ? [ks] : [ks, kf])) {
+        if (!k) continue;
+        (byKey[k] = byKey[k] || []).push(r);
+      }
+    }
+    // A row reached through two keys must not appear twice inside one group.
+    for (const k of Object.keys(byKey)) {
+      const seenHere = {};
+      byKey[k] = byKey[k].filter((r) => (seenHere[r.id] ? false : (seenHere[r.id] = 1)));
+    }
+    // A typo in the MIDDLE of the real name: Holloway Benefit / Holloway Benefits Concepts.
+    const keys = Object.keys(byKey), merged = {};
+    for (let i = 0; i < keys.length; i++) {
+      if (merged[keys[i]]) continue;
+      for (let j = i + 1; j < keys.length; j++) {
+        if (merged[keys[j]] || keys[i].length < 8) continue;
+        if (near1(keys[i], keys[j])) { byKey[keys[i]] = byKey[keys[i]].concat(byKey[keys[j]]); merged[keys[j]] = 1; }
+      }
+    }
+    const order = (g) => g.slice().sort((x, y) => (y.quotes - x.quotes) || String(x.name).localeCompare(y.name));
+    // ⛔⛔ THE SAME PAIR CAME OUT TWICE, ONE GROUP AFTER THE OTHER -- Eric spotted it on the screen.
+    // Filing every row under BOTH its stripped and unstripped key is what lets 'Assured Partners'
+    // meet 'AssuredPartners', and it also means a pair that agrees on both keys forms two identical
+    // groups. ⚠️ The per-group dedupe added with the second key stops a row repeating INSIDE a
+    // group; it says nothing about two groups being the same set. Different bug, same origin.
+    const seen = {};
+    const madeAlready = {};
+    const pairs = keys.filter((k) => !merged[k] && byKey[k].length > 1).map((k) => order(byKey[k]))
+      .filter((g) => {
+        const sig = g.map((r) => r.id).slice().sort().join('|');
+        if (madeAlready[sig]) return false;
+        madeAlready[sig] = 1;
+        g.forEach((r) => { seen[r.id] = 1; });
+        return true;
+      }).sort((a, b) => (b[0].quotes || 0) - (a[0].quotes || 0));
+
+    // ── PASS TWO: the same FIRST WORD. Weaker, and offered as such.
+    // ⭐⭐ ERIC ASKED FOR THIS DIRECTLY: "There are four versions of companies that start with
+    // Creative. They should all be on there since they might all be the same." Pass one splits them,
+    // because Creative Concepts and Creative Insurance Concepts reduce to different names.
+    // ⛔ IT IS DELIBERATELY A SEPARATE, LOWER SECTION. These are prompts to look, not near-certain
+    // duplicates, and mixing them in would make the confident list feel unreliable.
+    // ⚠️ Capped at six rows and a first word of five letters or more, or every "American" and
+    // "First" in the book arrives as one heap.
+    // ⭐ THE FIRST SEVEN LETTERS, IGNORING SPACES AND PUNCTUATION. Tried against the real book:
+    // this is what puts all five Creative rows together (including 'Creativa Associates'), all
+    // three AssuredPartners spellings, Innovated / Innovative, the whole Lone Star family, Endeavor,
+    // Waldman, Baldwin and True North. A first-word rule found far fewer, because the differences
+    // are usually INSIDE the first word.
+    // ⚠️ Seven, not six: six pulls in unrelated firms, and eight starts missing typos. Groups of
+    // more than six are dropped -- that is a common prefix, not a firm.
+    const squash = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const byPre = {};
+    for (const r of rows) {
+      const sq = squash(r.name);
+      if (sq.length < 7) continue;
+      const k = sq.slice(0, 7);
+      (byPre[k] = byPre[k] || []).push(r);
+    }
+    const maybe = Object.keys(byPre).filter((w) => {
+      const g = byPre[w];
+      if (g.length < 2 || g.length > 6) return false;
+      if (g.every((r) => seen[r.id])) return false;          // pass one already has them
+      return new Set(g.map((r) => key(r.name))).size > 1;    // and it is not just pass one again
+    }).map((w) => order(byPre[w])).sort((a, b) => (b[0].quotes || 0) - (a[0].quotes || 0));
+
+    // ── ROWS THAT ARE NOT A FIRM AT ALL.
+    // Eric: "102311 should be on there since we need to figure out what it is, but it's clearly not
+    // a broker", and "I don't know why current client and current groups is on the list as an
+    // agency." A DIFFERENT JOB FROM DUPLICATES: there is nothing to merge into, and the answer is an
+    // identification. They came out of the folder import -- the agency is whatever the proposal
+    // folder was called, so any folder that was not a broker's name became an agency. 102311 is a
+    // date, 10/23/11.
+    // ⛔ NOTHING IS CALLED JUNK ON A COUNT OF LETTERS. K&S has 85 quotes and G&A is a real PEO; an
+    // earlier pass called both junk on a rule about name length and was wrong. The quote count and
+    // the employers ride along, and the identification stays Eric's.
+    const GENERIC = ['add on', 'addon', 'misc', 'none', 'n/a', 'na', 'unknown', 'tbd', 'test',
+      'other', 'house', 'internal', 'web', 'online', 'employer', 'client', 'current client',
+      'current clients', 'current group', 'current groups', 'renewal', 'renewals', 'new business',
+      'prospect', 'prospects', 'sold', 'pending', 'quotes', 'proposals'];
+    const odd = rows.filter((r) => {
+      const nm = String(r.name || '').trim().toLowerCase();
+      if (!nm) return false;
+      if (GENERIC.indexOf(nm) !== -1) return true;
+      if (!/[a-z]/.test(nm)) return true;                    // 102311 -- no letters at all
+      return nm.replace(/[^a-z]/g, '').length <= 3;          // NX, RR, K&S: shown, never judged
+    }).sort((a, b) => (b.quotes || 0) - (a.quotes || 0));
+
+    for (const r of odd) {
+      const ex = await env.DB.prepare(
+        'SELECT client_name, substr(created_at,1,10) AS dt FROM quotes ' +
+        'WHERE lower(trim(broker_agency)) = ? ORDER BY created_at DESC LIMIT 3'
+      ).bind(String(r.name || '').trim().toLowerCase()).all();
+      r.examples = (ex.results || []).map((x) => (x.client_name || '(not stated)') + ' · ' + x.dt);
+    }
+
+    // The messages ride back with the groups, so the screen can show what has already been said
+    // about each one without a second request.
+    let notes = [];
+    try {
+      const nr = await env.DB.prepare(
+        'SELECT id, group_key, body, created_at FROM tidy_message WHERE done_at IS NULL ORDER BY created_at'
+      ).all();
+      notes = nr.results || [];
+    } catch (err) { /* the table arrives with the next migration; the screen still works */ }
+
+    // ── ONE QUOTE, TWO FIRM NAMES TYPED INTO ONE BOX ──────────────────────────────────────────
+    //
+    // ERIC, 2026-08-24: "we should not leave the incorrect due to provenance - we should fix it...
+    // We shouldn't be punished for past errors, instead we should fix those errors so the data is
+    // good that we're working with now."
+    //
+    // ⛔ THESE 47 ROWS WERE HIDDEN FROM THE CALL LIST AND NEVER FIXED, which was half a job: the
+    // 48 quotes under them still count for a firm that does not exist, so somebody's totals are
+    // short and nothing on any screen says so. Hiding an error is not correcting it.
+    // ⭐ 33 of the 47 split into firms already on the books. Picking one runs the SAME correction
+    // path as a spelling fix, so the quote is renamed and carries its own note about what it said.
+    const compRows = await env.DB.prepare(
+      "SELECT id, name FROM agencies WHERE name LIKE '%;%' " +
+      "  AND COALESCE(relationship,'') NOT IN ('succeeded','alias') ORDER BY name"
+    ).all();
+    const realRows = await env.DB.prepare(
+      "WITH q AS (SELECT agency_id k, COUNT(*) n FROM quotes WHERE agency_id IS NOT NULL GROUP BY 1) " +
+      "SELECT a.id, a.name, COALESCE(q.n,0) AS quotes FROM agencies a " +
+      'LEFT JOIN q ON q.k = a.id ' +
+      "WHERE a.name NOT LIKE '%;%' AND COALESCE(a.relationship,'') <> 'alias'"
+    ).all();
+    const byName = {};
+    for (const r of (realRows.results || [])) byName[String(r.name).trim().toLowerCase()] = r;
+
+    const compound = [];
+    for (const c of (compRows.results || [])) {
+      // ⚠️ A HALF THAT IS NOT A FIRM WE HAVE IS SHOWN, NOT SILENTLY DROPPED. "NO BROKERS; Worth
+      // Benefits" is one of these, and knowing the other half is unrecognised is the useful part.
+      const parts = String(c.name).split(';').map((x) => x.trim()).filter(Boolean);
+      const opts = parts.map((nm) => {
+        const hit = byName[nm.toLowerCase()];
+        return { name: nm, id: (hit && hit.id) || null, quotes: (hit && hit.quotes) || 0 };
+      // The busiest real firm first: usually the one that actually ran it.
+      }).sort((a, b) => (b.id ? 1 : 0) - (a.id ? 1 : 0) || (b.quotes - a.quotes));
+      const ex = await env.DB.prepare(
+        'SELECT client_name, substr(created_at,1,10) AS dt FROM quotes ' +
+        'WHERE lower(trim(broker_agency)) = ? ORDER BY created_at DESC LIMIT 3'
+      ).bind(String(c.name).trim().toLowerCase()).all();
+      compound.push({
+        id: c.id, name: c.name, options: opts,
+        examples: (ex.results || []).map((x) => (x.client_name || '(not stated)') + ' · ' + x.dt),
+      });
+    }
+
+    return jsonResp({
+      pairs, maybe, odd, notes, compound, matched: pairs.length,
+      note: 'Suggestions only. Two similar names may be one firm or two, and only a person knows.',
+    });
+  } catch (err) {
+    return jsonResp({ pairs: [], maybe: [], odd: [], error: String((err && err.message) || err) }, 500);
+  }
+}
 async function handleCrmRecordStatus(request, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
   const id = String(body.id || '').trim();
@@ -4435,9 +4694,14 @@ ${abyAdminNav('/admin/brokers')}
      if (ownRow) {
        tag = ' <span class="muted" style="font-size:12px">under this name</span>';
      } else if (child) {
+       // THREE RELATIONSHIPS, THREE CAPTIONS. This read the relationship as a yes/no and called
+       // anything that was not an acquisition a division -- so a misspelling was labelled a branch
+       // office, which is a claim about the business rather than about the data.
        tag = (x.relationship === 'succeeded')
          ? ' <span class="muted" style="font-size:12px">acquired</span>'
-         : ' <span class="muted" style="font-size:12px">division</span>';
+         : (x.relationship === 'alias')
+           ? ' <span class="muted" style="font-size:12px">same firm, spelled differently</span>'
+           : ' <span class="muted" style="font-size:12px">division</span>';
      } else if (kid.length) {
        // (N) = how many NAMES sit under this heading, counting this one. The headline beside it is
        // the COMBINED total, and this is the number that explains it.
@@ -4997,6 +5261,14 @@ ${abyAdminNav('/admin/brokers')}
    var m = String(location.search || '').match(/[?&]firm=([^&]+)/);
    if (!m) return false;
    var id = decodeURIComponent(m[1]);
+   // A LINK TO A FIRM THAT IS NO LONGER HERE MUST FALL BACK TO THE LIST, NOT TO NOTHING.
+   // openFirm reads mktRows and returns silently when the id is not in it -- so a stale link, or a
+   // firm that has since been folded into another, left the page saying "Loading..." for ever.
+   // Found by opening ?firm=x by hand. Nothing in the code says a bad id is impossible, and every
+   // resolved duplicate turns a previously valid link into a stale one.
+   var found = false;
+   for (var i = 0; i < mktRows.length; i++) if (mktRows[i].id === id) found = true;
+   if (!found) return false;
    try { history.replaceState({ firm: id }, '', location.search); } catch (e) {}
    openFirm(id, true);
    return true;
@@ -5210,6 +5482,10 @@ ${abyAdminNav('/admin/brokers')}
  // two and only a person knows. One click per cluster, and the survivor is the row with the most
  // history rather than the first alphabetically.
  var dupes = [];
+ var maybes = [];
+ var odds = [];
+ var tidyNotes = [];
+ var comps = [];
 
  async function loadDupes(){
    var box = q('tidyBox');
@@ -5219,47 +5495,213 @@ ${abyAdminNav('/admin/brokers')}
    // 🔴 AN ERROR IS NOT A CLEAN LIST. Those must never render the same way.
    if (d.error){ box.innerHTML = '<p style="color:#a12622">Could not check: ' + esc(d.error) + '</p>'; return; }
    dupes = d.pairs || [];
+   maybes = d.maybe || [];
+   odds = d.odd || [];
+   tidyNotes = d.notes || [];
+   comps = d.compound || [];
    paintDupes();
+ }
+
+ function dupeGroup(grp, g, kind){
+   var h = '<div style="border:1px solid #dde5ee;border-radius:7px;padding:9px 11px;margin-bottom:8px">';
+   for (var j = 0; j < grp.length; j++){
+     var a = grp[j];
+     // ⭐⭐ THE QUOTE COUNT IS THE ANSWER, SO IT IS THE LOUDEST THING ON THE ROW.
+     var n = Number(a.quotes) || 0;
+     var stat = n
+       ? '<strong style="color:#1a5c3a">' + n + '</strong> quote' + (n === 1 ? '' : 's')
+         + (a.last_quote ? ' <span class="muted">to ' + day(a.last_quote) + '</span>' : '')
+       : '<span class="never">never quoted</span>';
+     h += '<div style="display:flex;align-items:center;gap:9px;padding:3px 0">'
+        + '<button style="font-size:12px;padding:3px 9px" onclick="keepThis(' + "'" + kind + "'" + ',' + g + ',' + j + ')">Keep this</button>'
+        + '<span style="min-width:250px"><strong>' + esc(a.name) + '</strong></span>'
+        + '<span style="font-size:12.5px">' + stat + '</span>'
+        + '<span class="muted" style="font-size:12px">' + (a.agents || 0) + ' named</span>'
+        + '</div>';
+   }
+   // ⭐⭐ A MESSAGE TO WHOEVER IS FIXING THE DATA, AND IT GOES AWAY WHEN THEY HAVE.
+   // Eric, 2026-08-24: "I might need to tell you that one is correct, two others should be
+   // corrected, and one doesn't belong. Then you fix it and the note goes away."
+   // ⛔ THE FIRST VERSION SAVED THIS AS A DATED NOTE ON THE FIRM, WHICH IS THE WRONG SHAPE. A note
+   // on an agency is a permanent fact about that agency; this is an instruction with a lifespan.
+   // Putting working messages into the history is how a history stops being worth reading.
+   var gk = groupKey(grp);
+   var mine = tidyNotes.filter(function(n){ return n.group_key === gk; });
+   for (var t = 0; t < mine.length; t++){
+     h += '<div style="margin-top:6px;background:#fdf6e3;border:1px solid #ecdca8;border-radius:6px;'
+        + 'padding:6px 9px;font-size:12.5px;display:flex;align-items:flex-start;gap:8px">'
+        + '<span style="flex:1">' + esc(mine[t].body) + '</span>'
+        + '<a href="#" onclick="dropNote(' + "'" + mine[t].id + "'" + ');return false" '
+        + 'style="color:#8a6d1f;text-decoration:none" title="Remove this note">&times;</a></div>';
+   }
+   h += '<div style="margin-top:6px;display:flex;align-items:center;gap:7px">'
+      + '<input id="nt_' + kind + '_' + g + '" placeholder="Tell me about this group &mdash; which to keep, which to correct, which does not belong" '
+      + 'onkeydown="if(event.key===&#39;Enter&#39;)noteGroup(&#39;' + kind + '&#39;,' + g + ')" '
+      + 'style="flex:1;padding:5px 8px;border:1px solid #c8d2de;border-radius:5px;font-size:12.5px">'
+      + '<button style="font-size:12px;padding:3px 9px" onclick="noteGroup(' + "'" + kind + "'" + ',' + g + ')">Tell me</button>'
+      + '<span class="muted" id="ntm_' + kind + '_' + g + '" style="font-size:12px"></span></div>';
+   h += '<div style="margin-top:5px"><a href="#" onclick="notDupes(' + "'" + kind + "'" + ',' + g + ');return false" '
+      + 'style="font-size:12px;color:#5b6b7f">These are different firms &mdash; leave them alone</a></div></div>';
+   return h;
  }
 
  function paintDupes(){
    var box = q('tidyBox');
-   if (!dupes.length){
-     box.innerHTML = '<p class="muted">Nothing looks like a duplicate. The list is as tidy as this can tell.</p>';
-     return;
+   var h = '';
+   // ⭐ SAY HOW MANY ARE WAITING ON ME. Otherwise the only way to know a message was left is to
+   // scroll the whole list looking for yellow.
+   if (tidyNotes.length){
+     h += '<p style="margin:0 0 10px;font-size:13px;color:#7a5410"><strong>' + tidyNotes.length
+        + '</strong> note' + (tidyNotes.length === 1 ? '' : 's') + ' waiting for me to action.</p>';
    }
-   var rows = 0;
-   for (var i = 0; i < dupes.length; i++) rows += dupes[i].length;
-   var h = '<p class="sub" style="margin:0 0 10px"><strong>' + dupes.length + ' groups</strong> covering '
-         + rows + ' rows look like one firm each. Pick the name to keep; the others are marked as the '
-         + 'same firm spelled differently, which rolls their quotes up and drops them from this list. '
-         + '<strong>Nothing is deleted.</strong></p>';
-   for (var g = 0; g < dupes.length; g++){
-     var grp = dupes[g];
-     h += '<div style="border:1px solid #dde5ee;border-radius:7px;padding:9px 11px;margin-bottom:8px">';
-     for (var j = 0; j < grp.length; j++){
-       var a = grp[j];
-       // ⭐ THE HISTORY IS SHOWN BESIDE EACH NAME because that is what decides which one to keep --
-       // the survivor should be the row people have actually been using, not the shortest string.
-       h += '<div style="display:flex;align-items:center;gap:9px;padding:3px 0">'
-          + '<button style="font-size:12px;padding:3px 9px" onclick="keepThis(' + g + ',' + j + ')">Keep this</button>'
-          + '<span><strong>' + esc(a.name) + '</strong></span>'
-          + '<span class="muted" style="font-size:12px">' + (a.agents || 0) + ' agents</span>'
-          + '</div>';
+
+   if (dupes.length){
+     var rows = 0;
+     for (var i = 0; i < dupes.length; i++) rows += dupes[i].length;
+     h += '<p class="sub" style="margin:0 0 10px"><strong>' + dupes.length + ' groups</strong> covering '
+        + rows + ' rows look like one firm each. Pick the name to keep &mdash; normally the one with the '
+        + 'quote history. <strong>Nothing is deleted.</strong></p>';
+     for (var g = 0; g < dupes.length; g++) h += dupeGroup(dupes[g], g, 'sure');
+   }
+
+   // ⭐ A SEPARATE, LOWER SECTION ON PURPOSE. Eric asked for the four Creative rows to be offered
+   // together even though they do not reduce to the same name. These are prompts to look, not
+   // near-certain duplicates, and mixing them into the list above would make that list feel unsafe.
+   if (maybes.length){
+     h += '<p class="sub" style="margin:16px 0 10px;padding-top:12px;border-top:1px solid #e6ecf3">'
+        + '<strong>' + maybes.length + ' more groups start the same way</strong> and might be the same firm. '
+        + 'Less certain than the ones above &mdash; worth a look.</p>';
+     for (var m = 0; m < maybes.length; m++) h += dupeGroup(maybes[m], m, 'maybe');
+   }
+
+   // ⭐⭐ NOT A DUPLICATE -- AN UNIDENTIFIED ROW. Eric: "102311 should be on there since we need to
+   // figure out what it is, but it's clearly not a broker." There is nothing to merge it into, so
+   // the screen shows the EVIDENCE instead: what was quoted under that name, and when.
+   if (odds.length){
+     h += '<p class="sub" style="margin:16px 0 10px;padding-top:12px;border-top:1px solid #e6ecf3">'
+        + '<strong>' + odds.length + ' rows do not look like a firm.</strong> These came out of the folder '
+        + 'import &mdash; the agency is whatever the proposal folder was named. What was quoted under each '
+        + 'is shown so they can be identified. <strong>Nothing here is assumed to be junk</strong> &mdash; '
+        + 'K&amp;S has 85 quotes.</p>';
+     for (var o = 0; o < odds.length; o++){
+       var x = odds[o];
+       var nq = Number(x.quotes) || 0;
+       h += '<div style="border:1px solid #dde5ee;border-radius:7px;padding:9px 11px;margin-bottom:8px">'
+          + '<div style="display:flex;align-items:center;gap:9px">'
+          + '<span style="min-width:250px"><strong>' + esc(x.name) + '</strong></span>'
+          + '<span style="font-size:12.5px">' + (nq ? '<strong style="color:#1a5c3a">' + nq + '</strong> quote'
+                                                     + (nq === 1 ? '' : 's') : '<span class="never">never quoted</span>')
+          + '</span></div>';
+       if (x.examples && x.examples.length){
+         h += '<div class="muted" style="font-size:12px;margin-top:4px;padding-left:2px">quoted for: '
+            + x.examples.map(esc).join(' &middot; ') + '</div>';
+       }
+       h += '</div>';
      }
-     h += '<div style="margin-top:5px"><a href="#" onclick="notDupes(' + g + ');return false" '
-        + 'style="font-size:12px;color:#5b6b7f">These are different firms &mdash; leave them alone</a></div>'
-        + '</div>';
+   }
+
+   // ⭐⭐ TWO FIRMS IN ONE NAME. Fixing one runs the ordinary correction path, so the quote is
+   // renamed to the firm picked and keeps a note saying what it was typed as.
+   if (comps.length){
+     h += '<p class="sub" style="margin:16px 0 10px;padding-top:12px;border-top:1px solid #e6ecf3">'
+        + '<strong>' + comps.length + ' rows have two firm names in one box.</strong> Somebody typed both '
+        + 'while a firm was changing hands. Pick the one that ran it &mdash; the quote is corrected to '
+        + 'that firm and keeps a note of what it said.</p>';
+     for (var c = 0; c < comps.length; c++){
+       var cr = comps[c];
+       h += '<div style="border:1px solid #dde5ee;border-radius:7px;padding:9px 11px;margin-bottom:8px">'
+          + '<div style="font-size:12.5px;margin-bottom:5px"><strong>' + esc(cr.name) + '</strong></div>';
+       for (var o = 0; o < cr.options.length; o++){
+         var op = cr.options[o];
+         h += '<div style="display:flex;align-items:center;gap:9px;padding:2px 0">'
+            + (op.id
+                ? '<button style="font-size:12px;padding:3px 9px" onclick="pickFirm(' + c + ',' + o + ')">This one ran it</button>'
+                // ⛔ A NAME WE DO NOT HAVE GETS NO BUTTON, and says why. Offering it would mean
+                // inventing a firm from half a typo.
+                : '<span class="muted" style="font-size:12px;padding:3px 9px">not a firm we have</span>')
+            + '<span style="min-width:230px">' + esc(op.name) + '</span>'
+            + '<span class="muted" style="font-size:12px">' + (op.quotes || 0) + ' quotes</span></div>';
+       }
+       if (cr.examples && cr.examples.length){
+         h += '<div class="muted" style="font-size:12px;margin-top:4px">quoted for: '
+            + cr.examples.map(esc).join(' &middot; ') + '</div>';
+       }
+       h += '</div>';
+     }
+   }
+
+   if (!h){
+     box.innerHTML = '<p class="muted">Nothing looks like a duplicate, and every row looks like a firm.</p>';
+     return;
    }
    box.innerHTML = h;
  }
 
  // ⚠️ Dismissed for this sitting only, and it says so. Storing "not a duplicate" would be a fourth
  // kind of relationship to reason about, and the finder is cheap to re-run.
- function notDupes(g){ dupes.splice(g, 1); paintDupes(); }
+ function notDupes(kind, g){ (kind === 'maybe' ? maybes : dupes).splice(g, 1); paintDupes(); }
 
- async function keepThis(g, j){
-   var grp = dupes[g];
+ // ⚠️ THE KEY IS THE ROW IDS, SORTED -- not the position in the list and not the name. Resolving a
+ // group above this one renumbers everything, and a note pinned to an index would jump to a
+ // different firm. Ids survive that, and survive a rename.
+ function groupKey(grp){
+   return grp.map(function(x){ return x.id; }).slice().sort().join('|');
+ }
+
+ async function noteGroup(kind, g){
+   var list = (kind === 'maybe') ? maybes : dupes;
+   var grp = list[g];
+   if (!grp || !grp.length) return;
+   var el = q('nt_' + kind + '_' + g), msg = q('ntm_' + kind + '_' + g);
+   var body = (el.value || '').trim();
+   if (!body){ msg.textContent = 'Type it first.'; return; }
+   var r = await fetch('/api/admin/tidy-note', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ group_key: groupKey(grp), body: body,
+                            names: grp.map(function(x){ return x.name; }).join(' / ') }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   // ⛔ A REFUSED WRITE MUST NOT READ AS SAVED. The message is the whole point of the control.
+   if (!r.ok){ msg.innerHTML = '<span style="color:#a12622">' + esc(d.error || 'That did not save.') + '</span>'; return; }
+   el.value = '';
+   msg.textContent = '';
+   await loadDupes();
+ }
+
+ // Picking a firm is recorded as the ordinary "same firm, spelled differently" relationship, which
+ // is what carries the quote rename and the note. One write path, so a compound fix and a spelling
+ // fix cannot drift apart.
+ async function pickFirm(c, o){
+   var cr = comps[c], op = cr && cr.options[o];
+   if (!cr || !op || !op.id) return;
+   var r = await fetch('/api/admin/crm/relationship', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ id: cr.id, parent_id: op.id, relationship: 'alias',
+                            note: 'Two firms were typed into one name. ' + op.name + ' ran it.' }),
+   });
+   if (!r.ok){
+     var d = await r.json().catch(function(){ return {}; });
+     q('tidyMsg').innerHTML = '<span style="color:#a12622">' + esc(d.error || 'That did not save.') + '</span>';
+     return;
+   }
+   comps.splice(c, 1);
+   paintDupes();
+   await loadMkt();
+ }
+
+ async function dropNote(id){
+   var r = await fetch('/api/admin/tidy-note/delete', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ id: id }),
+   });
+   if (!r.ok){ var d = await r.json().catch(function(){ return {}; });
+     q('tidyMsg').innerHTML = '<span style="color:#a12622">' + esc(d.error || 'Could not remove that.') + '</span>'; return; }
+   await loadDupes();
+ }
+
+ async function keepThis(kind, g, j){
+   var list = (kind === 'maybe') ? maybes : dupes;
+   var grp = list[g];
    var keep = grp[j];
    var msgs = [];
    for (var i = 0; i < grp.length; i++){
@@ -5274,7 +5716,7 @@ ${abyAdminNav('/admin/brokers')}
      // looks finished and is not.
      if (!r.ok) msgs.push(esc(grp[i].name) + ': ' + esc(d.error || 'did not save'));
    }
-   dupes.splice(g, 1);
+   list.splice(g, 1);
    paintDupes();
    if (msgs.length) q('tidyMsg').innerHTML = '<span style="color:#a12622">' + msgs.join(' &middot; ') + '</span>';
    else q('tidyMsg').textContent = 'Kept ' + keep.name + '.';
@@ -5294,6 +5736,17 @@ ${abyAdminNav('/admin/brokers')}
  // LOG, this one nests the AGENCY RECORDS, so a firm that has never quoted still appears.
  var mktOpen = {};
  var mktBusy = {};
+ // 🔴🔴 THE PAGE FROZE FOR TEN TO FIFTEEN SECONDS AND THE DATABASE WAS NOT THE CAUSE.
+ // Measured 2026-08-24: the whole marketing query runs in 20ms. What locked the browser was the
+ // DOM -- every row carries a priority select and an owner select, so 562 firms meant about 1,100
+ // select elements and several thousand options, built and laid out in one go.
+ // \u26d4 A SCREEN YOU HAVE TO WAIT THROUGH IS ONE YOU STOP OPENING, which is the same finding as
+ // the analysis view earlier today -- and that view already solved it this way.
+ // \u2b50 THE CAP SAYS SO, LOUDLY. A list that quietly stops at 150 cannot be told from a book that
+ // only has 150 firms in it. The Find box still searches all of them, so the cap never hides a
+ // firm somebody is looking for -- it only defers the ones nobody has scrolled to.
+ var MKT_CAP = 150;
+ var MKT_ALL = false;
 
  function agentRows(a){
    var people = mktOpen[a.id];
@@ -5409,8 +5862,18 @@ ${abyAdminNav('/admin/brokers')}
      return out;
    }
 
-   for (var t = 0; t < tops.length; t++) h += firmRow(tops[t], 0);
-   q('mkt').innerHTML = h + '</tbody></table></div>';
+   var shown = MKT_ALL ? tops : tops.slice(0, MKT_CAP);
+   for (var t = 0; t < shown.length; t++) h += firmRow(shown[t], 0);
+   h += '</tbody></table></div>';
+   if (tops.length > MKT_CAP){
+     h += '<p style="text-align:center;margin:10px 0 0">'
+        + '<button type="button" onclick="MKT_ALL=!MKT_ALL;paintMkt()" style="background:none;border:0;'
+        + 'color:#2f6f4f;font-size:12.5px;cursor:pointer;text-decoration:underline">'
+        + (MKT_ALL ? 'Showing all ' + tops.length + ' \u2014 show the first ' + MKT_CAP + ' only'
+                   : 'Showing the first ' + MKT_CAP + ' of ' + tops.length + ' \u2014 show all (slower)')
+        + '</button></p>';
+   }
+   q('mkt').innerHTML = h;
    showBulk();
  }
 
@@ -6844,7 +7307,13 @@ async function handleAdminStats(request, env) {
         // merits. That distinction is the whole reason `relationship` exists beside `parent_id`.
         " GROUP BY " + AGENCY_EXPR +
         " HAVING n >= 5 AND recent = 0 " +
-        "    AND COALESCE(MAX(a.relationship),'') <> 'succeeded' " +
+        // AN ALIAS MUST NOT REACH THIS LIST EITHER, and it took Eric asking to notice.
+        // He: "Are you going back and fixing these on the quotes too so they will feed into the
+        // performance list correctly?" The ROLLUP was already right -- it follows parent_name and
+        // does not care which relationship put it there -- but this filter named only 'succeeded',
+        // so a misspelling with five quotes and a quiet year would have arrived on a list headed
+        // "worth a call". Nobody rings Baldwin Grouup.
+        "    AND COALESCE(MAX(a.relationship),'') NOT IN ('succeeded','alias') " +
         "    AND lower(" + AGENCY_EXPR + ") NOT IN " + NOT_A_FIRM_SQL + " " +
         // SORTED BY HOW RECENTLY THEY WENT QUIET, NOT BY VOLUME.
         // Ordering by size put MHBT at the top at 184 quotes -- and MHBT was acquired in 2015,
@@ -9325,12 +9794,52 @@ const MIGRATIONS = [
   // NULL means the original source: derived from the quote log.
   { sql: "ALTER TABLE broker_directory ADD COLUMN source TEXT",
     table: "broker_directory", column: "source" },
+  // -- THE RESOLVED FIRM, STORED ON THE QUOTE AND ON THE SALE -----------------------------------
+  //
+  // Added to PRODUCTION by hand while correcting the alias data, and NOT to this list -- so the
+  // column existed on the live database and nowhere else. The dupes endpoint then 500d on every
+  // fresh database, which is how the test suite found it. A column the shipped code reads and
+  // the migration does not create is a page that works in one place and breaks everywhere else,
+  // and it is the SECOND time in one day: aby_sales had the same gap this afternoon.
+  //
+  // agency_id is the SURVIVING firm, resolved once, so a list never has to re-derive it from
+  // free text. broker_agency is corrected in place separately, on Eric's instruction, with the
+  // original spelling written into the quote's own note.
+  { sql: "ALTER TABLE quotes ADD COLUMN agency_id TEXT", table: "quotes", column: "agency_id" },
+  { sql: "ALTER TABLE aby_sales ADD COLUMN agency_id TEXT", table: "aby_sales", column: "agency_id" },
+  { sql: "CREATE INDEX IF NOT EXISTS quotes_agency_id ON quotes (agency_id)", index: "quotes_agency_id" },
+  { sql: "CREATE INDEX IF NOT EXISTS aby_sales_agency_id ON aby_sales (agency_id)", index: "aby_sales_agency_id" },
+
+  // -- A MESSAGE TO WHOEVER IS FIXING THE DATA, NOT A RECORD ABOUT THE FIRM ---------------------
+  //
+  // ERIC, 2026-08-24: "I don't need something viewable months later. I need to tell you something
+  // as I'm doing the tidying. You might list four different spellings and I might need to tell you
+  // that one is correct, two others should be corrected, and one doesn't belong. Then you fix it
+  // and the note goes away."
+  //
+  // The first attempt wrote these as dated notes on the firm, which is the WRONG SHAPE: a note on
+  // an agency is a permanent fact about that agency, and this is an instruction with a lifespan --
+  // it exists until somebody does the thing, and then it is noise. Storing working messages in the
+  // history is how a history stops being worth reading.
+  // done_at IS THE WHOLE DESIGN: pending ones show on the screen, resolved ones vanish from it and
+  // stay in the table, so what was asked for is still auditable without cluttering the record.
+  { sql: "CREATE TABLE IF NOT EXISTS tidy_message (" +
+         "  id TEXT PRIMARY KEY," +
+         "  group_key TEXT NOT NULL," +
+         "  names TEXT NOT NULL DEFAULT ''," +
+         "  body TEXT NOT NULL," +
+         "  created_at TEXT NOT NULL," +
+         "  done_at TEXT)",
+    table: "tidy_message" },
+  { sql: "CREATE INDEX IF NOT EXISTS tidy_message_open ON tidy_message (done_at, group_key)",
+    index: "tidy_message_open" },
+
   // -- WHAT KIND OF PERSON IS THIS (F-388) ------------------------------------------------------
   //
   // ERIC, 2026-08-24: "There apparently is no possible way to track people we are doing business
   // with (firms and the people) and other people we might want to do business with at some point."
   //
-  // \U0001F534\U0001F534 THE ROOT CAUSE, MEASURED: EVERY RECORD OF A PERSON OR A FIRM WAS DERIVED FROM THE
+  // 🔴🔴 THE ROOT CAUSE, MEASURED: EVERY RECORD OF A PERSON OR A FIRM WAS DERIVED FROM THE
   // QUOTE LOG. 628 of 672 agencies exist ONLY because somebody quoted. The quote log says who
   // ASKED -- and somebody you might want to do business with has never asked, which is what makes
   // them a prospect. So the model could not hold one, and each time that came up a new table and a
@@ -9343,7 +9852,7 @@ const MIGRATIONS = [
   // broker, others are potential referral partners." A broker would SELL; a partner would
   // INTRODUCE. Different asks, and a single list cannot hold both without losing the distinction.
   //
-  // \U0001F534\U0001F534 AND THE CORRECTION THAT MATTERS, ERIC THE SAME DAY: "You do realize clients and
+  // 🔴🔴 AND THE CORRECTION THAT MATTERS, ERIC THE SAME DAY: "You do realize clients and
   // former clients are employers, they are not brokers, right?" \u26d4 PROSPECT | CLIENT | FORMER
   // CLIENT IS THE **EMPLOYER** AXIS -- aby_clients, 2,213 active and 977 termed -- and it does NOT
   // belong on an agency. A BROKER IS NEVER A CLIENT; an agency is the CHANNEL. A stage column was
@@ -9357,7 +9866,7 @@ const MIGRATIONS = [
 
   // -- aby_sales HAS EXISTED ONLY IN PRODUCTION, AND THAT IS A REAL HAZARD --------------------
   //
-  // \U0001F534 FOUND 2026-08-24 by adding a Sales column to the CRM list: the query threw on a fresh
+  // 🔴 FOUND 2026-08-24 by adding a Sales column to the CRM list: the query threw on a fresh
   // database with "no such table: aby_sales", which rendered the WHOLE marketing list as an error.
   // The table was created by hand during the sales-tracking work and never written into the
   // migration, so every environment except production has been missing it since.

@@ -401,7 +401,7 @@ const RULES = [
     },
   },
   {
-    name: "the fallen-off query excludes acquired names but keeps divisions",
+    name: "the fallen-off query excludes acquired names AND aliases, but keeps divisions",
     holds(src) {
       const s = src || SRC;
       const i = s.indexOf("const r4");
@@ -413,7 +413,11 @@ const RULES = [
       const end = s.indexOf(".bind(", i);
       if (end === -1) return false;
       const seg = s.slice(i, end);
-      return seg.includes("<> 'succeeded'") && !seg.includes("<> 'division'");
+      // AN ALIAS IS NOT CALLABLE EITHER. This rule named only 'succeeded' and went green while a
+      // misspelling with a quiet year could arrive on a list headed "worth a call". Eric asked
+      // whether the fixes reach the performance side; the rollup did, this filter did not.
+      // A DIVISION STILL BELONGS HERE -- it is trading, and somebody can ring it.
+      return seg.includes("NOT IN ('succeeded','alias')") && !seg.includes("'division'");
     },
   },
 ];

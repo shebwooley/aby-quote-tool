@@ -34,6 +34,18 @@ if git diff --cached --name-only | grep -q '^worker\.js$'; then
     exit 1
   fi
 
+  # Did this edit DELETE a top-level declaration? Twice on 2026-08-24 a splice that replaced one
+  # function swallowed the thing sitting next to it -- deriveStatus, then RECORDED_PREFIX -- and
+  # both times the file still PARSED. The page checker below passes on code that throws the moment
+  # it runs, so this has to come first: a missing name is not a syntax error, it is a wrong answer.
+  if ! node scripts/check_declarations.mjs; then
+    echo ""
+    echo "Something that used to be declared in worker.js is not any more. Commit refused."
+    echo "If the removal was deliberate, remove what refers to it too."
+    echo "Run: node scripts/check_declarations.mjs"
+    exit 1
+  fi
+
   if ! node scripts/check_worker_pages.mjs; then
     echo ""
     echo "A page the worker emits is broken. Commit refused."
