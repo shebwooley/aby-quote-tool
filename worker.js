@@ -3974,11 +3974,17 @@ ${abyAdminNav('/admin/brokers')}
  }
 
  async function load(){
+   PERF_LOADED = true;
    var parts=[];
    if(rep) parts.push('rep='+encodeURIComponent(rep));
    var sv=sinceISO(); if(sv) parts.push('since='+encodeURIComponent(sv));
    var q=parts.length?('?'+parts.join('&')):'';
-   var b=await (await fetch('/api/admin/brokers'+q)).json().catch(function(){return{}});
+   // ⭐ BOTH REQUESTS GO OUT TOGETHER. They ran one after the other, so the page waited on
+   // the small brokers query BEFORE it even asked for the roll-up over every quote. Awaiting
+   // them separately below keeps the progressive paint; what goes away is the dead time.
+   var pBrokers = fetch('/api/admin/brokers'+q).then(function(r){return r.json()}).catch(function(){return{}});
+   var pStats   = fetch('/api/admin/stats'+q).then(function(r){return r.json()}).catch(function(){return{}});
+   var b=await pBrokers;
    var list=b.brokers||[];
    CACHE.brokers=list;
    paintBrokers();
@@ -4004,7 +4010,7 @@ ${abyAdminNav('/admin/brokers')}
      : '<p class="muted">No broker accounts yet.</p>';
    }
 
-   var st=await (await fetch('/api/admin/stats'+q)).json().catch(function(){return{}});
+   var st=await pStats;
    if(st.totals) document.getElementById('totals').textContent=
      st.totals.quotes+' quotes'
      +(st.totals.brokers==null?'':' \u00b7 '+st.totals.brokers+' brokers')
@@ -4678,6 +4684,14 @@ ${abyAdminNav('/admin/brokers')}
  var mktSel = {};
  var mktTags = [];
  var view = 'performance';
+ // ⭐⭐ THE ANALYSIS IS LOADED ON DEMAND, EXACTLY LIKE THE MARKETING LIST ALREADY WAS.
+ // Eric, 2026-08-24: 'I thought you told me that the brokers and agencies list would load
+ // quickly now, but it still has to feed in.' He was right, and the note he was quoting was
+ // about the QUERY rather than the PAGE: the Marketing view asks for no quote and no sale, so
+ // its own fetch really is cheap -- but load() ran unconditionally at boot, so anybody landing
+ // on Marketing still paid for the whole roll-up over every quote before seeing a single row.
+ // ⛔ A CHEAP QUERY BEHIND AN EAGER PAGE IS NOT A FAST SCREEN.
+ var PERF_LOADED = false;
 
  // ⭐ THE VIEW IS REMEMBERED. Somebody who works the Marketing list all morning should not land on
  // the analysis page every time they open this from the nav.
@@ -4696,7 +4710,10 @@ ${abyAdminNav('/admin/brokers')}
    document.getElementById('viewHint').textContent = mkt
      ? 'Who we are working. Firms that no longer exist are hidden.'
      : 'What the quote log says. Firms that have never quoted do not appear here.';
-   if (mkt && !mktRows.length) loadMkt();
+   // Each view fetches its own rows the first time it is shown, and neither pays for the
+   // other. The filter controls still call load() directly, which is a deliberate refetch.
+   if (mkt) { if (!mktRows.length) loadMkt(); }
+   else     { if (!PERF_LOADED) load(); }
  }
 
  function q(id){ return document.getElementById(id); }
@@ -5135,10 +5152,12 @@ ${abyAdminNav('/admin/brokers')}
    openFirm(id);
  }
 
- // ⭐ THE REMEMBERED VIEW IS RESTORED AFTER load(), NOT BEFORE. setView asks the Marketing
- // endpoint for its rows the first time it is shown, and doing that before the page had
- // finished its own first render would race the two.
- load();
+ // ⭐ THE REMEMBERED VIEW IS RESTORED FIRST, AND IT DECIDES WHAT GETS FETCHED.
+ // 🔴 THIS USED TO CALL load() UNCONDITIONALLY HERE, one line above the restore -- so the
+ // heavy analysis was already in flight before the page knew which view you wanted. The old
+ // note said the restore had to come second to avoid racing the two loads; now that each view
+ // loads its own rows there is only ever ONE load in flight, so the race is gone rather than
+ // reordered.
  // ⭐ setView IS CALLED EVEN WHEN THE VIEW IS NOT CHANGING, because it is what writes the hint
  // beside the buttons. Restoring only the remembered view left a first-time visitor looking at
  // two unlabelled buttons and an empty space.

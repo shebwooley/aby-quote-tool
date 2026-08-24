@@ -30,6 +30,16 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
 
+// SCOPED TO ONE PAGE ON PURPOSE. Every other admin page calls load() at boot and is right to:
+// they have a single view and nothing cheaper to show first. A worker-wide grep for a bare
+// load() would redden all of them.
+function brokersPage(worker) {
+  const start = worker.indexOf("function adminBrokersHTML()");
+  if (start < 0) return "";
+  const next = worker.indexOf("\nfunction ", start + 1);
+  return worker.slice(start, next < 0 ? worker.length : next);
+}
+
 const RULES = [
   // ── RFP WATCH (F-384) ───────────────────────────────────────────────────────────────────
   // Written in the SAME commit as the endpoints, not after them. Every one of these fails until a
@@ -203,9 +213,35 @@ const RULES = [
       return missing.length === 0;
     },
   },
+  // ── THE ANALYSIS IS PAID FOR ONLY BY THE PERSON LOOKING AT IT ──────────────────────────────
+  // Eric, 2026-08-24: "I thought you told me that the brokers and agencies list would load
+  // quickly now, but it still has to feed in." The Marketing view's own query IS cheap -- it
+  // asks for no quote and no sale -- but load() ran at boot regardless of which view you landed
+  // on, so the cheap query sat behind the whole roll-up over every quote.
+  // ⛔ UNREACHABLE IS NOT THE ONLY WAY A DOOR CAN BE SHUT. A screen you have to wait through is
+  // one you stop opening, and nothing here measured that.
+  {
+    name: "the quote roll-up is not fetched until somebody opens the analysis view",
+    why: "load() reads every quote ever run. Calling it at boot makes the Marketing view pay for"
+       + " an analysis it never shows. The guard has to be the view switch, not the page.",
+    holds: (f) => {
+      const page = brokersPage(f.worker);
+      return /var PERF_LOADED = false;/.test(page)
+          && /if \(!PERF_LOADED\) load\(\);/.test(page)
+          && !/^ load\(\);$/m.test(page);
+    },
+  },
 ];
 
 const SABOTAGES = [
+  {
+    why: "the eager boot-time load() is put back, so Marketing pays for the analysis again",
+    apply: (f) => ({ ...f, worker: f.worker.replace(" var PERF_LOADED = false;", " var PERF_LOADED = false;\n load();") }),
+  },
+  {
+    why: "the view switch stops loading the analysis, so Performance renders empty forever",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/if \(!PERF_LOADED\) load\(\);/g, "if (!PERF_LOADED) void 0;") }),
+  },
   {
     why: "the RFP Watch nav link is gone, so the page has no door at all",
     apply: (f) => ({ ...f, worker: f.worker.replace(/href: '.admin.rfp-watch'/g, "href: '/admin/gone'") }),
