@@ -7968,9 +7968,22 @@ function load(){
   var r = document.getElementById('fRegion').value; if (r) q.push('region=' + r);
   var d = document.getElementById('fDisp').value;   if (d) q.push('disposition=' + d);
   fetch('/api/admin/rfp' + (q.length ? '?' + q.join('&') : ''))
-    .then(function(res){ return res.json(); })
+    .then(function(res){
+      // The worker answers HTML, not JSON, in exactly one situation worth naming: the tables are
+      // not in this database yet. Letting the JSON parser fail produces "Unexpected token <",
+      // which tells a reader nothing and sent one straight to the Cloudflare error page.
+      var type = res.headers.get('content-type') || '';
+      if (type.indexOf('json') === -1) {
+        throw new Error(res.status === 200 || res.status === 500
+          ? 'the RFP tables are not in this database yet. Open /api/migrate once while signed in, then reload this page. It is safe to run more than once.'
+          : 'the server answered ' + res.status + ' instead of data.');
+      }
+      return res.json();
+    })
     .then(function(j){ DATA = j; render(j); })
-    .catch(function(e){ document.getElementById('counts').textContent = 'Could not load: ' + e; });
+    .catch(function(e){
+      document.getElementById('counts').textContent = 'Could not load: ' + (e && e.message ? e.message : e);
+    });
 }
 
 function render(j){
