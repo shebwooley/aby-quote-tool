@@ -82,6 +82,7 @@ export default {
     if (path === '/api/admin/crm/agency'       && method === 'POST') return withAuth(request, env, () => handleCrmAgencyField(request, env));
     if (path === '/api/admin/crm/import'       && method === 'POST') return withAuth(request, env, () => handleCrmImport(request, env));
     if (path === '/api/admin/crm/agency-dupes' && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyDupes(request, env));
+    if (path === '/api/admin/crm/people'       && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyPeople(request, env));
     if (path === '/api/admin/crm/status'       && method === 'POST') return withAuth(request, env, () => handleCrmRecordStatus(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
     // Referral partners (F-referrals, Eric 2026-08-19)
@@ -2062,9 +2063,18 @@ async function backfillPeople(env) {
     // ⛔ ONLY A PERSON NOTHING POINTS AT *AND* WITH NO HISTORY IS REMOVED. A person carrying a note
     // or a tag is never deleted here even with no addresses -- that is the state a merge leaves
     // behind for a moment, and deleting it would throw away something somebody wrote.
+    //
+    // 🔴🔴 AND A THIRD CONDITION ARRIVED WITH THE EMAILLESS PERSON, 2026-08-24. Before that change
+    // "no address points at this person" and "this person is an orphan" were the same statement.
+    // They are not any more: a person we hold by NAME AND FIRM has no broker_directory row BY
+    // DESIGN, and this sweep would have deleted every one of them on the next migration -- silently,
+    // because a sweep reports a count and not the names. ⛔ 532 imported prospects, gone, and the
+    // screen would simply have shown fewer rows than the file had.
+    // ⭐ agency_id IS NOT NULL is what says "deliberately held", so it is the guard.
     const swept = await env.DB.prepare(
       'DELETE FROM people WHERE NOT EXISTS (SELECT 1 FROM broker_directory d WHERE d.person_id = people.id) ' +
-      "AND NOT EXISTS (SELECT 1 FROM crm_events e WHERE e.entity_type = 'person' AND e.entity_id = people.id)"
+      "AND NOT EXISTS (SELECT 1 FROM crm_events e WHERE e.entity_type = 'person' AND e.entity_id = people.id) " +
+      'AND agency_id IS NULL'
     ).run();
     out.orphansRemoved = (swept && swept.meta && swept.meta.changes) || 0;
 
@@ -2095,8 +2105,15 @@ async function backfillPeople(env) {
     // A machine-created agency that nothing points at, no quote names, and nobody has written a note
     // about. ⛔ All three conditions, because any one of them alone would delete something real.
     const sweptAgencies = await env.DB.prepare(
+      // 🔴🔴 THE SAME ASSUMPTION WAS BAKED IN HERE TOO, AND THIS ONE WAS NOT OBVIOUS.
+      // A firm whose only contacts are phone-only has NO broker_directory row pointing at it, so
+      // this swept the agency out from under them -- leaving people.agency_id pointing at nothing
+      // and the next import creating a second copy of the firm. ⭐ Found by the adoption test
+      // failing, not by reading: the people sweep was fixed and this one sat one screen below it.
+      // ⛔ ONE FIX APPLIED TO ONE COPY OF A PATTERN IS NOT APPLIED TO THE PATTERN (TRAPS #197).
       'DELETE FROM agencies WHERE needs_review IS NOT NULL ' +
       'AND NOT EXISTS (SELECT 1 FROM broker_directory d WHERE d.agency_id = agencies.id) ' +
+      'AND NOT EXISTS (SELECT 1 FROM people p WHERE p.agency_id = agencies.id) ' +
       'AND NOT EXISTS (SELECT 1 FROM quotes q WHERE lower(trim(q.broker_agency)) = lower(trim(agencies.name))) ' +
       "AND NOT EXISTS (SELECT 1 FROM crm_events e WHERE e.entity_type = 'agency' AND e.entity_id = agencies.id)"
     ).run();
@@ -2368,7 +2385,19 @@ async function handleCrmAgencies(request, env) {
   const tag = (u.get('tag') || '').trim();
   const quoted = (u.get('quoted') || '').trim();
 
-  const where = ["COALESCE(a.relationship,'') <> 'succeeded'"];
+  // 🔴🔴 TWO EXCLUSIONS, AND THE SECOND ONE IS WHY ERIC SAW "MMA; MHBT" ON A LIST THAT IS
+  // MEANT TO HIDE ACQUIRED FIRMS. MHBT itself IS marked succeeded and IS hidden -- correctly. But
+  // "MMA; MHBT" is a SEPARATE agency record whose NAME is two firms, created out of quote rows
+  // where somebody typed both names during the transition. It carries no relationship at all, so
+  // the acquired rule could never touch it. Measured 2026-08-24: 47 such rows, every one unmarked,
+  // every one on this list.
+  // ⛔ NOBODY CAN CALL "MMA; MHBT". A compound name is a QUOTE-LOG ARTEFACT, not a firm, and it
+  // does not need Eric to adjudicate which survivor it belongs to before it comes off a
+  // PROSPECTING list. Which firm owns those quotes is a real question and it lives on the analysis
+  // view; this view only has to stop offering a name nobody answers to.
+  // ⚠️ HIDDEN, NEVER DELETED, and counted out loud below -- the quote history hanging off those
+  // names is real and the analysis view still needs it.
+  const where = ["COALESCE(a.relationship,'') <> 'succeeded'", "a.name NOT LIKE '%;%'"];
   const args = [];
   if (rep) { where.push("lower(COALESCE(a.assigned_rep,'')) = ?"); args.push(rep); }
   if (priority) { where.push("COALESCE(a.priority,'') = ?"); args.push(priority); }
@@ -2377,11 +2406,28 @@ async function handleCrmAgencies(request, env) {
   const sql =
     // One pass over the quote log, grouped. Everything else joins to THIS.
     "WITH q AS (SELECT lower(trim(broker_agency)) k, COUNT(*) quotes, MAX(created_at) last_quote " +
-    "           FROM quotes WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1) " +
+    "           FROM quotes WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1), " +
+    // ⭐⭐ SALES, ASKED FOR BY ERIC 2026-08-24: "I noticed it doesn't show sales on that page, just
+    // quotes and agent count." He is right and it was a real gap -- quotes without sales says who
+    // asks, never who buys, and this is the page you decide who to call from.
+    // ⛔ A GROUPED CTE, NOT 658 CORRELATED SUBQUERIES. The whole point of this page is that it stays
+    // fast; a per-row subquery is exactly how it would stop being (the fault fixed earlier today).
+    // ⚠️ Counted by the firm's OWN name, identically to the Quotes beside it, so the two columns can
+    // never disagree about which firm they are describing. That means an acquired name's sales do
+    // NOT roll up to the survivor here -- the analysis view is where families roll up, and this
+    // list deliberately hides dead names anyway.
+    "     s AS (SELECT lower(trim(agency)) k, COUNT(*) sales FROM aby_sales " +
+    "           WHERE trim(COALESCE(agency,'')) <> '' GROUP BY 1) " +
     'SELECT a.id, a.name, a.city, a.state, a.priority, a.assigned_rep, a.needs_review, ' +
     '       a.relationship, a.parent_id, a.relationship_note, pa.name AS parent_name, ' +
     '       COALESCE(q.quotes, 0) AS quotes, q.last_quote, ' +
-    '       (SELECT COUNT(*) FROM broker_directory d WHERE d.agency_id = a.id) AS agents, ' +
+    '       COALESCE(s.sales, 0) AS sales, ' +
+    // ⭐ BOTH KINDS OF PERSON ARE COUNTED. Somebody held by name and firm has no broker_directory
+    // row by design, so counting only that table would have reported "0 agents" for a firm whose
+    // whole team we had just imported -- the count quietly meaning "agents with an email".
+    '       ((SELECT COUNT(*) FROM broker_directory d WHERE d.agency_id = a.id) + ' +
+    '        (SELECT COUNT(*) FROM people p WHERE p.agency_id = a.id ' +
+    '           AND NOT EXISTS (SELECT 1 FROM broker_directory d2 WHERE d2.person_id = p.id))) AS agents, ' +
     "       (SELECT COUNT(*) FROM crm_events e WHERE e.entity_type = 'agency' AND e.entity_id = a.id " +
     "          AND e.kind = 'note') AS notes, " +
     "       (SELECT MAX(e.happened_at) FROM crm_events e WHERE e.entity_type = 'agency' " +
@@ -2389,6 +2435,7 @@ async function handleCrmAgencies(request, env) {
     'FROM agencies a ' +
     'LEFT JOIN agencies pa ON pa.id = a.parent_id ' +
     'LEFT JOIN q ON q.k = lower(trim(a.name)) ' +
+    'LEFT JOIN s ON s.k = lower(trim(a.name)) ' +
     'WHERE ' + where.join(' AND ') + ' ORDER BY a.name LIMIT 2000';
 
   try {
@@ -2444,11 +2491,23 @@ async function handleCrmAgencies(request, env) {
       // ⭐ REPORTED SO THE SCREEN CAN SAY WHAT IT IS HIDING. A filtered page that does not say it is
       // filtered is the same defect as an empty page that says everything is done.
       excludedAcquired: await countAcquired(env),
+      excludedCompound: await countCompound(env),
     });
   } catch (err) {
     // 🔴 A THROWN QUERY MUST NOT RENDER AS "no agencies". The error reaches the screen.
     return jsonResp({ agencies: [], error: String((err && err.message) || err) }, 500);
   }
+}
+
+// ⛔ A LIST THAT QUIETLY DROPS ROWS IS INDISTINGUISHABLE FROM ONE THAT LOST THEM. Both numbers
+// are printed, so the reader knows the list is shorter than the table on purpose.
+async function countCompound(env) {
+  try {
+    const r = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM agencies WHERE name LIKE '%;%' AND COALESCE(relationship,'') <> 'succeeded'"
+    ).first();
+    return (r && r.n) || 0;
+  } catch { return null; }
 }
 
 async function countAcquired(env) {
@@ -2619,6 +2678,71 @@ async function resolveAgency(env, rawName, now, provenance) {
  * stable way to know who somebody is, and badge lists often have none -- so this will be a real and
  * visible fraction, and saying so is the point.
  */
+// A PERSON WE KNOW BY NAME AND FIRM. Returns the one person at this agency with this name, or
+// says why it will not answer.
+//
+// 🔴🔴 THE UNIQUENESS TEST IS THE WHOLE SAFETY PROPERTY, AND OMITTING IT MAKES THE SCREEN TIDIER,
+// WHICH IS WHY IT GETS OMITTED. TRAPS #286: the agent list keyed on "email if present, else name"
+// and welded fifteen people into eight, because two humans who share a name look like one row.
+// Scoping to the agency makes a collision far rarer -- it does not make it impossible, and "rarer"
+// is not a safety argument. Two Chris Millers at Higginbotham must stay two people.
+// ⛔ SO AN AMBIGUOUS NAME IS REFUSED, NEVER RESOLVED. Refusing is recoverable by hand; a silent
+// weld moves one person's history onto another and nobody ever finds out.
+//
+// It looks in BOTH places on purpose. Somebody may already be here as an emailed agent from the
+// quote log, and importing a list that names them without an address must not mint a second them.
+//
+// 🔴🔴 addressedToo IS THE DIFFERENCE BETWEEN TWO QUESTIONS THAT LOOK LIKE ONE.
+//   ① A ROW WITH NO EMAIL asks 'do we already know this person, in any form?' -- and it must see
+//     emailed people too, or importing a list that names an agent we have quoted for years mints a
+//     silent second copy of them.
+//   ② AN EMAIL ARRIVING asks the much narrower 'is this the address for somebody we hold with NO
+//     address?' -- and it must NOT see emailed people, because two different addresses at one firm
+//     under one name are routinely one human with a work and a personal account, but they are
+//     sometimes two humans, and this path cannot tell. ⛔ Merging them would be a weld, which is
+//     the exact failure TRAPS #286 records, arriving from the other direction.
+// ⭐ So adoption only ever claims somebody who has no address at all. That is precisely what Eric
+// asked for -- 'an email added later' -- and nothing wider.
+async function crmPersonAtAgency(env, name, agencyId, addressedToo) {
+  const n = String(name || '').trim().toLowerCase();
+  if (!n || !agencyId) return { id: null, why: 'need both a name and a firm' };
+
+  // ⚠️ 'HELD WITH NO ADDRESS' IS A STATEMENT ABOUT broker_directory, NOT ABOUT people.agency_id.
+  // The first version of this filtered on the agency link alone -- which every person carries,
+  // addressed or not -- so the second of two addresses at one firm ADOPTED the first and welded
+  // two humans together. The test caught it because the SETUP was asserted rather than assumed.
+  const sql = 'SELECT p.id FROM people p WHERE p.agency_id = ? AND lower(trim(p.name)) = ?'
+    + ' AND NOT EXISTS (SELECT 1 FROM broker_directory bd WHERE bd.person_id = p.id)'
+    + (addressedToo
+        ? ' UNION SELECT d.person_id AS id FROM broker_directory d WHERE d.agency_id = ?'
+          + '   AND lower(trim(d.name)) = ? AND d.person_id IS NOT NULL'
+        : '');
+  const st = env.DB.prepare(sql);
+  const rows = await (addressedToo ? st.bind(agencyId, n, agencyId, n) : st.bind(agencyId, n)).all();
+
+  const ids = [...new Set((rows.results || []).map((r) => r.id).filter(Boolean))];
+  if (ids.length === 1) return { id: ids[0], why: '' };
+  if (ids.length > 1) {
+    return { id: null, ambiguous: true, why: 'more than one person of this name at this firm, so it is not clear who this is' };
+  }
+  return { id: null, why: '' };
+}
+
+// ONE TAGGING PATH FOR BOTH KINDS OF ROW. An emailed person and a name-and-firm person take the
+// same de-duplicated tag event. Writing it twice is how two rules meant to be identical drift.
+async function crmTagPerson(env, personId, label, happenedAt, now, by) {
+  const dupe = await env.DB.prepare(
+    "SELECT id FROM crm_events WHERE kind = 'tag' AND entity_type = 'person' AND entity_id = ? " +
+    'AND lower(trim(label)) = ? AND happened_at = ? LIMIT 1'
+  ).bind(personId, label.toLowerCase(), happenedAt).first();
+  if (dupe) return 0;
+  await env.DB.prepare(
+    'INSERT INTO crm_events (id, entity_type, entity_id, kind, label, body, happened_at, created_at, created_by) ' +
+    "VALUES (?,'person',?,'tag',?,NULL,?,?,?)"
+  ).bind(crypto.randomUUID(), personId, label, happenedAt, now, by).run();
+  return 1;
+}
+
 async function handleCrmImport(request, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
 
@@ -2637,7 +2761,10 @@ async function handleCrmImport(request, env) {
   if (by && CRM_REPS.indexOf(by) === -1) return jsonResp({ error: 'Unknown person.' }, 400);
 
   const now = new Date().toISOString();
-  const added = [], known = [], refused = [], differs = [];
+  // ⭐ adopted IS ITS OWN OUTCOME, NOT A KIND OF "known". It means an address arrived for somebody
+  // we already held by name and firm -- the thing Eric asked for -- and it is the one outcome that
+  // proves the two halves joined up instead of quietly making a second copy of a person.
+  const added = [], known = [], refused = [], differs = [], adopted = [];
   let tagged = 0;
   let schemaError = null;
 
@@ -2647,8 +2774,50 @@ async function handleCrmImport(request, env) {
     const agency = String((row && row.agency) || '').trim().slice(0, 120);
     const phone = String((row && row.phone) || '').trim().slice(0, 40);
 
+    // ⭐⭐ NO EMAIL IS NO LONGER A REFUSAL. Eric, 2026-08-24: "if we know an agent and an agency then
+    // that should work and an email added later." What replaces the address as the key is the pair
+    // NAME + FIRM -- and it is only ever accepted when it names exactly one person (see
+    // crmPersonAtAgency). A row missing either half still cannot be placed and still says so.
+    if (!email) {
+      if (!name || !agency) {
+        refused.push({ who: name || agency || '(blank row)',
+          why: !name ? 'no email and no name, so there is nothing to know them by'
+                     : 'no email and no firm -- a name on its own is not enough to tell two people apart' });
+        continue;
+      }
+      try {
+        const agencyId = await resolveAgency(env, agency, now,
+          'created by an imported list -- no quote has ever named this firm');
+        const hit = await crmPersonAtAgency(env, name, agencyId, true);
+        if (hit.ambiguous) { refused.push({ who: name + ' (' + agency + ')', why: hit.why }); continue; }
+
+        let personId = hit.id;
+        if (personId) {
+          known.push({ email: '', name: name });
+          // ⭐ A PHONE IS THE ONLY WAY TO REACH SOMEBODY WITH NO ADDRESS, so a blank one is filled in
+          // and an existing one is never overwritten -- same rule the emailed path uses for names.
+          if (phone) {
+            await env.DB.prepare("UPDATE people SET phone = ?, updated_at = ? WHERE id = ? AND trim(COALESCE(phone,'')) = ''")
+              .bind(phone, now, personId).run();
+          }
+        } else {
+          personId = crypto.randomUUID();
+          await env.DB.prepare(
+            'INSERT INTO people (id, name, phone, agency_id, source, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
+          ).bind(personId, name, phone, agencyId, 'import', now, now).run();
+          added.push({ email: '', name: name });
+        }
+        if (label && personId) tagged += await crmTagPerson(env, personId, label, happenedAt, now, by);
+      } catch (err) {
+        const msg = String((err && err.message) || err);
+        if (/no such (table|column)/i.test(msg)) { schemaError = msg; break; }
+        refused.push({ who: name || '(no name)', why: msg });
+      }
+      continue;
+    }
+
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-      refused.push({ who: name || '(no name)', why: 'no email address, so there is no stable way to know who this is' });
+      refused.push({ who: name || '(no name)', why: 'that does not look like an email address' });
       continue;
     }
 
@@ -2679,32 +2848,42 @@ async function handleCrmImport(request, env) {
         }
       } else {
         const agencyId = await resolveAgency(env, agency, now,
-          'created 2026-08-23 by an imported list -- no quote has ever named this firm');
-        personId = crypto.randomUUID();
-        await env.DB.prepare('INSERT INTO people (id, name, created_at, updated_at) VALUES (?,?,?,?)')
-          .bind(personId, name, now, now).run();
+          'created by an imported list -- no quote has ever named this firm');
+
+        // ⭐⭐ THIS IS THE "AND AN EMAIL ADDED LATER" HALF OF ERIC'S RULE, AND IT IS THE HALF THAT
+        // SILENTLY SPLITS PEOPLE IF IT IS LEFT OUT. We may already hold this person by NAME AND FIRM
+        // with no address. Minting a new person here would leave the same human in the list twice --
+        // once with an email and once without -- each looking whole, which is exactly the shape
+        // TRAPS #286 describes. So an address arriving for somebody we already know ATTACHES to
+        // them.
+        // ⛔ And it attaches only when the name resolves to ONE person at that firm; ambiguity falls
+        // through to creating a separate record rather than guessing which of two people this is.
+        const prior = agencyId ? await crmPersonAtAgency(env, name, agencyId, false) : { id: null };
+        if (prior.id) {
+          personId = prior.id;
+          adopted.push({ email, name });
+          await env.DB.prepare('UPDATE people SET updated_at = ? WHERE id = ?').bind(now, personId).run();
+        } else {
+          personId = crypto.randomUUID();
+          await env.DB.prepare(
+            'INSERT INTO people (id, name, phone, agency_id, source, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
+          ).bind(personId, name, phone, agencyId, 'import', now, now).run();
+        }
         // ⭐ source RECORDS WHERE THE ROW CAME FROM. Without it, first_seen on an imported agent reads
         // as "first quoted", which is a different and untrue fact.
         await env.DB.prepare(
           'INSERT INTO broker_directory (email, name, phone, agency, agency_id, first_seen, last_seen, ' +
           'quote_count, person_id, source) VALUES (?,?,?,?,?,?,?,?,?,?)'
         ).bind(email, name, phone, agency, agencyId, now, now, 0, personId, 'import').run();
-        added.push({ email, name });
+        // ⭐ ADOPTED IS NOT ADDED. The address is new; the PERSON is not, and reporting them as a
+        // new contact is how a list of 500 reads as 500 new relationships when some are existing ones.
+        if (!prior.id) added.push({ email, name });
+        // A person we held only by name and firm now has an address, so the agency link lives on
+        // their broker_directory row and keeping it on people too would be the same fact twice.
+        else await env.DB.prepare('UPDATE people SET agency_id = NULL WHERE id = ?').bind(personId).run();
       }
 
-      if (label && personId) {
-        const dupe = await env.DB.prepare(
-          "SELECT id FROM crm_events WHERE kind = 'tag' AND entity_type = 'person' AND entity_id = ? " +
-          'AND lower(trim(label)) = ? AND happened_at = ? LIMIT 1'
-        ).bind(personId, label.toLowerCase(), happenedAt).first();
-        if (!dupe) {
-          await env.DB.prepare(
-            'INSERT INTO crm_events (id, entity_type, entity_id, kind, label, body, happened_at, created_at, created_by) ' +
-            "VALUES (?,'person',?,'tag',?,NULL,?,?,?)"
-          ).bind(crypto.randomUUID(), personId, label, happenedAt, now, by).run();
-          tagged++;
-        }
-      }
+      if (label && personId) tagged += await crmTagPerson(env, personId, label, happenedAt, now, by);
     } catch (err) {
       const msg = String((err && err.message) || err);
       // ⛔ A MISSING COLUMN OR TABLE IS THE DEPLOY BEING AHEAD OF THE DATABASE. Reported once, at
@@ -2726,8 +2905,9 @@ async function handleCrmImport(request, env) {
 
   return jsonResp({
     ok: true, label: label || null, happened_at: happenedAt,
-    added: added.length, known: known.length, refused: refused.length, tagged,
-    detail: { added, known, refused, differs },
+    added: added.length, known: known.length, refused: refused.length,
+    adopted: adopted.length, tagged,
+    detail: { added, known, refused, differs, adopted },
   });
 }
 
@@ -2879,6 +3059,40 @@ async function handleAgencyPersonUpdate(request, env) {
  * Star Insurance" and "Lone Star Insurance Services" may be one firm or two, and only Eric or Niels
  * knows. ⚠️ Matched on letters and digits only, so punctuation and case cannot hide a pair.
  */
+// THE PEOPLE AT ONE FIRM -- BOTH KINDS, IN ONE LIST.
+//
+// ⭐⭐ WRITTEN IN THE SAME COMMIT AS THE STORAGE, NOT AFTER IT (TRAPS #284, #275). Storing 532
+// phone-only contacts behind a screen that only reads broker_directory would have put every one of
+// them in the database and none of them in front of a human -- and the firm row would have shown a
+// count nobody could act on. ⛔ A COUNT CANNOT BE CALLED.
+//
+// The UNION is the point: a person with an address comes from broker_directory, a person we hold by
+// name and firm comes from people, and the screen must not care which. has_email lets the page say
+// what is missing rather than rendering a blank cell that reads as a bug.
+async function handleCrmAgencyPeople(request, env) {
+  const id = (new URL(request.url).searchParams.get('agency_id') || '').trim();
+  if (!id) return jsonResp({ error: 'Which firm?' }, 400);
+  try {
+    const r = await env.DB.prepare(
+      "SELECT d.name AS name, d.email AS email, d.phone AS phone, d.quote_count AS quotes, " +
+      "       1 AS has_email, COALESCE(d.source,'quotes') AS source " +
+      'FROM broker_directory d WHERE d.agency_id = ? ' +
+      'UNION ALL ' +
+      "SELECT p.name AS name, '' AS email, COALESCE(p.phone,'') AS phone, 0 AS quotes, " +
+      "       0 AS has_email, COALESCE(p.source,'import') AS source " +
+      'FROM people p WHERE p.agency_id = ? ' +
+      '  AND NOT EXISTS (SELECT 1 FROM broker_directory d2 WHERE d2.person_id = p.id) ' +
+      'ORDER BY has_email DESC, quotes DESC, name COLLATE NOCASE'
+    ).bind(id, id).all();
+    const rows = r.results || [];
+    return jsonResp({ people: rows, matched: rows.length });
+  } catch (err) {
+    // 🔴 AN ERROR IS NOT AN EMPTY FIRM. The two must never render the same way -- this admin has
+    // confused them before (TRAPS #253, #264).
+    return jsonResp({ people: [], error: String((err && err.message) || err) }, 500);
+  }
+}
+
 async function handleCrmAgencyDupes(request, env) {
   try {
     const { results } = await env.DB.prepare(
@@ -3823,9 +4037,11 @@ ${abyAdminNav('/admin/brokers')}
           Add a list from an event</summary>
         <div style="margin-top:10px">
           <p class="sub" style="margin:0 0 8px">Paste rows straight out of a spreadsheet &mdash;
-            name, firm, email, phone, in any order. The email is what identifies somebody, so a
-            row without one cannot be added. <strong>Anybody we already know is recognised and
-            tagged, not duplicated.</strong></p>
+            name, firm, email, phone, in any order. <strong>An email is not required:</strong> a
+            person is identified by their email when there is one, and otherwise by their name and
+            firm together, so a phone-only contact can go in now and gain an address later.
+            <strong>Anybody we already know is recognised and tagged, not duplicated</strong>
+            &mdash; including when the address arrives for somebody already on the list by name.</p>
           <textarea id="importBox" oninput="previewList()" rows="5"
             placeholder="Jane Smith&#9;Acme Benefits&#9;jane@acme.com&#9;(214) 555-0134"
             style="width:100%;padding:9px;border:1px solid #c8d2de;border-radius:6px;font:13px ui-monospace,Consolas,monospace"></textarea>
@@ -4718,6 +4934,34 @@ ${abyAdminNav('/admin/brokers')}
 
  function q(id){ return document.getElementById(id); }
 
+ function closeFirm(){
+   // If we pushed an entry, going back is the honest way out -- it keeps the URL and the screen
+   // agreeing. If we did not (an old browser, or a direct link), just repaint.
+   try {
+     if (history.state && history.state.firm){ history.back(); return; }
+   } catch (e) { /* fall through */ }
+   paintMkt();
+ }
+
+ window.addEventListener('popstate', function(ev){
+   if (view !== 'marketing') return;
+   var st = ev.state;
+   if (st && st.firm) openFirm(st.firm, true);
+   else paintMkt();
+ });
+
+ // ⭐ A LINK STRAIGHT TO A FIRM LANDS ON THE FIRM, not on the list with the wrong view showing.
+ // ⚠️ It has to wait for the rows: openFirm reads mktRows, so calling it before loadMkt has
+ // returned finds nothing and silently does nothing -- the first render is not a repaint (#239).
+ function openFirmFromUrl(){
+   var m = String(location.search || '').match(/[?&]firm=([^&]+)/);
+   if (!m) return false;
+   var id = decodeURIComponent(m[1]);
+   try { history.replaceState({ firm: id }, '', location.search); } catch (e) {}
+   openFirm(id, true);
+   return true;
+ }
+
  // ── ADDING A LIST FROM AN EVENT ──────────────────────────────────────────────────────────────
  //
  // ⛔ NO BACKSLASHES IN HERE. Every page is one template literal, so a regex written the short way
@@ -4774,7 +5018,11 @@ ${abyAdminNav('/admin/brokers')}
          + (parsed.length === 1 ? '' : 's')
          // ⚠️ SAID UP FRONT, NOT AFTER. A row with no address cannot be added at all, and finding
          // that out after pressing Apply is the wrong moment.
-         + (noEmail ? '. <strong style="color:#a12622">' + noEmail + ' with no email address, which cannot be added.</strong>' : '.')
+         // ⭐ THIS SAID "which cannot be added" AND WAS TRUE UNTIL 2026-08-24. Leaving it would have
+         // told somebody their phone-only rows were being dropped while they were quietly going in.
+         + (noEmail ? '. <span class="muted">' + noEmail + ' with no email address &mdash; '
+                    + (noEmail === 1 ? 'it goes in' : 'they go in')
+                    + ' under the name and firm, and can gain an address later.</span>' : '.')
          + '</p><table class="grid"><colgroup><col><col><col style="width:230px"><col style="width:130px"></colgroup>'
          + '<thead><tr><th>Name</th><th>Firm</th><th>Email</th><th>Phone</th></tr></thead><tbody>';
    for (var j = 0; j < parsed.length && j < 12; j++){
@@ -4859,9 +5107,13 @@ ${abyAdminNav('/admin/brokers')}
    }
    mktRows = d.agencies || [];
    q('mktSub').textContent = 'Every firm we could work, including the ones that have never quoted.'
-     + (d.excludedAcquired ? ' ' + d.excludedAcquired + ' acquired names are hidden, because nobody can call them.' : '');
+     + (d.excludedAcquired ? ' ' + d.excludedAcquired + ' acquired names are hidden, because nobody can call them.' : '')
+     + (d.excludedCompound ? ' ' + d.excludedCompound + ' rows whose name is two firms at once ("MMA; MHBT") are hidden too'
+                           + ' \u2014 they came out of the quote log and are not firms anybody answers to.' : '');
    await loadTags();
-   paintMkt();
+   // ⚠️ THE URL WINS OVER THE DEFAULT RENDER, and only once the rows are here. openFirm reads
+   // mktRows, so asking for a firm before this point finds nothing and does nothing at all.
+   if (!openFirmFromUrl()) paintMkt();
  }
 
  async function loadTags(){
@@ -4903,6 +5155,52 @@ ${abyAdminNav('/admin/brokers')}
    return h + '</select>';
  }
 
+ // ── THE MARKETING LIST IS A HIERARCHY: FIRM -> BRANCHES -> AGENTS ────────────────────────────
+ //
+ // 🔴🔴 ERIC, 2026-08-24: "I thought we were going to have agencies with subagencies below" and
+ // "Why are there no agents under the agencies on the marketing list?" He is right on both. This
+ // list was a FLAT table that showed a branch as its own row with "(branch of X)" in grey, and an
+ // agent COUNT with no way to see who those agents were. A count is not a call list, and a branch
+ // sitting beside its parent as a peer is the opposite of the structure he asked for.
+ //
+ // ⚠️ THE ANALYSIS VIEW HAS DONE THIS SINCE 08-22 AND THIS ONE NEVER DID, which is why it read as
+ // something that had been taken away. Same shape, different source: that one rolls up the QUOTE
+ // LOG, this one nests the AGENCY RECORDS, so a firm that has never quoted still appears.
+ var mktOpen = {};
+ var mktBusy = {};
+
+ function agentRows(a){
+   var people = mktOpen[a.id];
+   if (people === undefined) return '<tr class="kid"><td></td><td colspan="10" class="muted">Loading...</td></tr>';
+   if (!people.length) return '<tr class="kid"><td></td><td colspan="10" class="muted">Nobody on file at this firm.</td></tr>';
+   var out = '';
+   for (var i = 0; i < people.length; i++){
+     var p = people[i];
+     // ⭐ "no email yet" is a STATE we chose to accept, not a missing value. A blank cell here would
+     // read as a broken row rather than as the next thing to go and find out.
+     out += '<tr class="kid"><td></td><td class="wrapcell" style="padding-left:26px">'
+          + (esc(p.name || '') || '<span class="muted">unnamed</span>')
+          + (Number(p.has_email) ? '' : ' <span class="muted" style="font-size:11.5px">no email yet</span>')
+          + '</td><td class="wrapcell" colspan="2">'
+          + (Number(p.has_email) ? esc(p.email) : '<span class="muted">&mdash;</span>')
+          + '</td><td class="wrapcell" colspan="2">' + (esc(p.phone || '') || '<span class="muted">&mdash;</span>')
+          + '</td><td class="c">' + (Number(p.quotes) || 0) + '</td><td colspan="4"></td></tr>';
+   }
+   return out;
+ }
+
+ async function toggleFirm(id){
+   if (mktOpen[id] !== undefined && !mktBusy[id]){ delete mktOpen[id]; paintMkt(); return; }
+   mktBusy[id] = 1; mktOpen[id] = undefined; paintMkt();
+   var r = await fetch('/api/admin/crm/people?agency_id=' + encodeURIComponent(id));
+   var d = await r.json().catch(function(){ return {}; });
+   // 🔴 AN ERROR IS NOT AN EMPTY FIRM. Three pages in this admin have rendered a failed query as a
+   // cheerful empty state; these must never look the same.
+   mktOpen[id] = d.error ? [] : (d.people || []);
+   delete mktBusy[id];
+   paintMkt();
+ }
+
  function paintMkt(){
    var find = (q('mFind').value || '').trim().toLowerCase();
    var rows = mktRows;
@@ -4910,9 +5208,7 @@ ${abyAdminNav('/admin/brokers')}
 
    q('mCount').textContent = rows.length + ' of ' + mktRows.length + ' firms';
    // ⛔ TESTED ON THE FILTERED LIST, NOT THE FETCHED ONE. Checking mktRows meant that filtering
-   // 660 firms down to none fell through to the renderer and drew a header with no rows beneath
-   // it. ⚠️ NOTHING FETCHED and NOTHING MATCHED are also different sentences, and a reader needs
-   // to know which one they are looking at before they change a filter.
+   // 660 firms down to none fell through to the renderer and drew a header with no rows beneath it.
    if (!rows.length){
      q('mkt').innerHTML = mktRows.length
        ? '<p class="muted">None of the ' + mktRows.length + ' firms match these filters. Widen them, or clear the tag.</p>'
@@ -4920,45 +5216,75 @@ ${abyAdminNav('/admin/brokers')}
      return;
    }
 
-   var h = '<table class="grid"><colgroup><col style="width:34px"><col><col style="width:104px">'
-         + '<col style="width:64px"><col style="width:70px"><col style="width:132px">'
-         + '<col style="width:88px"><col style="width:96px">'
-         + '<col style="width:132px"><col style="width:78px"></colgroup><thead><tr>'
+   // ⭐⭐ BRANCHES HANG OFF THEIR PARENT AND NEVER APPEAR AS PEERS. ⚠️ A branch whose parent is not
+   // in the current result (filtered out, or acquired and hidden) is promoted to top level rather
+   // than vanishing -- losing a callable firm because its parent was filtered is the worse failure.
+   var byId = {}, kids = {};
+   for (var i = 0; i < rows.length; i++) byId[rows[i].id] = rows[i];
+   for (var j = 0; j < rows.length; j++){
+     var pid = rows[j].parent_id;
+     if (pid && byId[pid]) (kids[pid] = kids[pid] || []).push(rows[j]);
+   }
+   var tops = rows.filter(function(x){ return !(x.parent_id && byId[x.parent_id]); });
+
+   var h = '<div style="overflow-x:auto">'
+         + '<table class="grid" style="min-width:1080px"><colgroup>'
+         + '<col style="width:30px"><col><col style="width:96px">'
+         + '<col style="width:58px"><col style="width:58px"><col style="width:58px">'
+         + '<col style="width:124px"><col style="width:84px"><col style="width:92px">'
+         + '<col style="width:120px"><col style="width:82px"></colgroup><thead><tr>'
          + '<th><input type="checkbox" onclick="selAll(this)"></th>'
          + '<th>Firm</th><th>Where</th><th class="c">Agents</th><th class="c">Quotes</th>'
-         // ⭐⭐ THE COMPARISON IS THE FEATURE. What they ARE today, and what somebody
-         // RECORDED them as, side by side. Either alone answers a different question.
-         + '<th>Status</th>'
+         // ⭐⭐ SALES SITS BESIDE QUOTES BECAUSE THE PAIR IS THE POINT. Quotes alone says who ASKS;
+         // it takes both to see who BUYS, and this is the page you decide who to call from.
+         + '<th class="c">Sales</th><th>Status</th>'
          + '<th>Priority</th><th>Owner</th><th>Tags</th><th class="date">Last contact</th>'
          + '</tr></thead><tbody>';
 
-   for (var i = 0; i < rows.length; i++){
-     var a = rows[i];
+   function firmRow(a, depth){
      var where = a.metro ? esc(a.metro) : (a.city ? esc(a.city) : '');
      if (a.state) where += (where ? ', ' : '') + esc(a.state);
-     if (!where) where = '<span class="muted">—</span>';
+     if (!where) where = '<span class="muted">&mdash;</span>';
      var tags = '';
-     for (var k = 0; k < a.tags.length && k < 4; k++){
-       tags += '<span class="tag">' + esc(a.tags[k].label) + '</span>';
-     }
+     for (var k = 0; k < a.tags.length && k < 4; k++) tags += '<span class="tag">' + esc(a.tags[k].label) + '</span>';
      if (a.tags.length > 4) tags += '<span class="muted">+' + (a.tags.length - 4) + '</span>';
-     h += '<tr>'
+     var open = mktOpen[a.id] !== undefined;
+     // ⭐ The caret only appears where there is something under it. A control that expands to
+     // nothing teaches people to stop pressing it.
+     var caret = Number(a.agents) > 0
+       ? '<a href="#" onclick="toggleFirm(' + "'" + a.id + "'" + ');return false" '
+         + 'style="text-decoration:none;font-size:11px;color:#5b6b7f;margin-right:5px">'
+         + (open ? '&#9660;' : '&#9654;') + '</a>'
+       : '<span style="display:inline-block;width:16px"></span>';
+     var out = '<tr>'
         + '<td><input type="checkbox" ' + (mktSel[a.id] ? 'checked ' : '') + 'onclick="selOne(this,' + "'" + a.id + "'" + ')"></td>'
-        + '<td class="wrapcell"><strong>' + esc(a.name) + '</strong>'
-        + (a.parent_name ? ' <span class="muted">(' + esc(a.relationship === 'division' ? 'branch of ' : 'under ') + esc(a.parent_name) + ')</span>' : '')
-        + (a.needs_review ? '<span class="rev" title="' + esc(a.needs_review) + '">check</span>' : '')
-        + ' <a href="#" onclick="openFirm(' + "'" + a.id + "'" + ');return false" style="font-size:12px">open</a></td>'
+        + '<td class="wrapcell"' + (depth ? ' style="padding-left:18px"' : '') + '>' + caret
+        // ⭐ THE NAME IS THE LINK. Eric: "I would prefer that the agency name be linked where it
+        // opens when you click it." A separate open link was a second thing to aim at for no reason.
+        + '<a href="?firm=' + encodeURIComponent(a.id) + '" onclick="openFirm(' + "'" + a.id + "'" + ');return false">'
+        + (depth ? '' : '<strong>') + esc(a.name) + (depth ? '' : '</strong>') + '</a>'
+        + (depth ? ' <span class="muted" style="font-size:11.5px">branch</span>' : '')
+        + (a.needs_review ? '<span class="rev" title="' + esc(a.needs_review) + '">check</span>' : '') + '</td>'
         + '<td>' + where + '</td>'
         + '<td class="c">' + (a.agents || '<span class="muted">0</span>') + '</td>'
         + '<td class="c">' + (a.quotes ? a.quotes : '<span class="never">never</span>') + '</td>'
+        // ⚠️ NO SALES and NEVER QUOTED are different facts and must not print the same way. A firm
+        // that quoted 40 times and sold nothing is the finding; a dash there would hide it.
+        + '<td class="c">' + (a.sales ? a.sales : '<span class="muted">0</span>') + '</td>'
         + '<td class="wrapcell">' + statusCell(a) + '</td>'
         + '<td>' + priSel(a.id, a.priority) + '</td>'
         + '<td>' + repSel(a.id, a.assigned_rep) + '</td>'
-        + '<td class="wrapcell">' + (tags || '<span class="muted">—</span>') + '</td>'
-        + '<td class="date">' + (a.last_contact ? day(a.last_contact) : '<span class="muted">—</span>') + '</td>'
+        + '<td class="wrapcell">' + (tags || '<span class="muted">&mdash;</span>') + '</td>'
+        + '<td class="date">' + (a.last_contact ? day(a.last_contact) : '<span class="muted">&mdash;</span>') + '</td>'
         + '</tr>';
+     if (open) out += agentRows(a);
+     var kl = kids[a.id] || [];
+     for (var m = 0; m < kl.length; m++) out += firmRow(kl[m], (depth || 0) + 1);
+     return out;
    }
-   q('mkt').innerHTML = h + '</tbody></table>';
+
+   for (var t = 0; t < tops.length; t++) h += firmRow(tops[t], 0);
+   q('mkt').innerHTML = h + '</tbody></table></div>';
    showBulk();
  }
 
@@ -5011,15 +5337,33 @@ ${abyAdminNav('/admin/brokers')}
  }
 
  // A firm's own panel: its notes, its people, and what happened to it.
- async function openFirm(id){
+ // ⭐⭐ OPENING A FIRM IS A HISTORY STEP, SO BACK COMES BACK HERE.
+ //
+ // Eric, 2026-08-24: "How come when you click it and you hit back it goes to a different page rather
+ // than brokers and agencies?" 🔴 Because opening a firm changed NOTHING the browser could see. The
+ // control was <a href="#"> with return false, so no entry was ever pushed and Back went to whatever
+ // page you were on BEFORE this one -- usually the quote log. The firm panel and the list looked like
+ // two pages and the browser only ever knew about one.
+ // ⭐ Now the firm id is in the URL, so Back returns to the list, Close does the same thing as Back,
+ // and a firm panel can be linked to -- the same trick the dashboard's ?tool=__log already uses.
+ // ⚠️ THE PUSH IS GUARDED. saveWhere, addNote, recordStatus and saveRel all re-open the panel to
+ // repaint it; without the guard each save would stack another identical entry and Back would walk
+ // through them one at a time instead of returning to the list.
+ async function openFirm(id, fromHistory){
    var a = null;
    for (var i = 0; i < mktRows.length; i++){ if (mktRows[i].id === id) a = mktRows[i]; }
    if (!a) return;
+   try {
+     var cur = history.state && history.state.firm;
+     if (!fromHistory && cur !== id) history.pushState({ firm: id }, '', '?firm=' + encodeURIComponent(id));
+   } catch (e) { /* history is a nicety; the panel still opens without it */ }
    var r = await fetch('/api/admin/crm?entity_type=agency&entity_id=' + encodeURIComponent(id));
    var d = await r.json().catch(function(){ return {}; });
    var ev = d.events || [];
    var h = '<div class="card" style="border-color:#1a5c3a"><h2 style="cursor:default">' + esc(a.name)
-         + ' <button style="margin-left:auto;font-size:13px" onclick="paintMkt()">Close</button></h2>'
+         // ⭐ CLOSE AND BACK DO THE SAME THING. Two ways out that behave differently is how somebody
+         // ends up with a Back button that does not undo the thing they just did.
+         + ' <button style="margin-left:auto;font-size:13px" onclick="closeFirm()">Close</button></h2>'
          + '<div class="mfilters">'
          + '<input id="fCity" placeholder="City" value="' + esc(a.city || '') + '" style="padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
          + '<input id="fState" placeholder="TX" maxlength="2" size="3" value="' + esc(a.state || '') + '" style="padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
@@ -5057,6 +5401,11 @@ ${abyAdminNav('/admin/brokers')}
          + '<input id="fRelNote" placeholder="Note (optional)" value="' + esc(a.relationship_note || '') + '" style="flex:1;padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
          + '<button onclick="saveRel(' + "'" + id + "'" + ')">Save</button>'
          + '</div></details>';
+   // ⭐⭐ THE PEOPLE AT THIS FIRM, WITH THE PHONE-ONLY ONES ALONGSIDE THE EMAILED ONES. The row
+   // already showed an agent COUNT; a count is not a call list. Fetched here rather than with the
+   // main list because a firm panel is opened one at a time and 668 sub-queries is a slow page.
+   h += '<h3 style="font-size:14px;margin:16px 0 6px;color:#1a5c3a">People we have on file</h3>'
+      + '<div id="firmPeople"><p class="muted">Loading...</p></div>';
    if (!ev.length){
      h += '<p class="muted">Nothing recorded about this firm yet.</p>';
    } else {
@@ -5076,6 +5425,9 @@ ${abyAdminNav('/admin/brokers')}
      h += '</tbody></table>';
    }
    q('mkt').innerHTML = h + '</div>';
+   // ⚠️ AFTER the innerHTML, never before: the container it fills does not exist until this line
+   // has run. Same shape as TRAPS #239 -- the first render is not a repaint.
+   loadFirmPeople(id);
  }
 
  async function saveWhere(id){
@@ -5090,9 +5442,37 @@ ${abyAdminNav('/admin/brokers')}
      if (!r.ok){ q('fMsg').textContent = d.error || 'That did not save.'; return; }
      for (var i = 0; i < mktRows.length; i++){ if (mktRows[i].id === id) mktRows[i][field] = el.value; }
    }
-   q('fMsg').textContent = 'Saved.';
-   await loadMkt();
    openFirm(id);
+ }
+
+ // ⛔ AN ERROR, AN EMPTY FIRM AND A FIRM FULL OF PHONE-ONLY CONTACTS ARE THREE DIFFERENT ANSWERS
+ // and all three used to be renderable as the same blank space.
+ async function loadFirmPeople(id){
+   var box = document.getElementById('firmPeople');
+   if (!box) return;
+   var r = await fetch('/api/admin/crm/people?agency_id=' + encodeURIComponent(id));
+   var d = await r.json().catch(function(){ return {}; });
+   if (d.error){ box.innerHTML = '<p class="muted">Could not load these: ' + esc(d.error) + '</p>'; return; }
+   var rows = d.people || [];
+   if (!rows.length){ box.innerHTML = '<p class="muted">Nobody on file at this firm yet.</p>'; return; }
+   var noEmail = 0;
+   for (var i = 0; i < rows.length; i++){ if (!Number(rows[i].has_email)) noEmail++; }
+   var h = '<table class="grid"><thead><tr><th>NAME</th><th>EMAIL</th><th>PHONE</th>'
+         + '<th style="text-align:right">QUOTES</th></tr></thead><tbody>';
+   for (var j = 0; j < rows.length; j++){
+     var x = rows[j];
+     // ⭐ "No email yet" is a STATE we chose to accept, not a missing value. Saying so stops it
+     // reading as a broken row, and it is the thing somebody would go and find out.
+     h += '<tr><td>' + (esc(x.name || '') || '&mdash;') + '</td>'
+        + '<td>' + (Number(x.has_email) ? esc(x.email) : '<span class="muted">no email yet</span>') + '</td>'
+        + '<td>' + (esc(x.phone || '') || '&mdash;') + '</td>'
+        + '<td style="text-align:right">' + (Number(x.quotes) || 0) + '</td></tr>';
+   }
+   h += '</tbody></table>';
+   if (noEmail) h += '<p class="muted" style="font-size:12.5px;margin-top:6px">'
+                  + noEmail + ' of these ' + (noEmail === 1 ? 'has' : 'have')
+                  + ' no email address yet and can only be reached by phone.</p>';
+   box.innerHTML = h;
  }
 
  // The firms this one could sit under. ⛔ ONLY TOP-LEVEL FIRMS ARE OFFERED, because the rollup on
@@ -5161,9 +5541,12 @@ ${abyAdminNav('/admin/brokers')}
  // ⭐ setView IS CALLED EVEN WHEN THE VIEW IS NOT CHANGING, because it is what writes the hint
  // beside the buttons. Restoring only the remembered view left a first-time visitor looking at
  // two unlabelled buttons and an empty space.
+ // ⭐ A ?firm= LINK OVERRIDES THE REMEMBERED VIEW. Landing on the analysis page because that is
+ // where you were last is the wrong answer when the URL names a firm to open.
+ var wantsFirm = String(location.search || '').indexOf('firm=') !== -1;
  try {
-   setView(localStorage.getItem('abyCrmView') === 'marketing' ? 'marketing' : 'performance');
- } catch(e) { setView('performance'); }
+   setView(wantsFirm || localStorage.getItem('abyCrmView') === 'marketing' ? 'marketing' : 'performance');
+ } catch(e) { setView(wantsFirm ? 'marketing' : 'performance'); }
 
  // ── THE RECORDED STATUS, BESIDE THE LIVE ONE ────────────────────────────────────────────
  //
@@ -8815,12 +9198,50 @@ const MIGRATIONS = [
   // NULL means the original source: derived from the quote log.
   { sql: "ALTER TABLE broker_directory ADD COLUMN source TEXT",
     table: "broker_directory", column: "source" },
+  // -- aby_sales HAS EXISTED ONLY IN PRODUCTION, AND THAT IS A REAL HAZARD --------------------
+  //
+  // \U0001F534 FOUND 2026-08-24 by adding a Sales column to the CRM list: the query threw on a fresh
+  // database with "no such table: aby_sales", which rendered the WHOLE marketing list as an error.
+  // The table was created by hand during the sales-tracking work and never written into the
+  // migration, so every environment except production has been missing it since.
+  // \u26d4 CODE IN THE WORKER DEPENDS ON THIS TABLE. A table the shipped code reads and the
+  // migration does not create is a page that works in one place and 500s everywhere else -- and it
+  // is only ever found by somebody adding a feature that touches it.
+  // \u26a0\ufe0f COPIED VERBATIM FROM PRODUCTION (sqlite_master, 2026-08-24), not written from memory:
+  // a migration that creates a DIFFERENT shape from the live one is worse than no migration.
+  { sql: "CREATE TABLE IF NOT EXISTS aby_sales (id TEXT PRIMARY KEY, employer TEXT NOT NULL DEFAULT '', " +
+         "agency TEXT NOT NULL DEFAULT '', agency_raw TEXT NOT NULL DEFAULT '', " +
+         "broker_contact TEXT NOT NULL DEFAULT '', account_mgr TEXT NOT NULL DEFAULT '', " +
+         "products TEXT NOT NULL DEFAULT '', effective_date TEXT NOT NULL DEFAULT '', " +
+         "announced_at TEXT NOT NULL DEFAULT '', quote_id TEXT, quote_number TEXT NOT NULL DEFAULT '', " +
+         "source TEXT NOT NULL DEFAULT 'email-sweep-2026-08', note TEXT NOT NULL DEFAULT '', " +
+         "quote_match TEXT NOT NULL DEFAULT '', effective_date_is_estimate INTEGER)",
+    table: "aby_sales" },
+  { sql: "CREATE INDEX IF NOT EXISTS aby_sales_agency ON aby_sales (agency)", index: "aby_sales_agency" },
   { sql: "ALTER TABLE agencies ADD COLUMN city TEXT",  table: "agencies", column: "city" },
   { sql: "ALTER TABLE agencies ADD COLUMN state TEXT", table: "agencies", column: "state" },
   // Filtering the CRM by area is the whole point of collecting it, so it is indexed rather than
   // scanned once the list is a few hundred rows.
   { sql: "CREATE INDEX IF NOT EXISTS agencies_location ON agencies (state, city)",
     index: "agencies_location" },
+
+  // -- A PERSON WE KNOW BY NAME AND FIRM, WITH NO EMAIL YET --------------------------------------
+  //
+  // Eric, 2026-08-24: "if we know an agent and an agency then that should work and an email added
+  // later." The prospecting list that prompted it holds 532 group-health contacts with a named
+  // person, a phone and no published address -- and they are not the weak end of the list: they
+  // include VPs of employee benefits and directors of benefit services at real agencies. Refusing
+  // them would have thrown away some of the best rows in the file.
+  //
+  // WHY THESE COLUMNS GO ON people AND NOT ON broker_directory: that table's PRIMARY KEY is the
+  // email. A person without one cannot be represented there at all, which is exactly the assumption
+  // being retired. people is already the identity record -- "a person is not an email address" --
+  // so it is where somebody with no address has to live.
+  { sql: "ALTER TABLE people ADD COLUMN agency_id TEXT", table: "people", column: "agency_id" },
+  { sql: "ALTER TABLE people ADD COLUMN phone TEXT NOT NULL DEFAULT ''", table: "people", column: "phone" },
+  // NULL means the original source: created as the identity behind an address in the quote log.
+  { sql: "ALTER TABLE people ADD COLUMN source TEXT", table: "people", column: "source" },
+  { sql: "CREATE INDEX IF NOT EXISTS people_agency ON people (agency_id)", index: "people_agency" },
 
   // -- RFP WATCH (F-384) -------------------------------------------------------------------------
   //

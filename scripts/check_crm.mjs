@@ -655,20 +655,31 @@ async function runSuite() {
   const list = [
     { name: 'Brand New Person', agency: 'A Firm Nobody Has Quoted', email: NEWCOMER, phone: '214 555 0134' },
     { name: 'CRM Test Agent', agency: 'Test Agency 0', email: AGENT_EMAIL, phone: '' },
-    { name: 'Somebody With No Address', agency: 'Anywhere', email: '', phone: '' },
+    // ⭐⭐ NO EMAIL IS NO LONGER A REFUSAL. Eric, 2026-08-24: "if we know an agent and an agency then
+    // that should work and an email added later." This row used to be the refusal case; it is now
+    // the feature. The refusal case moved DOWN to a row missing the firm, which is the one thing
+    // that genuinely leaves nothing to know somebody by.
+    { name: 'Somebody With No Address', agency: 'Anywhere', email: '', phone: '918 555 0177' },
   ];
   r = await api('POST', '/api/admin/crm/import',
                 { rows: list, label: EVENT, happened_at: '2026-08-14' });
-  check('an event list adds the new people, recognises the known ones, and refuses the rest',
+  check('an event list adds the new people, including one with no email at all',
         [r.json && r.json.added, r.json && r.json.known, r.json && r.json.refused],
-        [1, 1, 1],
+        [2, 1, 0],
         'never a single total -- the already-known half is the valuable one');
-  check('and it tags EVERYBODY it could, not only the new ones', r.json && r.json.tagged, 2,
+  check('and it tags EVERYBODY it could, not only the new ones', r.json && r.json.tagged, 3,
         'the existing prospects form skips a known row entirely, tag and all -- that is what this changes');
+
+  // ⛔ A NAME ON ITS OWN IS STILL NOT ENOUGH, and the message has to say which half is missing.
+  r = await api('POST', '/api/admin/crm/import',
+                { rows: [{ name: 'Nobody In Particular', agency: '', email: '', phone: '' }] });
+  check('a row with no email AND no firm is still refused',
+        [r.json && r.json.added, r.json && r.json.refused], [0, 1],
+        'name plus firm is the key -- half of a key is not a key');
   check('the refusal names WHO and WHY',
         [r.json.detail.refused[0].who,
-         String(r.json.detail.refused[0].why).includes('no email')],
-        ['Somebody With No Address', true]);
+         String(r.json.detail.refused[0].why).includes('no firm')],
+        ['Nobody In Particular', true]);
 
   // ⭐ THE TAG IS ON THE PERSON, so it survives them changing firm -- which is the whole point of
   // there being a person at all.
@@ -684,8 +695,110 @@ async function runSuite() {
   r = await api('POST', '/api/admin/crm/import',
                 { rows: list, label: EVENT, happened_at: '2026-08-14' });
   check('re-pasting the same list adds nobody and re-tags nobody',
-        [r.json && r.json.added, r.json && r.json.known, r.json && r.json.tagged], [0, 2, 0],
+        [r.json && r.json.added, r.json && r.json.known, r.json && r.json.tagged], [0, 3, 0],
         'the same tag on the same day is a double-click, not a second event');
+
+  // ── 19b. THE PERSON WITH NO EMAIL IS VISIBLE, COUNTED, AND SURVIVES A MIGRATION.
+  //
+  // ⭐⭐ EACH OF THESE THREE IS A SEPARATE WAY THE FEATURE COULD BE "BUILT" AND STILL WORTHLESS:
+  // stored but not on any screen (TRAPS #275 -- a count cannot be called), stored but not counted,
+  // or stored and then deleted by the orphan sweep, which is the one that would have destroyed the
+  // whole import silently on the next /api/migrate.
+  // \u2500\u2500 A NAME THAT IS TWO FIRMS AT ONCE IS NOT A FIRM \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  //
+  // \U0001F534 ERIC, 2026-08-24: "Why is MMA-MHBT there on the marketing list if it was acquired and
+  // they are no longer marketing under that name as we discussed ad nauseum?" MHBT itself IS marked
+  // acquired and IS hidden. What he was looking at is a SEPARATE record NAMED "MMA; MHBT", built out
+  // of quote rows where both names were typed during the transition. It carries no relationship, so
+  // the acquired rule could never touch it -- 47 such rows, every one unmarked, every one on the list.
+  // \u26d4 Nobody answers to "MMA; MHBT". It is a quote-log artefact, and which survivor owns its
+  // quotes is a question for the ANALYSIS view, not a reason to keep offering it to somebody dialling.
+  await api('POST', '/api/admin/crm/import',
+            { rows: [{ name: 'Two Names Person', agency: 'Alpha Agency; Beta Agency', email: 'crmtest.two@example.com', phone: '' }] });
+  r = await api('GET', '/api/admin/crm/agencies');
+  const marketable = (r.json && r.json.agencies) || [];
+  check('a name that is two firms at once is not on the marketing list',
+        marketable.some((x) => String(x.name || '').indexOf(';') !== -1), false,
+        'a compound name is a quote-log artefact and nobody answers to it');
+  // \u26d4 HIDDEN IS NOT DELETED, AND THE COUNT IS SAID OUT LOUD. A list that quietly drops rows is
+  // indistinguishable from one that lost them.
+  check('and the page is told how many were hidden, so the shorter list is explained',
+        (r.json && r.json.excludedCompound) >= 1, true);
+
+  r = await api('GET', '/api/admin/crm/agencies?q=Anywhere');
+  const anywhere = ((r.json && r.json.agencies) || []).find((x) => x.name === 'Anywhere');
+  check('the firm named by a phone-only contact exists', !!anywhere, true);
+  check('and it counts that person as an agent', anywhere && anywhere.agents, 1,
+        'counting only broker_directory would report 0 agents for a firm whose whole team we hold');
+
+  r = await api('GET', '/api/admin/crm/people?agency_id=' + encodeURIComponent(anywhere.id));
+  let folk = (r.json && r.json.people) || [];
+  check('the firm panel lists them, and says the address is what is missing',
+        [folk.length, folk[0] && folk[0].name, folk[0] && Number(folk[0].has_email), folk[0] && folk[0].phone],
+        [1, 'Somebody With No Address', 0, '918 555 0177'],
+        'a blank email cell reads as a broken row; "no email yet" reads as a thing to go and find out');
+
+  // \u26d4\u26d4 IMPORTED WITHOUT A TAG, AND THAT IS THE WHOLE POINT OF THIS ROW. A tagged person is
+  // already protected by the crm_events clause the sweep has always had, so testing with a tagged
+  // one exercises the OLD guard and says nothing about the new one -- which is exactly what the
+  // first version of this test did, and the sabotage came back MISSED because of it.
+  await api('POST', '/api/admin/crm/import', {
+    rows: [{ name: 'Untagged And Addressless', agency: 'Anywhere', email: '', phone: '918 555 0199' }],
+  });
+  r = await api('GET', '/api/migrate');
+  r = await api('GET', '/api/admin/crm/people?agency_id=' + encodeURIComponent(anywhere.id));
+  const survivors = (r.json && r.json.people) || [];
+  check('and the orphan sweep does NOT delete them, tag or no tag',
+        [survivors.length, survivors.some((x) => x.name === 'Untagged And Addressless')],
+        [2, true],
+        'no broker_directory row is now a legitimate state, not the definition of an orphan');
+
+  // ── 19c. THE EMAIL ARRIVING LATER ATTACHES TO THE PERSON WE ALREADY HAVE.
+  //    🔴 This is the half that silently splits a human in two if it is left out (TRAPS #286).
+  const LATER = 'crmtest.later@example.com';
+  r = await api('POST', '/api/admin/crm/import', {
+    rows: [{ name: 'Somebody With No Address', agency: 'Anywhere', email: LATER, phone: '' }],
+  });
+  check('an address arriving later is ADOPTED, not a second person',
+        [r.json && r.json.added, r.json && r.json.adopted], [0, 1],
+        'minting a new person here leaves the same human on the list twice, each looking whole');
+  r = await api('GET', '/api/admin/crm/people?agency_id=' + encodeURIComponent(anywhere.id));
+  folk = (r.json && r.json.people) || [];
+  // \u26a0\ufe0f NAMED, NOT POSITIONAL. This asserted folk[0] and folk.length === 1, which quietly
+  // depended on nobody else ever being added to this firm -- and the sweep test above now adds
+  // somebody. A test that breaks when an unrelated test grows is measuring the wrong thing.
+  const adoptedRow = folk.filter((x) => x.name === 'Somebody With No Address');
+  check('the adopted person is still ONE row, now carrying the address',
+        [adoptedRow.length, adoptedRow[0] && Number(adoptedRow[0].has_email), adoptedRow[0] && adoptedRow[0].email],
+        [1, 1, LATER],
+        'two rows here would mean the address created a second copy of the same human');
+
+  // ── 19d. TWO PEOPLE OF ONE NAME AT ONE FIRM ARE NOT WELDED TOGETHER.
+  //    ⛔ THE DANGEROUS DIRECTION. Dropping the uniqueness test makes the screen TIDIER, which is
+  //    why it gets dropped -- and it moves one person's history onto another, invisibly.
+  r = await api('POST', '/api/admin/crm/import', { rows: [
+    { name: 'Same Name', agency: 'Twin Firm', email: 'crmtest.twin1@example.com', phone: '' },
+    { name: 'Same Name', agency: 'Twin Firm', email: 'crmtest.twin2@example.com', phone: '' },
+  ] });
+  // ⚠️ THE SETUP IS ASSERTED, NOT ASSUMED. If these two did not land as TWO people the real
+  // assertion below passes for the wrong reason -- the shape where a check succeeds because nothing
+  // ran. Two addresses under one name at one firm stay two people: this path cannot tell a work and
+  // a personal account from two humans, so it never merges them.
+  check('two addresses under one name at one firm stay TWO people',
+        [r.json && r.json.added, r.json && r.json.adopted], [2, 0],
+        'if adoption reached across addresses it would weld them here, silently');
+  r = await api('POST', '/api/admin/crm/import',
+                { rows: [{ name: 'Same Name', agency: 'Twin Firm', email: '', phone: '555 0100' }] });
+  // \u26a0\ufe0f READ DEFENSIVELY. The first version dereferenced refused[0].why, so when the sabotage
+  // fired and nothing was refused the check THREW -- and a thrown check aborts the run rather than
+  // going red, which the harness reports as MISSED. An assertion that cannot fail is not an
+  // assertion; one that explodes instead of failing is worse, because it hides the others.
+  const refs = (r.json && r.json.detail && r.json.detail.refused) || [];
+  check('a name matching TWO people at one firm is refused, never guessed',
+        [r.json && r.json.added, refs.length,
+         String((refs[0] || {}).why || '').includes('more than one')],
+        [0, 1, true],
+        'refusing is recoverable by hand; a silent weld is not');
 
   // ── 21. IT NEVER OVERWRITES WHAT WE ALREADY HOLD.
   r = await api('POST', '/api/admin/crm/import',
@@ -1135,6 +1248,48 @@ async function runConcurrencySuite() {
 // bug proves the harness would have CAUGHT it.
 const SABOTAGES = [
   {
+    // ⛔⛔ THE ONE THAT WOULD HAVE DESTROYED THE WHOLE IMPORT, SILENTLY. Before a person could be
+    // held by name and firm, "no address points at this person" and "orphan" were the same sentence.
+    // Removing this guard makes them the same again, and the next /api/migrate deletes every
+    // phone-only contact -- reporting a COUNT, never the names.
+    name: 'the orphan sweep forgets that a person can legitimately have no address',
+    find: "'AND agency_id IS NULL'",
+    with: "'AND 1=1'",
+    breaks: 'and the orphan sweep does NOT delete them',
+  },
+  {
+    // ⛔ THE SAME ASSUMPTION, ONE SCREEN LOWER, AND IT IS THE ONE I MISSED ON THE FIRST PASS.
+    // A firm whose only contacts are phone-only has nothing in broker_directory pointing at it.
+    name: 'the agency sweep deletes a firm held only by phone-only people',
+    find: "'AND NOT EXISTS (SELECT 1 FROM people p WHERE p.agency_id = agencies.id) ' +",
+    with: "'AND 1=1 ' +",
+    breaks: 'an address arriving later is ADOPTED, not a second person',
+  },
+  {
+    // ⛔ THE TIDIER-LOOKING ONE. Resolving an ambiguous name instead of refusing it makes the
+    // screen cleaner and moves one person's history onto another (TRAPS #286).
+    name: 'an ambiguous name is resolved to the first match instead of refused',
+    find: "if (ids.length === 1) return { id: ids[0], why: '' };",
+    with: "if (ids.length >= 1) return { id: ids[0], why: '' };",
+    breaks: 'a name matching TWO people at one firm is refused, never guessed',
+  },
+  {
+    // ⛔ ADOPTION REACHING TOO FAR. Letting it see people who already have an address welds a work
+    // and a personal account together -- or two different humans, and it cannot tell which.
+    name: 'adoption is allowed to claim somebody who already has an address',
+    find: 'crmPersonAtAgency(env, name, agencyId, false)',
+    with: 'crmPersonAtAgency(env, name, agencyId, true)',
+    breaks: 'two addresses under one name at one firm stay TWO people',
+  },
+  {
+    // ⛔ STORED, BUT NOT COUNTED. The firm row would read "0 agents" for a firm whose whole team
+    // we just imported, which reads as an empty firm rather than a counting rule that is out of date.
+    name: 'the agent count goes back to counting only people with an email',
+    find: "'        (SELECT COUNT(*) FROM people p WHERE p.agency_id = a.id ' +",
+    with: "'        (SELECT 0 WHERE ? IS NOT NULL AND a.id IS NOT NULL ' +",
+    breaks: 'and it counts that person as an agent',
+  },
+  {
     // ⛔⛔ THE TIGHTENING THAT IS ACTUALLY A LOSS. Reading the carrier rule across the whole scope
     // looks stricter and throws away real FSA solicitations, because dental and vision are eligible
     // expenses in every one of them.
@@ -1217,8 +1372,12 @@ const SABOTAGES = [
     // existing row entirely -- tag and all -- so the agents who have quoted for years, who are the
     // valuable half of a conference list, would silently not be recorded as having been there.
     name: 'an already-known person is skipped instead of tagged',
-    find: '      if (label && personId) {',
-    with: '      if (label && personId && !existing) {',
+    // \u26a0\ufe0f TWO LINES. The same call now exists in BOTH import branches and the six-space version
+    // is a substring of the eight-space one, so a one-line find matched twice and applied nowhere.
+    find: ('      if (label && personId) tagged += await crmTagPerson(env, personId, label, happenedAt, now, by);'
+           + NEWLINE + '    } catch (err) {'),
+    with: ('      if (label && personId && !existing) tagged += await crmTagPerson(env, personId, label, happenedAt, now, by);'
+           + NEWLINE + '    } catch (err) {'),
     breaks: 'and it tags EVERYBODY it could, not only the new ones',
   },
   {
@@ -1231,24 +1390,30 @@ const SABOTAGES = [
     breaks: 'and the record we hold is unchanged',
   },
   {
-    // A row with no address creating a person anyway -- inventing an identity for a name.
-    name: 'a row with no email is imported anyway',
+    // \u26d4 THE NAME-ONLY ROW. Dropping the firm requirement looks generous and destroys the key:
+    // a name on its own cannot tell two people apart, which is the reason the pair is the key.
+    name: 'a row with no email is accepted on a name alone, with no firm',
     // ⚠️ TWO LINES, because the same regex opens three handlers and a substring match found all
     // three -- so the sabotage applied nowhere and was reported ANCHOR. The refusal message below
     // belongs only to the import.
-    find: ('    if (!/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(email)) {'
-           + NEWLINE +
-           "      refused.push({ who: name || '(no name)', why: 'no email address, so there is no stable way to know who this is' });"),
-    with: ('    if (false) {'
-           + NEWLINE +
-           "      refused.push({ who: name || '(no name)', why: 'no email address, so there is no stable way to know who this is' });"),
-    breaks: 'an event list adds the new people, recognises the known ones, and refuses the rest',
+    find: '      if (!name || !agency) {',
+    with: '      if (!name && !agency) {',
+    breaks: 'a row with no email AND no firm is still refused',
+  },
+  {
+    // \u26d4\u26d4 THE ONE ERIC FOUND BY LOOKING. "MMA; MHBT" is not MHBT -- it is its own record whose
+    // NAME is two firms, carrying no relationship, so the acquired rule cannot reach it. 47 of them,
+    // all unmarked, all on the list he was reading.
+    name: 'compound names are back on the marketing list',
+    find: "\"a.name NOT LIKE '%;%'\"",
+    with: "\"a.name NOT LIKE '@@nothing@@'\"",
+    breaks: 'a name that is two firms at once is not on the marketing list',
   },
   {
     // ⭐⭐ ERIC'S RULE, REPLAYED. Without the exclusion, MHBT is back on a list somebody is about
     // to phone. The mechanism and the data are separate problems, and this guards the mechanism.
     name: 'the acquired-name exclusion removed (a dead firm is back on the call list)',
-    find: "  const where = [\"COALESCE(a.relationship,'') <> 'succeeded'\"];",
+    find: "  const where = [\"COALESCE(a.relationship,'') <> 'succeeded'\", \"a.name NOT LIKE '%;%'\"];",
     // ⛔ A TAUTOLOGY, NOT AN EMPTY ARRAY. Emptying it leaves the SQL ending in a bare WHERE, which
     // throws -- and a handler that returns nothing makes 'the acquired firm is absent' TRUE, so the
     // assertion passed and the sabotage was reported MISSED. The sabotage must break the RULE and
