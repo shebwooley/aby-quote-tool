@@ -2397,7 +2397,10 @@ async function handleCrmAgencies(request, env) {
   // view; this view only has to stop offering a name nobody answers to.
   // ⚠️ HIDDEN, NEVER DELETED, and counted out loud below -- the quote history hanging off those
   // names is real and the analysis view still needs it.
-  const where = ["COALESCE(a.relationship,'') <> 'succeeded'", "a.name NOT LIKE '%;%'"];
+  // \u26d4 THREE THINGS ARE NOT CALLABLE FIRMS: an acquired name, a spelling variant of another
+  // firm, and a row whose NAME is two firms at once. All three are hidden and all three are
+  // counted out loud, because a list that quietly drops rows cannot be told from one that lost them.
+  const where = ["COALESCE(a.relationship,'') NOT IN ('succeeded','alias')", "a.name NOT LIKE '%;%'"];
   const args = [];
   if (rep) { where.push("lower(COALESCE(a.assigned_rep,'')) = ?"); args.push(rep); }
   if (priority) { where.push("COALESCE(a.priority,'') = ?"); args.push(priority); }
@@ -2552,8 +2555,18 @@ async function handleCrmRelationship(request, env) {
     ).bind(note || null, id).run();
     return jsonResp({ ok: true, cleared: true });
   }
-  if (rel !== 'succeeded' && rel !== 'division') {
-    return jsonResp({ error: 'A relationship is either succeeded or division.' }, 400);
+  // \u2b50\u2b50 A THIRD VALUE, AND IT IS NOT A KIND OF ACQUISITION. 'alias' means SAME FIRM, SPELLED
+  // DIFFERENTLY -- Polaris / Polaris Benefits / Polaris Benefits, LLC. Measured 2026-08-24: 57 such
+  // clusters covering 127 of 672 rows, and with the 47 compound names that is a QUARTER of the list
+  // that is not a firm anybody can call.
+  // \u26d4 IT MUST NOT BE RECORDED AS 'succeeded'. Acquired is a real commercial event with a date
+  // and a survivor, and the analysis view reads it as one. A spelling variant is a data-entry
+  // artefact. Collapsing the two would put a fake acquisition into the only record ABY has of real
+  // ones -- and Eric is the only person who knows which firms were genuinely bought.
+  // \u2b50 It behaves like 'succeeded' on the CALL LIST (hidden -- nobody dials a misspelling) and
+  // like a child in the ROLLUP (its quotes belong to the survivor). Same handling, different fact.
+  if (rel !== 'succeeded' && rel !== 'division' && rel !== 'alias') {
+    return jsonResp({ error: 'A relationship is succeeded, division or alias.' }, 400);
   }
   if (!parentId) return jsonResp({ error: 'Which firm is the parent?' }, 400);
   if (parentId === id) return jsonResp({ error: 'A firm cannot be its own parent.' }, 400);
@@ -3099,10 +3112,26 @@ async function handleCrmAgencyDupes(request, env) {
       'SELECT a.id, a.name, a.created_at, ' +
       '       (SELECT COUNT(*) FROM brokers b WHERE b.agency_id = a.id) AS accounts, ' +
       '       (SELECT COUNT(*) FROM broker_directory d WHERE d.agency_id = a.id) AS agents ' +
-      "FROM agencies a WHERE COALESCE(a.relationship,'') <> 'succeeded' ORDER BY a.name"
+      "FROM agencies a WHERE COALESCE(a.relationship,'') NOT IN ('succeeded','alias') " +
+      "  AND a.name NOT LIKE '%;%' ORDER BY a.name"
     ).all();
     const rows = results || [];
-    const key = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    // \U0001F534 THIS ONLY EVER CAUGHT PUNCTUATION. Stripping non-letters makes 'Polaris' and
+    // 'Polaris Benefits' DIFFERENT keys, so it found a handful of rows while 57 real clusters sat
+    // in front of it. \u26a0\ufe0f A duplicate finder that misses the duplicates reads as 'the list is
+    // clean', which is worse than not having one.
+    // \u2b50 The words dropped below are the ones that carry NO identity: legal suffixes and the
+    // industry nouns every agency in the book shares. What survives is the actual name.
+    // \u26d4 SUGGESTIONS ONLY, AND THE NOTE BELOW SAYS SO. 'Lone Star Benefits' and 'Lone Star
+    // Insurance' may be one firm or two and only a person knows -- so this proposes, never merges.
+    const NOISE = [' llc',' l.l.c.',' inc.',' inc',' co.',' company',' agency',' agencies',
+      ' insurance',' services',' service',' group',' benefits',' benefit',' solutions',
+      ' partners',' & associates',' and associates',' associates',' of texas'];
+    const key = (s) => {
+      let t = ' ' + String(s || '').toLowerCase().replace(/[^a-z0-9&. ]+/g, ' ') + ' ';
+      for (const w of NOISE) t = t.split(w + ' ').join(' ');
+      return t.replace(/[^a-z0-9]+/g, '');
+    };
     const byKey = {};
     for (const r of rows) {
       const k = key(r.name);
@@ -4032,6 +4061,17 @@ ${abyAdminNav('/admin/brokers')}
       <p class="sub" id="mktSub">Every firm we could work &mdash; including the ones that have never quoted.</p>
       <!-- ADD A LIST FROM AN EVENT (Eric, 2026-08-23). Shut by default: it is an occasional
            action and the list is the everyday one. -->
+      <!-- TIDY UP. Shut by default: it is an occasional job and the list is the everyday thing.
+           Loaded when it is opened, not with the page -- the same rule the analysis view now
+           follows, because nobody should pay for a screen they are not looking at. -->
+      <details style="margin:0 0 10px" ontoggle="if(this.open)loadDupes()">
+        <summary style="cursor:pointer;font-size:13.5px;color:#1a5c3a;font-weight:600">
+          Tidy up &mdash; rows that look like the same firm twice</summary>
+        <div style="margin-top:10px">
+          <div id="tidyMsg" class="muted" style="margin-bottom:8px"></div>
+          <div id="tidyBox"><p class="muted">Looking...</p></div>
+        </div>
+      </details>
       <details style="margin:0 0 14px">
         <summary style="cursor:pointer;font-size:13.5px;color:#1a5c3a;font-weight:600">
           Add a list from an event</summary>
@@ -5155,6 +5195,92 @@ ${abyAdminNav('/admin/brokers')}
    return h + '</select>';
  }
 
+ // ── TIDY UP: THE ROWS THAT ARE NOT FIRMS ─────────────────────────────────────────────────────
+ //
+ // 🔴🔴 ERIC HAS ASKED FOR THE BROKERS AND AGENCIES TO BE ORGANISED, REPEATEDLY, AND THIS IS THE
+ // ACTUAL JOB. Measured 2026-08-24 across the 672 rows: 57 clusters covering 127 rows are the same
+ // firm spelled differently (Polaris / Polaris Benefits / Polaris Benefits, LLC), and 47 more have
+ // TWO firms typed into one name. That is a quarter of the list that nobody can call.
+ //
+ // ⛔ THE ENDPOINT THAT FINDS THEM HAS EXISTED SINCE 08-23 AND NO SCREEN HAS EVER CALLED IT. It was
+ // also keyed on punctuation alone, so it could not see any of these. A finder nobody can reach,
+ // returning nothing, reads exactly like a clean list.
+ //
+ // ⭐⭐ IT PROPOSES; ERIC DECIDES. "Lone Star Benefits" and "Lone Star Insurance" may be one firm or
+ // two and only a person knows. One click per cluster, and the survivor is the row with the most
+ // history rather than the first alphabetically.
+ var dupes = [];
+
+ async function loadDupes(){
+   var box = q('tidyBox');
+   box.innerHTML = '<p class="muted">Looking...</p>';
+   var r = await fetch('/api/admin/crm/agency-dupes');
+   var d = await r.json().catch(function(){ return {}; });
+   // 🔴 AN ERROR IS NOT A CLEAN LIST. Those must never render the same way.
+   if (d.error){ box.innerHTML = '<p style="color:#a12622">Could not check: ' + esc(d.error) + '</p>'; return; }
+   dupes = d.pairs || [];
+   paintDupes();
+ }
+
+ function paintDupes(){
+   var box = q('tidyBox');
+   if (!dupes.length){
+     box.innerHTML = '<p class="muted">Nothing looks like a duplicate. The list is as tidy as this can tell.</p>';
+     return;
+   }
+   var rows = 0;
+   for (var i = 0; i < dupes.length; i++) rows += dupes[i].length;
+   var h = '<p class="sub" style="margin:0 0 10px"><strong>' + dupes.length + ' groups</strong> covering '
+         + rows + ' rows look like one firm each. Pick the name to keep; the others are marked as the '
+         + 'same firm spelled differently, which rolls their quotes up and drops them from this list. '
+         + '<strong>Nothing is deleted.</strong></p>';
+   for (var g = 0; g < dupes.length; g++){
+     var grp = dupes[g];
+     h += '<div style="border:1px solid #dde5ee;border-radius:7px;padding:9px 11px;margin-bottom:8px">';
+     for (var j = 0; j < grp.length; j++){
+       var a = grp[j];
+       // ⭐ THE HISTORY IS SHOWN BESIDE EACH NAME because that is what decides which one to keep --
+       // the survivor should be the row people have actually been using, not the shortest string.
+       h += '<div style="display:flex;align-items:center;gap:9px;padding:3px 0">'
+          + '<button style="font-size:12px;padding:3px 9px" onclick="keepThis(' + g + ',' + j + ')">Keep this</button>'
+          + '<span><strong>' + esc(a.name) + '</strong></span>'
+          + '<span class="muted" style="font-size:12px">' + (a.agents || 0) + ' agents</span>'
+          + '</div>';
+     }
+     h += '<div style="margin-top:5px"><a href="#" onclick="notDupes(' + g + ');return false" '
+        + 'style="font-size:12px;color:#5b6b7f">These are different firms &mdash; leave them alone</a></div>'
+        + '</div>';
+   }
+   box.innerHTML = h;
+ }
+
+ // ⚠️ Dismissed for this sitting only, and it says so. Storing "not a duplicate" would be a fourth
+ // kind of relationship to reason about, and the finder is cheap to re-run.
+ function notDupes(g){ dupes.splice(g, 1); paintDupes(); }
+
+ async function keepThis(g, j){
+   var grp = dupes[g];
+   var keep = grp[j];
+   var msgs = [];
+   for (var i = 0; i < grp.length; i++){
+     if (i === j) continue;
+     var r = await fetch('/api/admin/crm/relationship', {
+       method: 'POST', headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ id: grp[i].id, parent_id: keep.id, relationship: 'alias',
+                              note: 'the same firm as ' + keep.name + ', spelled differently' }),
+     });
+     var d = await r.json().catch(function(){ return {}; });
+     // ⛔ A FAILURE IS NAMED, NOT SWALLOWED. Reporting "done" over a refused write is how a tidy-up
+     // looks finished and is not.
+     if (!r.ok) msgs.push(esc(grp[i].name) + ': ' + esc(d.error || 'did not save'));
+   }
+   dupes.splice(g, 1);
+   paintDupes();
+   if (msgs.length) q('tidyMsg').innerHTML = '<span style="color:#a12622">' + msgs.join(' &middot; ') + '</span>';
+   else q('tidyMsg').textContent = 'Kept ' + keep.name + '.';
+   await loadMkt();
+ }
+
  // ── THE MARKETING LIST IS A HIERARCHY: FIRM -> BRANCHES -> AGENTS ────────────────────────────
  //
  // 🔴🔴 ERIC, 2026-08-24: "I thought we were going to have agencies with subagencies below" and
@@ -5395,6 +5521,7 @@ ${abyAdminNav('/admin/brokers')}
          + 'What happened to this firm?</summary><div class="mfilters" style="margin-top:10px">'
          + '<select id="fRel"><option value="">Nothing / clear it</option>'
          + '<option value="succeeded"' + (a.relationship === 'succeeded' ? ' selected' : '') + '>Acquired &mdash; the name is dead, drop it from this list</option>'
+         + '<option value="alias"' + (a.relationship === 'alias' ? ' selected' : '') + '>The same firm, spelled differently &mdash; roll it up and drop it from this list</option>'
          + '<option value="division"' + (a.relationship === 'division' ? ' selected' : '') + '>Branch office &mdash; still callable, keep it here</option>'
          + '</select>'
          + '<select id="fParent"><option value="">Which firm?</option>' + parentOpts(a) + '</select>'

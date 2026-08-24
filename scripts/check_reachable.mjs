@@ -231,9 +231,45 @@ const RULES = [
           && !/^ load\(\);$/m.test(page);
     },
   },
+  // ── TIDY UP (F-388) ─────────────────────────────────────────────────────────────────────────
+  // ⛔ /api/admin/crm/agency-dupes SHIPPED ON 08-23 AND NO SCREEN EVER CALLED IT. It was also keyed
+  // on punctuation alone, so it could not see the 57 real clusters sitting in front of it. An
+  // unreachable finder that returns nothing reads exactly like a clean list -- which is why Eric
+  // kept being told the agencies were organised while looking at 672 rows, a quarter of them junk.
+  {
+    name: "the duplicate finder is reachable from the marketing view",
+    why: "It existed for a day with no caller. A finding nobody can see is not a finding.",
+    holds: (f) => /id="tidyBox"/.test(f.worker)
+               && /function loadDupes\(/.test(f.worker)
+               && /crm\/agency-dupes/.test(f.worker),
+  },
+  {
+    name: "a proposed duplicate can actually be resolved from that screen",
+    why: "Listing them without a way to act is half a door. The control writes the alias.",
+    holds: (f) => /function keepThis\(/.test(f.worker)
+               && /relationship: 'alias'/.test(f.worker),
+  },
+  {
+    name: "an alias is hidden from the call list, like an acquired name",
+    why: "The whole point is that nobody dials a misspelling. If it stays on the list, marking it"
+       + " achieved nothing.",
+    holds: (f) => /NOT IN \('succeeded','alias'\)/.test(f.worker),
+  },
 ];
 
 const SABOTAGES = [
+  {
+    why: "the tidy-up screen loses its caller, so the finder is unreachable again",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/function loadDupes\(/g, "function unusedDupes(") }),
+  },
+  {
+    why: "an alias stays on the call list, so resolving one achieves nothing",
+    // A STRING .replace() SWAPS THE FIRST MATCH ONLY. This phrase now appears twice -- the call
+    // list and the duplicate finder -- so the one-shot version left the second in place and the
+    // rule stayed green. A sabotage that only half-applies is reported MISSED and sends you
+    // looking at the guard instead of at the sabotage.
+    apply: (f) => ({ ...f, worker: f.worker.replace(/NOT IN \('succeeded','alias'\)/g, "<> 'succeeded'") }),
+  },
   {
     why: "the eager boot-time load() is put back, so Marketing pays for the analysis again",
     apply: (f) => ({ ...f, worker: f.worker.replace(" var PERF_LOADED = false;", " var PERF_LOADED = false;\n load();") }),
