@@ -236,6 +236,39 @@ const RULES = [
   // on punctuation alone, so it could not see the 57 real clusters sitting in front of it. An
   // unreachable finder that returns nothing reads exactly like a clean list -- which is why Eric
   // kept being told the agencies were organised while looking at 672 rows, a quarter of them junk.
+  // -- THE CROSS-SELL LIST -----------------------------------------------------------------------
+  // Eric, 2026-08-22: the admin is for quoting, keeping up with quotes, AND targeting marketing.
+  // This is the screen that turns the agency cleanup into calls, so it is exactly the kind of thing
+  // that gets built, gets deployed, and gets no door -- which is what this whole file exists for.
+  {
+    name: "the never-quoted cross-sell list is reachable from the marketing view",
+    why: "A marketing list nobody can open produces no calls, which is the same as not having it.",
+    holds: (f) => /id="nqBox"/.test(f.worker)
+               && /function loadNeverQuoted\(/.test(f.worker)
+               && /crm\/never-quoted/.test(f.worker)
+               && /ontoggle="if\(this\.open\)loadNeverQuoted\(\)"/.test(f.worker),
+  },
+  {
+    name: "the cross-sell list can be pointed at a product and a floor",
+    why: "One frozen product is a report; a picker is a tool. The floor is what keeps it to relationships.",
+    holds: (f) => /id="nqProduct"/.test(f.worker) && /id="nqMin"/.test(f.worker),
+  },
+  {
+    name: "a firm on the cross-sell list opens from the name, like everywhere else",
+    why: "A list of names you cannot open makes somebody search for each one by hand.",
+    holds: (f) => /nqBox[\s\S]{0,4000}?openFirm\(/.test(f.worker),
+  },
+  // -- QUOTES THAT FELL OFF EVERY SCREEN ----------------------------------------------------------
+  // A quote whose broker_agency matches no agency row is in nobody's count. It is produced by doing
+  // half of the resolve rule: creating the new firm and not renaming the quotes onto it. 343 quotes
+  // went quiet that way on 2026-08-24 under Benefits Texas and JME, and nothing said so.
+  {
+    name: "quotes whose agency name has no record are surfaced, not silently dropped",
+    why: "This failure hides itself: the new firm reads 0 quotes and the old name vanishes.",
+    holds: (f) => /orphanNames/.test(f.worker)
+               && /orphans/.test(f.worker)
+               && /no agency record answers to/.test(f.worker),
+  },
   {
     name: "the duplicate finder is reachable from the marketing view",
     why: "It existed for a day with no caller. A finding nobody can see is not a finding.",

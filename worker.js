@@ -83,6 +83,7 @@ export default {
     if (path === '/api/admin/crm/import'       && method === 'POST') return withAuth(request, env, () => handleCrmImport(request, env));
     if (path === '/api/admin/crm/agency-dupes' && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyDupes(request, env));
     if (path === '/api/admin/crm/people'       && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyPeople(request, env));
+    if (path === '/api/admin/crm/never-quoted' && method === 'GET')  return withAuth(request, env, () => handleCrmNeverQuoted(request, env));
     if (path === '/api/admin/tidy-note'        && method === 'POST') return withAuth(request, env, () => handleTidyNote(request, env));
     if (path === '/api/admin/tidy-dismiss'     && method === 'POST') return withAuth(request, env, () => handleTidyDismiss(request, env));
     if (path === '/api/admin/tidy-note/delete' && method === 'POST') return withAuth(request, env, () => handleTidyNoteDelete(request, env));
@@ -3264,6 +3265,125 @@ async function handleTidyNoteDelete(request, env) {
 const RECORDED_STATUSES = ['never quoted', 'quoted once', 'occasional', 'regular', 'former'];
 const RECORDED_PREFIX = 'status: ';
 
+/**
+ * WHO HAS NEVER ASKED US FOR THIS, out of the firms that ask us for plenty.
+ *
+ * ERIC, 2026-08-22: "we are using this so that we can quote, keep up with quotes, but also target
+ * our marketing efforts." This is the most concrete marketing list the data can produce, and it is
+ * what turns the agency cleanup into calls.
+ * MEASURED 2026-08-23 across the firms with 15 or more quotes: 28 of them have NEVER once asked
+ * for ACA 1094/1095, while 438 firms have quoted COBRA and only 106 have ever quoted ACA. Those
+ * are established relationships that already trust us with COBRA and have never been asked.
+ *
+ * THE ID VOCABULARY IS TWO VOCABULARIES, AND A FILTER ON EITHER ONE SILENTLY DROPS THE OTHER.
+ * Measured 2026-08-24 over all 9,379 product rows in the log: the 2009-2026 import wrote
+ * product-cobra, product-aca and so on (9,368 rows), while a quote run through the tool writes the
+ * bare id the catalogue uses -- cobra, aca (11 rows). The bare form is the CANONICAL one
+ * (assets/js/data/products.js) and it is the one that GROWS, because it is what the live tool
+ * emits. So the prefix is stripped and everything is counted on the catalogue's own vocabulary.
+ * An enumerated value spelled differently is invisible and does not announce itself: a filter on
+ * product-aca would quietly have reported every tool-run ACA quote as never quoted.
+ *
+ * NO SECOND COPY OF THE PRODUCT LIST LIVES HERE, DELIBERATELY. Each product label is read out of
+ * the quotes themselves -- every stored entry carries its own name -- so it cannot drift from the
+ * catalogue the way a hard-coded map would. The most frequently used spelling wins.
+ *
+ * IT HIDES EXACTLY WHAT THE CALL LIST HIDES. Acquired names, spelling aliases and rows whose name
+ * is two firms at once are excluded on the same rule as the marketing list, because a prospecting
+ * list that offers a name nobody answers to is the defect F-388 was raised for.
+ */
+async function handleCrmNeverQuoted(request, env) {
+  const u = new URL(request.url).searchParams;
+  const product = (u.get('product') || '').trim();
+  // The floor is what makes this a list of RELATIONSHIPS rather than a list of strangers. A firm
+  // that quoted twice and never asked for ACA has not declined anything; it has barely met us.
+  // Number(null) IS 0, NOT NaN, and so is Number(''). Reading the parameter straight into Number
+  // therefore turned "no floor given" into a floor of 1 -- which is the opposite of the default and
+  // fills the screen with firms that have quoted us once. Caught by check_never_quoted.mjs on its
+  // first run, which is the entire reason that file exists.
+  const rawMin = String(u.get('min') || '').trim();
+  const asked = rawMin === '' ? NaN : Number(rawMin);
+  const min = Number.isFinite(asked) ? Math.max(1, Math.min(500, Math.round(asked))) : 15;
+
+  // One pass over the quote log, exploded to one row per product on each quote.
+  const PQ =
+    "WITH pq AS (SELECT lower(trim(q.broker_agency)) AS k, " +
+    "              CASE WHEN j.value ->> 'id' LIKE 'product-%' " +
+    "                   THEN substr(j.value ->> 'id', 9) ELSE j.value ->> 'id' END AS pid, " +
+    "              j.value ->> 'name' AS pname " +
+    "            FROM quotes q, json_each(q.products) j " +
+    "            WHERE trim(COALESCE(q.broker_agency,'')) <> '' " +
+    "              AND trim(COALESCE(q.products,'')) NOT IN ('', '[]')) ";
+
+  try {
+    // What products exist, and how each is usually spelled.
+    const cat = await env.DB.prepare(
+      PQ + "SELECT pid, pname, COUNT(*) AS uses FROM pq " +
+           "WHERE pid IS NOT NULL AND pid <> '' GROUP BY pid, pname"
+    ).all();
+
+    const byId = {};
+    for (const r of (cat.results || [])) {
+      const e = byId[r.pid] || (byId[r.pid] = { id: r.pid, label: '', uses: 0, firms: 0, best: -1 });
+      e.uses += Number(r.uses) || 0;
+      if ((Number(r.uses) || 0) > e.best) { e.best = Number(r.uses) || 0; e.label = r.pname || r.pid; }
+    }
+
+    // COUNTED SEPARATELY, NEVER SUMMED. A firm that used both spellings of one product would be
+    // counted twice by adding up the per-spelling figures, which is a rollup of distinct things.
+    const firmsPer = await env.DB.prepare(
+      PQ + "SELECT pid, COUNT(DISTINCT k) AS firms FROM pq " +
+           "WHERE pid IS NOT NULL AND pid <> '' GROUP BY pid"
+    ).all();
+    for (const r of (firmsPer.results || [])) if (byId[r.pid]) byId[r.pid].firms = Number(r.firms) || 0;
+
+    const products = Object.keys(byId).map(function (k) {
+      const p = byId[k];
+      return { id: p.id, label: p.label || p.id, uses: p.uses, firms: p.firms };
+    }).sort(function (a, b) { return b.uses - a.uses; });
+
+    if (!product) return jsonResp({ products, product: '', min, rows: [], eligible: 0 });
+
+    // The callable firms with enough history to have had the conversation, that have never once
+    // had THIS product on a quote. Counted by the firm's own name, exactly as the list beside it.
+    const rows = await env.DB.prepare(
+      PQ +
+      ", tot AS (SELECT lower(trim(broker_agency)) k, COUNT(*) quotes, MAX(created_at) last_quote " +
+      "          FROM quotes WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1) " +
+      "SELECT a.id, a.name, a.city, a.state, a.priority, a.assigned_rep, " +
+      "       tot.quotes, tot.last_quote " +
+      "FROM agencies a JOIN tot ON tot.k = lower(trim(a.name)) " +
+      "WHERE COALESCE(a.relationship,'') NOT IN ('succeeded','alias') " +
+      "  AND a.name NOT LIKE '%;%' " +
+      "  AND tot.quotes >= ? " +
+      "  AND NOT EXISTS (SELECT 1 FROM pq WHERE pq.k = tot.k AND pq.pid = ?) " +
+      "ORDER BY tot.quotes DESC, a.name LIMIT 500"
+    ).bind(min, product).all();
+
+    // How many firms CLEAR THE FLOOR at all. Without it "28 firms" is a number with no
+    // denominator -- 28 out of 78 is a campaign, 28 out of 30 is a product nobody wants.
+    const el = await env.DB.prepare(
+      "WITH tot AS (SELECT lower(trim(broker_agency)) k, COUNT(*) quotes FROM quotes " +
+      "             WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1) " +
+      "SELECT COUNT(*) AS n FROM agencies a JOIN tot ON tot.k = lower(trim(a.name)) " +
+      "WHERE COALESCE(a.relationship,'') NOT IN ('succeeded','alias') " +
+      "  AND a.name NOT LIKE '%;%' AND tot.quotes >= ?"
+    ).bind(min).first();
+
+    return jsonResp({
+      products: products,
+      product: product,
+      min: min,
+      rows: rows.results || [],
+      eligible: (el && el.n) || 0,
+    });
+  } catch (err) {
+    // A thrown query must not render as "everybody has quoted everything", which is the shape of a
+    // finished job. The error reaches the screen.
+    return jsonResp({ error: String((err && err.message) || err) }, 500);
+  }
+}
+
 async function handleCrmAgencyDupes(request, env) {
   try {
     // ⭐⭐ THE QUOTE HISTORY IS WHAT DECIDES WHICH NAME TO KEEP. Eric, 2026-08-24: "I think it would
@@ -3489,8 +3609,42 @@ async function handleCrmAgencyDupes(request, env) {
       });
     }
 
+    // -- A NAME ON QUOTES THAT NO AGENCY ROW ANSWERS TO -----------------------------------------
+    //
+    // FOUND 2026-08-24, AND IT IS THE FAILURE MODE OF THE TIDY-UP ITSELF. Every agency screen joins
+    // quotes to agencies BY NAME. So a quote whose broker_agency has no matching agency row is
+    // invisible everywhere: it is in no firm's count, no family rollup, and no marketing list --
+    // and nothing anywhere said so.
+    // IT IS PRODUCED BY DOING HALF OF ERIC'S OWN RULE. Resolving a group is supposed to rename the
+    // firm ON THE QUOTE and write the old spelling into that quote's note. Create the new agency
+    // rows and skip the rename, and the new rows read 0 quotes while the old name keeps them and
+    // drops off every screen. Measured that day: 330 quotes still said Benefits Texas and 13 said
+    // JME after both were resolved under Patriot Growth Insurance Services, so 343 quotes went
+    // quiet and the two new division rows showed nothing.
+    // NAMES THAT ARE NOT FIRMS ARE EXCLUDED, because they are supposed to have no agency row --
+    // cleanAgency decides that, so this cannot disagree with the rest of the admin about it.
+    // IT REPORTS, IT NEVER FIXES. Which firm those quotes belong to is a judgement, and the whole
+    // point of this screen is that judgements are Eric's and the finding is the machine's.
+    let orphans = [];
+    try {
+      const orph = await env.DB.prepare(
+        "WITH tot AS (SELECT trim(broker_agency) AS nm, lower(trim(broker_agency)) k, " +
+        "             COUNT(*) quotes, MAX(created_at) last_quote " +
+        "             FROM quotes WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1, 2) " +
+        'SELECT nm, quotes, last_quote FROM tot ' +
+        'WHERE NOT EXISTS (SELECT 1 FROM agencies a WHERE lower(trim(a.name)) = tot.k) ' +
+        'ORDER BY quotes DESC LIMIT 100'
+      ).all();
+      orphans = (orph.results || []).filter(function (r) { return cleanAgency(r.nm) !== ''; });
+    } catch (e) {
+      // Reported as its own error rather than failing the whole screen: the duplicate finder above
+      // is the everyday job and must not go dark because this extra query did.
+      orphans = [];
+    }
+
     return jsonResp({
-      pairs, maybe, odd, notes, compound, matched: pairs.length,
+      pairs, maybe, odd, notes, compound, orphans, matched: pairs.length,
+      orphanQuotes: orphans.reduce(function (t, r) { return t + (Number(r.quotes) || 0); }, 0),
       note: 'Suggestions only. Two similar names may be one firm or two, and only a person knows.',
     });
   } catch (err) {
@@ -3611,8 +3765,24 @@ const NOT_A_FIRM = new Set(['(no agency folder)', '(loose file - no agency folde
   'unknown', 'none', 'aby']);
 const DIRECT_MARKERS = new Set(['direct', 'niels', 'eric', 'niels direct', 'eric direct']);
 
+// A DASH IS NOT ONE CHARACTER, AND THE LOOKUP BELOW IS EXACT.
+// Measured on live D1, 2026-08-24: 42 quotes carry the agency name
+//     (loose file <en dash> no agency folder)
+// with U+2013, while NOT_A_FIRM spells it with U+002D. So a value that IS in the not-a-firm list
+// missed it by one character, and those 42 quotes have been counted as though a firm by that name
+// had asked us for something. An enumerated value spelled differently is invisible: nothing throws,
+// nothing is empty, the row simply appears in a population it does not belong to.
+// Every one of these names came out of a FOLDER TITLE typed by a human on Windows, where Word and
+// the shell both produce an en dash from a hyphen surrounded by spaces -- so this will keep
+// happening, and matching the class beats adding the one spelling that bit us.
+// U+2010 to U+2015 are the dash punctuation block; U+2212 is the mathematical minus, which some
+// spreadsheet exports use.
+function foldDashes(s) {
+  return String(s == null ? '' : s).replace(/[\u2010-\u2015\u2212]/g, '-');
+}
+
 function cleanAgency(a) {
-  const t = String(a == null ? '' : a).trim(), low = t.toLowerCase();
+  const t = foldDashes(a).trim(), low = t.toLowerCase();
   if (DIRECT_MARKERS.has(low)) return '(direct)';
   return NOT_A_FIRM.has(low) ? '' : t;
 }
@@ -4361,6 +4531,27 @@ ${abyAdminNav('/admin/brokers')}
         <div style="margin-top:10px">
           <div id="tidyMsg" class="muted" style="margin-bottom:8px"></div>
           <div id="tidyBox"><p class="muted">Looking...</p></div>
+        </div>
+      </details>
+      <!-- WHO HAS NEVER ASKED US FOR THIS. Eric, 2026-08-22: the admin is for quoting, keeping up
+           with quotes, AND targeting marketing. This is the one screen that turns the agency
+           cleanup into calls. Shut by default and loaded when opened, like the rest. -->
+      <details style="margin:0 0 10px" ontoggle="if(this.open)loadNeverQuoted()">
+        <summary style="cursor:pointer;font-size:13.5px;color:#1a5c3a;font-weight:600">
+          Never quoted &mdash; firms that use us a lot and have never asked for one product</summary>
+        <div style="margin-top:10px">
+          <p class="sub" style="margin:0 0 8px">Established relationships that have never once had
+            this on a quote. <strong>The floor matters:</strong> a firm that quoted twice and never
+            asked for ACA has not turned it down, it has barely met us.</p>
+          <div class="mfilters">
+            <select id="nqProduct" onchange="loadNeverQuoted()"><option value="">Pick a product</option></select>
+            <label class="muted" style="font-size:13px">at least
+              <input id="nqMin" type="number" min="1" max="500" value="15" onchange="loadNeverQuoted()"
+                     style="width:64px;padding:5px 6px;border:1px solid #c8d2de;border-radius:5px;font-size:13px">
+              quotes</label>
+            <span class="muted" id="nqCount" style="margin-left:auto;font-size:13px"></span>
+          </div>
+          <div id="nqBox"><p class="muted">Pick a product.</p></div>
         </div>
       </details>
       <details style="margin:0 0 14px">
@@ -5519,6 +5710,86 @@ ${abyAdminNav('/admin/brokers')}
  var tidyNotes = [];
  var comps = [];
 
+ // -- NEVER QUOTED: the cross-sell list ---------------------------------------------------------
+ //
+ // The product picker is built from what the log actually contains, never from a hard-coded list,
+ // so it cannot drift from the catalogue. Each option carries how many firms have EVER asked, which
+ // is the context that makes the answer readable: 22 of 65 have never asked for ACA is a campaign,
+ // and it only means something beside "99 firms have ever quoted ACA at all".
+ var nqLoaded = false;
+
+ async function loadNeverQuoted(){
+   var box = q('nqBox');
+   var pid = q('nqProduct').value;
+   var min = q('nqMin').value || 15;
+   box.innerHTML = '<p class="muted">Looking...</p>';
+   var r = await fetch('/api/admin/crm/never-quoted?min=' + encodeURIComponent(min)
+                       + (pid ? '&product=' + encodeURIComponent(pid) : ''));
+   var d = await r.json().catch(function(){ return {}; });
+   // \ud83d\udd34 AN ERROR IS NOT AN EMPTY LIST. An empty list here reads as "everybody has already
+   // been asked", which is the shape of a finished job -- the most expensive thing to get wrong on
+   // a screen whose whole purpose is to produce work.
+   if (d.error){
+     box.innerHTML = '<p style="color:#a12622">Could not build the list: ' + esc(d.error) + '</p>';
+     q('nqCount').textContent = '';
+     return;
+   }
+
+   if (!nqLoaded && (d.products || []).length){
+     var sel = q('nqProduct'), keep = sel.value;
+     var opts = ['<option value="">Pick a product</option>'];
+     for (var i = 0; i < d.products.length; i++){
+       var p = d.products[i];
+       opts.push('<option value="' + esc(p.id) + '">' + esc(p.label)
+                 + ' (' + p.firms + ' firms have ever asked)</option>');
+     }
+     sel.innerHTML = opts.join('');
+     sel.value = keep;
+     nqLoaded = true;
+   }
+
+   if (!pid){
+     box.innerHTML = '<p class="muted">Pick a product.</p>';
+     q('nqCount').textContent = '';
+     return;
+   }
+
+   var rows = d.rows || [];
+   // \u26a0\ufe0f THE DENOMINATOR IS PART OF THE FINDING. "22 firms" on its own is unreadable: 22 of 65
+   // is most of the book, 22 of 600 is a rounding error. A proportion without its denominator is
+   // the same defect as a percentage without its sample.
+   q('nqCount').textContent = rows.length + ' of ' + d.eligible + ' firms with ' + d.min + '+ quotes';
+
+   if (!rows.length){
+     box.innerHTML = '<p class="muted">Every firm with ' + d.min + ' or more quotes has asked for '
+                   + 'this at least once. Try a lower floor, or another product.</p>';
+     return;
+   }
+
+   var h = '<div style="overflow-x:auto"><table class="grid" style="min-width:640px">'
+         + '<thead><tr><th>Firm</th><th>Where</th><th class="c">Quotes</th>'
+         + '<th class="date">Last quote</th><th>Priority</th><th>Owner</th></tr></thead><tbody>';
+   for (var k = 0; k < rows.length; k++){
+     var a = rows[k];
+     var where = (a.city ? esc(a.city) : '') + (a.state ? (a.city ? ', ' : '') + esc(a.state) : '');
+     h += '<tr><td class="wrapcell">'
+        // The name is the link, the same as on the list above -- one habit, not two.
+        + '<a href="?firm=' + encodeURIComponent(a.id) + '" onclick="openFirm(' + "'" + a.id + "'" + ');return false"><strong>'
+        + esc(a.name) + '</strong></a></td>'
+        + '<td>' + (where || '<span class="muted">&mdash;</span>') + '</td>'
+        + '<td class="c"><strong>' + (Number(a.quotes) || 0) + '</strong></td>'
+        + '<td class="date">' + (a.last_quote ? day(a.last_quote) : '<span class="muted">&mdash;</span>') + '</td>'
+        + '<td>' + (a.priority ? esc(a.priority) : '<span class="muted">&mdash;</span>') + '</td>'
+        + '<td>' + (a.assigned_rep ? esc(a.assigned_rep) : '<span class="muted">open</span>') + '</td>'
+        + '</tr>';
+   }
+   h += '</tbody></table></div>';
+   box.innerHTML = h;
+ }
+
+ // Quote-log names that no agency row answers to. Filled by loadDupes, drawn by paintDupes.
+ var orphanNames = [], orphanQuotes = 0;
+
  async function loadDupes(){
    var box = q('tidyBox');
    box.innerHTML = '<p class="muted">Looking...</p>';
@@ -5531,6 +5802,8 @@ ${abyAdminNav('/admin/brokers')}
    odds = d.odd || [];
    tidyNotes = d.notes || [];
    comps = d.compound || [];
+   orphanNames = d.orphans || [];
+   orphanQuotes = Number(d.orphanQuotes) || 0;
    paintDupes();
  }
 
@@ -5585,6 +5858,34 @@ ${abyAdminNav('/admin/brokers')}
    if (tidyNotes.length){
      h += '<p style="margin:0 0 10px;font-size:13px;color:#7a5410"><strong>' + tidyNotes.length
         + '</strong> note' + (tidyNotes.length === 1 ? '' : 's') + ' waiting for me to action.</p>';
+   }
+
+   // \u2b50\u2b50 THE LOUDEST THING ON THIS SCREEN, BECAUSE IT IS THE ONE FAILURE THAT HIDES ITSELF.
+   // Every other row here is a firm you can see and judge. These are quotes that have fallen off
+   // every screen: their agency name matches no agency row, so they are in nobody's count. It is
+   // what happens when a group is resolved and the quotes are not renamed with it -- 343 quotes
+   // went quiet that way in one afternoon, under Benefits Texas and JME.
+   if (orphanNames.length){
+     h += '<div style="border:1px solid #e0c98a;background:#fdf9ef;border-radius:7px;padding:10px 12px;margin:0 0 12px">'
+        + '<p style="margin:0 0 6px;font-size:13px;color:#7a5410"><strong>'
+        + orphanQuotes + ' quote' + (orphanQuotes === 1 ? '' : 's') + '</strong> sit under '
+        + orphanNames.length + ' name' + (orphanNames.length === 1 ? '' : 's')
+        + ' that no agency record answers to, so they are counted nowhere.</p>'
+        + '<p class="sub" style="margin:0 0 8px">Usually a group that was resolved without renaming '
+        + 'the quotes. Add the firm, or rename the quotes onto the one that survived.</p>';
+     for (var o = 0; o < orphanNames.length && o < 25; o++){
+       var on = orphanNames[o];
+       h += '<div style="display:flex;align-items:center;gap:9px;padding:2px 0;font-size:13px">'
+          + '<span style="min-width:250px"><strong>' + esc(on.nm) + '</strong></span>'
+          + '<span><strong style="color:#7a5410">' + (Number(on.quotes) || 0) + '</strong> quotes</span>'
+          + '<span class="muted" style="font-size:12px">'
+          + (on.last_quote ? 'to ' + day(on.last_quote) : '') + '</span></div>';
+     }
+     if (orphanNames.length > 25){
+       h += '<p class="muted" style="margin:6px 0 0;font-size:12px">and '
+          + (orphanNames.length - 25) + ' more.</p>';
+     }
+     h += '</div>';
    }
 
    if (dupes.length){
