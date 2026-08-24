@@ -84,6 +84,7 @@ export default {
     if (path === '/api/admin/crm/agency-dupes' && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyDupes(request, env));
     if (path === '/api/admin/crm/people'       && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyPeople(request, env));
     if (path === '/api/admin/crm/never-quoted' && method === 'GET')  return withAuth(request, env, () => handleCrmNeverQuoted(request, env));
+    if (path === '/api/admin/crm/rename'       && method === 'POST') return withAuth(request, env, () => handleCrmRename(request, env));
     if (path === '/api/admin/tidy-note'        && method === 'POST') return withAuth(request, env, () => handleTidyNote(request, env));
     if (path === '/api/admin/tidy-dismiss'     && method === 'POST') return withAuth(request, env, () => handleTidyDismiss(request, env));
     if (path === '/api/admin/tidy-note/delete' && method === 'POST') return withAuth(request, env, () => handleTidyNoteDelete(request, env));
@@ -2427,6 +2428,8 @@ async function handleCrmAgencies(request, env) {
     "           WHERE trim(COALESCE(agency,'')) <> '' GROUP BY 1) " +
     'SELECT a.id, a.name, a.city, a.state, a.priority, a.assigned_rep, a.needs_review, ' +
     '       a.relationship, a.parent_id, a.relationship_note, pa.name AS parent_name, ' +
+    // Carried so the firm panel can show that a name is settled, and the row can say so too.
+    '       a.name_confirmed_at, ' +
     '       COALESCE(q.quotes, 0) AS quotes, q.last_quote, ' +
     '       COALESCE(s.sales, 0) AS sales, ' +
     // ⭐ BOTH KINDS OF PERSON ARE COUNTED. Somebody held by name and firm has no broker_directory
@@ -2663,6 +2666,109 @@ async function handleCrmRelationship(request, env) {
 }
 
 /** Set the priority, the owner, or the location on one firm. */
+/**
+ * Correct a firm's name, and make that correction STICK.
+ *
+ * ERIC, 2026-08-24, after being ignored a dozen times: "Why do you have that page for me to tidy up
+ * if you are going to ignore the answers." The honest answer was that the page could not take this
+ * kind of answer at all -- a firm could be tagged, noted, aliased and marked acquired, but its NAME
+ * could only be changed by a session running SQL. So every correction he gave lived in a chat
+ * window and was gone by the next session, while the wrong spelling stayed in the database.
+ *
+ * TWO THINGS HAPPEN HERE AND THE SECOND IS THE POINT:
+ *   1. the firm is renamed, and every quote and sale it holds is corrected with it -- his standing
+ *      rule, with the old spelling written into each row's own note so nothing is lost
+ *   2. the name is STAMPED AS CONFIRMED, and the duplicate finder is required to leave it alone
+ *      from then on. A suggestion engine that re-proposes something you have already answered is
+ *      the whole complaint.
+ *
+ * CONFIRMING WITHOUT RENAMING IS ALLOWED, because "this name is already right, stop asking" is just
+ * as much an answer as "call it this instead".
+ *
+ * ⛔ A SEMICOLON IS REFUSED. That character is what the 2009-2023 import used to join two agency
+ * names it could not choose between, and every screen treats a name containing one as an artefact
+ * rather than a firm. Letting one be typed in by hand would manufacture the exact thing this
+ * cleanup exists to remove.
+ */
+async function handleCrmRename(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const id = String(body.id || '').trim();
+  if (!id) return jsonResp({ error: 'Which agency?' }, 400);
+
+  const raw = String(body.name == null ? '' : body.name).trim();
+  const confirm = body.confirm !== false;
+
+  const me = await env.DB.prepare('SELECT id, name FROM agencies WHERE id = ?').bind(id).first();
+  if (!me) return jsonResp({ error: 'No such agency.' }, 404);
+
+  const now = new Date().toISOString().slice(0, 10);
+  let renamed = false, quotes = 0, sales = 0;
+
+  if (raw && raw !== me.name) {
+    if (raw.length > 120) return jsonResp({ error: 'That name is too long.' }, 400);
+    if (raw.indexOf(';') !== -1) {
+      return jsonResp({ error: 'A name cannot contain a semicolon -- that is how the old import '
+                              + 'joined two firms it could not tell apart.' }, 400);
+    }
+    // ⚠️ ANOTHER FIRM ALREADY HOLDING THIS NAME IS A MERGE, NOT A RENAME, and merging is the
+    // relationship control's job -- it decides whether the other row is an alias, a branch or dead.
+    // Quietly creating a second firm with the same name would put the list back where it started.
+    const clash = await env.DB.prepare(
+      'SELECT id FROM agencies WHERE lower(trim(name)) = ? AND id <> ?'
+    ).bind(raw.toLowerCase(), id).first();
+    if (clash) {
+      return jsonResp({ error: 'Another firm is already called that. Use "What happened to this '
+                              + 'firm?" to roll one into the other.' }, 409);
+    }
+
+    const note = 'Agency name corrected to "' + raw + '" on ' + now
+               + ' -- Eric confirmed the spelling. This row was saved as "';
+    for (const t of [['quotes', 'broker_agency', 'notes'], ['aby_sales', 'agency', 'note']]) {
+      try {
+        const r = await env.DB.prepare(
+          'UPDATE ' + t[0] + ' SET ' + t[2] + " = TRIM(COALESCE(" + t[2] + ",'') "
+          + " || CASE WHEN TRIM(COALESCE(" + t[2] + ",'')) = '' THEN '' ELSE '  ' END "
+          + ' || ? || trim(' + t[1] + ") || '\".'), "
+          + t[1] + ' = ?, agency_id = ? WHERE lower(trim(' + t[1] + ')) = ?'
+        ).bind(note, raw, id, String(me.name || '').trim().toLowerCase()).run();
+        const n = (r && r.meta && r.meta.changes) || 0;
+        if (t[0] === 'quotes') quotes = n; else sales = n;
+      } catch (err) {
+        // Reported, never thrown: the rename itself is what he asked for, and a half-done job that
+        // looks like a failure is worse than one that says which half worked.
+        console.warn('could not correct ' + t[0] + ':', String((err && err.message) || err));
+      }
+    }
+    await env.DB.prepare('UPDATE agencies SET name = ? WHERE id = ?').bind(raw, id).run();
+    renamed = true;
+  }
+
+  await env.DB.prepare(
+    'UPDATE agencies SET name_confirmed_at = ?, name_confirmed_by = ? WHERE id = ?'
+  ).bind(confirm ? now : null, confirm ? 'eric' : null, id).run();
+
+  // ⭐ AND IT IS WRITTEN INTO THE HISTORY, not only into a column. The column is what the finder
+  // reads; the note is what a person reads when they wonder why this firm stopped being offered.
+  if (confirm) {
+    const words = renamed
+      ? 'Renamed from "' + me.name + '" to "' + raw + '" and the spelling confirmed. '
+        + quotes + ' quote(s) and ' + sales + ' sale(s) moved with it.'
+      : 'Name confirmed as "' + me.name + '". The duplicate finder will stop proposing changes to it.';
+    try {
+      await env.DB.prepare(
+        'INSERT INTO crm_events (id, entity_type, entity_id, kind, label, body, happened_at, '
+        + 'created_at, created_by) VALUES (?,?,?,?,?,?,?,?,?)'
+      ).bind(crypto.randomUUID(), 'agency', id, 'note', null, words, now,
+             new Date().toISOString(), 'eric').run();
+    } catch (err) {
+      console.warn('could not record the rename note:', String((err && err.message) || err));
+    }
+  }
+
+  return jsonResp({ ok: true, renamed, name: renamed ? raw : me.name,
+                    confirmed: confirm, quotes, sales });
+}
+
 async function handleCrmAgencyField(request, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
   const id = String(body.id || '').trim();
@@ -3404,6 +3510,11 @@ async function handleCrmAgencyDupes(request, env) {
       'LEFT JOIN pe ON pe.agency_id = a.id ' +
       'LEFT JOIN px ON px.agency_id = a.id ' +
       "WHERE COALESCE(a.relationship,'') NOT IN ('succeeded','alias') " +
+      // \ud83d\udd34\ud83d\udd34 A NAME ERIC HAS CONFIRMED IS NOT A CANDIDATE. This is the whole of his
+      // 2026-08-24 complaint: "why do you have that page for me to tidy up if you are going to
+      // ignore the answers." A finder that re-proposes something already answered is not a finder,
+      // it is a loop -- and it spends the only expensive thing on this screen, which is his time.
+      "  AND a.name_confirmed_at IS NULL " +
       "  AND a.name NOT LIKE '%;%' ORDER BY a.name"
     ).all();
     const rows = results || [];
@@ -3652,8 +3763,18 @@ async function handleCrmAgencyDupes(request, env) {
       orphans = [];
     }
 
+    // \u2b50 SAID OUT LOUD. A list that quietly stops offering rows cannot be told from one that has
+    // run out of them -- and "nothing left to tidy" is exactly the wrong impression to give.
+    let confirmed = 0;
+    try {
+      const cf = await env.DB.prepare(
+        'SELECT COUNT(*) AS n FROM agencies WHERE name_confirmed_at IS NOT NULL'
+      ).first();
+      confirmed = (cf && cf.n) || 0;
+    } catch { confirmed = 0; }
+
     return jsonResp({
-      pairs, maybe, odd, notes, compound, orphans, matched: pairs.length,
+      pairs, maybe, odd, notes, compound, orphans, confirmed, matched: pairs.length,
       orphanQuotes: orphans.reduce(function (t, r) { return t + (Number(r.quotes) || 0); }, 0),
       note: 'Suggestions only. Two similar names may be one firm or two, and only a person knows.',
     });
@@ -5831,6 +5952,8 @@ ${abyAdminNav('/admin/brokers')}
 
  // Quote-log names that no agency row answers to. Filled by loadDupes, drawn by paintDupes.
  var orphanNames = [], orphanQuotes = 0;
+ // How many firms this screen is deliberately not asking about, because their names are settled.
+ var confirmedCount = 0;
 
  async function loadDupes(){
    var box = q('tidyBox');
@@ -5844,6 +5967,7 @@ ${abyAdminNav('/admin/brokers')}
    odds = d.odd || [];
    tidyNotes = d.notes || [];
    comps = d.compound || [];
+   confirmedCount = Number(d.confirmed) || 0;
    orphanNames = d.orphans || [];
    orphanQuotes = Number(d.orphanQuotes) || 0;
    paintDupes();
@@ -5897,6 +6021,12 @@ ${abyAdminNav('/admin/brokers')}
    var h = '';
    // ⭐ SAY HOW MANY ARE WAITING ON ME. Otherwise the only way to know a message was left is to
    // scroll the whole list looking for yellow.
+   if (confirmedCount){
+     h += '<p class="sub" style="margin:0 0 10px">' + confirmedCount + ' firm'
+        + (confirmedCount === 1 ? '' : 's') + ' with a confirmed name '
+        + (confirmedCount === 1 ? 'is' : 'are') + ' not offered here at all. '
+        + 'Open a firm and press <em>This name is right</em> to add one.</p>';
+   }
    if (tidyNotes.length){
      h += '<p style="margin:0 0 10px;font-size:13px;color:#7a5410"><strong>' + tidyNotes.length
         + '</strong> note' + (tidyNotes.length === 1 ? '' : 's') + ' waiting for me to action.</p>';
@@ -6111,10 +6241,20 @@ ${abyAdminNav('/admin/brokers')}
      // looks finished and is not.
      if (!r.ok) msgs.push(esc(grp[i].name) + ': ' + esc(d.error || 'did not save'));
    }
+   // \u2b50\u2b50 KEEPING A NAME IS ANSWERING THE QUESTION, so the answer is recorded as one. Without
+   // this the finder can offer the same group again the moment another near-match turns up, which
+   // is what had Eric answering the same pairs over and over.
+   try {
+     await fetch('/api/admin/crm/rename', {
+       method: 'POST', headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ id: keep.id, confirm: true }),
+     });
+   } catch (e) { /* the alias is already saved; confirming is the belt, not the braces */ }
+
    list.splice(g, 1);
    paintDupes();
    if (msgs.length) q('tidyMsg').innerHTML = '<span style="color:#a12622">' + msgs.join(' &middot; ') + '</span>';
-   else q('tidyMsg').textContent = 'Kept ' + keep.name + '.';
+   else q('tidyMsg').textContent = 'Kept ' + keep.name + '. That name is settled now.';
    await loadMkt();
  }
 
@@ -6353,6 +6493,25 @@ ${abyAdminNav('/admin/brokers')}
          + '<input id="fState" placeholder="TX" maxlength="2" size="3" value="' + esc(a.state || '') + '" style="padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
          + '<button onclick="saveWhere(' + "'" + id + "'" + ')">Save location</button>'
          + '<span class="muted">' + (a.metro ? esc(a.metro) : '') + '</span></div>'
+         // \u2b50\u2b50 THE NAME IS EDITABLE HERE, AND UNTIL 2026-08-24 IT WAS NOT EDITABLE ANYWHERE.
+         // A firm could be tagged, noted, aliased and marked acquired from this panel, but its name
+         // could only be changed by somebody running SQL. So every correction Eric gave lived in a
+         // chat window and the wrong spelling stayed in the database -- he had to say "HUB -
+         // Wellspring" about a dozen times before it stuck.
+         // Saving also CONFIRMS the name, which takes the firm out of the duplicate finder for good.
+         + '<div class="mfilters" style="align-items:center">'
+         + '<input id="fName" value="' + esc(a.name) + '" style="flex:1;min-width:230px;padding:6px 9px;'
+         + 'border:1px solid #c8d2de;border-radius:5px;font-weight:600">'
+         + '<button class="go" onclick="saveName(' + "'" + id + "'" + ')" '
+         + 'style="background:#1a5c3a;color:#fff;border:1px solid #1a5c3a;border-radius:6px;'
+         + 'padding:6px 13px;cursor:pointer;font-weight:600">Save the name</button>'
+         + (a.name_confirmed_at
+             ? '<span class="muted" style="font-size:12.5px">Confirmed ' + day(a.name_confirmed_at)
+               + ' &mdash; the tidy-up list leaves it alone. '
+               + '<a href="#" onclick="unconfirmName(' + "'" + id + "'" + ');return false">undo</a></span>'
+             : '<button onclick="confirmName(' + "'" + id + "'" + ')" style="font-size:12.5px">'
+               + 'This name is right &mdash; stop suggesting changes</button>')
+         + '</div>'
          + '<div class="mfilters"><input id="fNote" placeholder="What happened?" style="flex:1;padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
          + '<input id="fNoteDate" type="date" value="' + new Date().toISOString().slice(0, 10) + '">'
          + '<button onclick="addNote(' + "'" + id + "'" + ')">Add note</button></div>'
@@ -6472,6 +6631,54 @@ ${abyAdminNav('/admin/brokers')}
      h += '<option value="' + o.id + '"' + (a.parent_id === o.id ? ' selected' : '') + '>' + esc(o.name) + '</option>';
    }
    return h;
+ }
+
+ // -- CORRECTING A NAME, AND MAKING IT STICK ---------------------------------------------------
+ //
+ // ERIC, 2026-08-24: "I have told you about 12 times now that Hubs-Wellspring is not right and it
+ // should be HUB - Wellspring. Why do you have that page for me to tidy up if you are going to
+ // ignore the answers."
+ // Because until now the page could not take that answer. There was no way to change a firm's name
+ // on any screen -- only a session running SQL could -- so his corrections lived in chat and the
+ // wrong spelling stayed in the database. Saving a name here renames the firm, moves its quotes and
+ // sales with it, and marks the name settled so the duplicate finder stops proposing it.
+ async function saveName(id){
+   var el = q('fName');
+   if (!el) return;
+   var want = (el.value || '').trim();
+   if (!want){ q('fMsg').textContent = 'A firm needs a name.'; return; }
+   q('fMsg').textContent = 'Saving...';
+   var r = await fetch('/api/admin/crm/rename', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ id: id, name: want, confirm: true }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   // \ud83d\udd34 A REFUSAL IS SHOWN, NOT SWALLOWED. Renaming onto a firm that already exists is a MERGE
+   // and the server says so rather than quietly making a second row with the same name.
+   if (!r.ok){ q('fMsg').innerHTML = '<span style="color:#a12622">' + esc(d.error || 'That did not save.') + '</span>'; return; }
+   q('fMsg').textContent = d.renamed
+     ? 'Renamed. ' + d.quotes + ' quote(s) and ' + d.sales + ' sale(s) moved with it, each noting the old spelling.'
+     : 'Name confirmed.';
+   await loadMkt();
+   openFirm(id, true);
+ }
+
+ async function confirmName(id){ await setConfirmed(id, true); }
+ async function unconfirmName(id){ await setConfirmed(id, false); }
+
+ async function setConfirmed(id, on){
+   q('fMsg').textContent = on ? 'Confirming...' : 'Reopening...';
+   var r = await fetch('/api/admin/crm/rename', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ id: id, confirm: on }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok){ q('fMsg').innerHTML = '<span style="color:#a12622">' + esc(d.error || 'That did not save.') + '</span>'; return; }
+   q('fMsg').textContent = on
+     ? 'Confirmed. The tidy-up list will leave this name alone.'
+     : 'Reopened. It can be suggested again.';
+   await loadMkt();
+   openFirm(id, true);
  }
 
  async function saveRel(id){
@@ -10449,6 +10656,24 @@ const MIGRATIONS = [
     index: "aby_sales_key" },
   { sql: "CREATE INDEX IF NOT EXISTS aby_sales_contact ON aby_sales(broker_contact)",
     index: "aby_sales_contact" },
+
+  // -- A NAME ERIC HAS CONFIRMED IS NOT A SUGGESTION ANY MORE -----------------------------------
+  //
+  // ERIC, 2026-08-24: "I have told you about 12 times now that Hubs-Wellspring is not right and it
+  // should be HUB - Wellspring. Why do you have that page for me to tidy up if you are going to
+  // ignore the answers."
+  // He was right, and the database says why: there was not ONE crm_event against any HUB or
+  // Wellspring row, one tidy_message ever, and nothing at all in tidy_dismissed. Every one of those
+  // answers went into a chat window and died there, because THE SCREEN HAD NO WAY TO TAKE THEM --
+  // a firm could be tagged, noted, aliased and acquired, but never RENAMED. Only a session could do
+  // that, and sessions do not persist.
+  // Worse, an earlier session had written its own reasoning onto the row (the date ranges do not
+  // overlap, so they must be different) and the next session read that as fact.
+  // So: a name he has confirmed is stamped here, and the duplicate finder never proposes it again.
+  { sql: "ALTER TABLE agencies ADD COLUMN name_confirmed_at TEXT",
+    table: "agencies", column: "name_confirmed_at" },
+  { sql: "ALTER TABLE agencies ADD COLUMN name_confirmed_by TEXT",
+    table: "agencies", column: "name_confirmed_by" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column

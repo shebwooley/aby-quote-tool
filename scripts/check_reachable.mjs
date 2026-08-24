@@ -261,6 +261,44 @@ const RULES = [
                && /var mine = \+\+mktSeq;/.test(f.worker)
                && /if \(mine !== mktSeq\) return;/.test(f.worker),
   },
+  // -- AN ANSWER MUST HAVE SOMEWHERE TO GO ------------------------------------------------------
+  // ERIC, 2026-08-24: "I have told you about 12 times now that Hubs-Wellspring is not right and it
+  // should be HUB - Wellspring. Why do you have that page for me to tidy up if you are going to
+  // ignore the answers."
+  // The database said why: not one crm_event against any of those rows, one tidy_message ever,
+  // nothing in tidy_dismissed. The screen could tag, note, alias and bury a firm -- but it could
+  // not RENAME one. Only a session running SQL could, so every correction he gave lived in a chat
+  // window and the wrong spelling stayed. This is the door that was missing.
+  {
+    name: "a firm's name can be corrected from its own panel",
+    why: "Twelve corrections were lost because there was nowhere on any screen to put them.",
+    holds: (f) => /id="fName"/.test(f.worker)
+               && /function saveName\(/.test(f.worker)
+               && /crm\/rename/.test(f.worker),
+  },
+  {
+    name: "a name can be marked settled without renaming it",
+    why: '"That name is already right, stop asking" is an answer too, and it had no control.',
+    holds: (f) => /function confirmName\(/.test(f.worker)
+               && /function unconfirmName\(/.test(f.worker)
+               && /This name is right/.test(f.worker),
+  },
+  {
+    name: "the duplicate finder actually honours a confirmed name",
+    why: "A control that records an answer the finder ignores is worse than no control.",
+    holds: (f) => /a\.name_confirmed_at IS NULL/.test(f.worker),
+  },
+  {
+    name: "the tidy-up screen says how many firms it is leaving alone",
+    why: "A list that quietly stops offering rows reads as a list that has run out of them.",
+    holds: (f) => /confirmedCount/.test(f.worker)
+               && /not offered here at all/.test(f.worker),
+  },
+  {
+    name: "resolving a group settles the surviving name",
+    why: "Answering the question should retire it, or the same pair returns on the next near-match.",
+    holds: (f) => /crm\/rename[\s\S]{0,400}?confirm: true/.test(f.worker),
+  },
   {
     name: "the never-quoted cross-sell list is reachable from the marketing view",
     why: "A marketing list nobody can open produces no calls, which is the same as not having it.",
