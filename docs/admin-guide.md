@@ -118,6 +118,17 @@ Where a broker came from — the partner firm and the individual rep who sent th
 - ⚠️ **Attribution is permanent, not a live pointer.** Dana referred that broker in March; that stays
   true after Dana leaves, which is why a rep is deactivated rather than deleted.
 
+### RFP Watch
+
+Cities, counties, school districts and colleges putting these services out to bid.
+**A different channel from Brokers and Agencies: those are insurance firms ABY quotes through,
+these are public entities buying direct.** The two lists never merge.
+
+- ⭐ **The value is not finding the RFP. It is never looking at the same dead one twice, and
+  remembering why you passed.**
+- 🔴 **Nothing is trusted until a person opens the issuing entity's own page.** See the
+  full section below, which is worth reading before using it.
+
 ### Rates
 
 What the tool charges for each product, so a human can check a quote against the sheet.
@@ -458,7 +469,7 @@ writes an email or contacts anybody.
 
 ## ⏳ Not built yet, and worth knowing about
 
-- Nobody has yet registered a real account, so the agency side has been only ever been tested. It has never been used by a real agency. **The first agency that signs up is the real test.**
+- Nobody has yet registered a real account, so the agency side has only ever been tested. It has never been used by a real agency. **The first agency that signs up is the real test.**
 
 ---
 
@@ -471,3 +482,6 @@ visible rather than assumed complete.*
 - How a quote reaches the BenefitLab broker dashboard
 - Rate overrides, and the note that records why one was applied
 - What the New & Lost Business reports contribute, and what they cannot say
+- ⛔ **Not here on purpose: the RFP ANSWER library.** Answering a solicitation is work that
+  happens in documents and in the knowledge base, not on this admin, so it has no page to
+  explain. The question set for it lives in the planning folder.
