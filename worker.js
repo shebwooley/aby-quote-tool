@@ -3603,6 +3603,16 @@ async function handleCrmAgencyDupes(request, env) {
         'SELECT client_name, substr(created_at,1,10) AS dt FROM quotes ' +
         'WHERE lower(trim(broker_agency)) = ? ORDER BY created_at DESC LIMIT 3'
       ).bind(String(c.name).trim().toLowerCase()).all();
+      // \u26d4 A COMPOUND ROW WITH NO QUOTES LEFT HAS BEEN ANSWERED, AND MUST STOP BEING ASKED.
+      // Resolving one moves its quotes onto the real firm -- either both firms, where two of them
+      // genuinely quoted the employer, or the one whose logo is on the cover. The compound agency
+      // record stays behind holding nothing, and it kept appearing on this list.
+      // That is the same complaint that produced tidy_dismissed: a screen which re-asks a question
+      // somebody has already answered burns the only expensive thing here, which is Eric's
+      // attention. 20 of the 42 were answered on 2026-08-24 from the original proposals.
+      // \u26a0\ufe0f HIDDEN, NEVER DELETED. The row is still on the analysis view and still carries the
+      // history; it has simply stopped being a question.
+      if (!(ex.results || []).length) continue;
       compound.push({
         id: c.id, name: c.name, options: opts,
         examples: (ex.results || []).map((x) => (x.client_name || '(not stated)') + ' · ' + x.dt),
