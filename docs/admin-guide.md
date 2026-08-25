@@ -71,6 +71,66 @@ agencies.
 - ⏳ **A quote that simply got no answer is not the same as one that was lost**, and the tool cannot
   yet tell them apart.
 
+### Today
+
+**What is due, across everything the tool knows about, on one page.** Built 2026-08-25, after the
+same three screens on the BenefitLab side were merged into one.
+
+It has two views of the same list. **What's due** groups by urgency — overdue, this week, the next
+ninety days, then anything with no date at all. **By month** lays the same rows out as a calendar.
+The button remembers which one you were on in the address bar, so a link to the month view can be
+sent to somebody.
+
+**Five things put rows on it:**
+
+- **Your own to-dos.** Type one in at the top. A due date is optional.
+- **Quote effective dates** — a quote still pending whose coverage is meant to start on a date that
+  has not arrived yet. That date is the deadline the chase has to beat.
+- **Follow-ups** — brokers with quotes out that have had no answer.
+- **RFP deadlines** — the proposal date, the questions date and the pre-proposal meeting, for
+  anything on the watch list that has not been passed on.
+- **Signed authorizations** with a start date.
+
+> ## ⚠️ The to-do list is SHARED, and that is not an oversight
+>
+> **There is one login to this admin and it does not know who is using it.** So the tool genuinely
+> cannot tell Eric from Niels, and a list called *"my to-dos"* would be a lie on a screen two people
+> share. **Instead every to-do says who it is for** — Eric, Niels, or nobody in particular — and the
+> Owner filter at the top narrows to one person.
+>
+> ⭐ **That filter deliberately only narrows the TO-DOS.** Nothing else on the page belongs to a
+> person, and hiding a quote deadline because it has no owner would make the filter look broken.
+
+**Things worth knowing:**
+
+- **A follow-up is one row per broker, not one per quote.** *"Chase 3 quotes that have had no
+  answer"* is one phone call, and listing three rows for it would bury the rest of the page. The row
+  says when the newest of them went out and when the oldest did.
+- 🔴 **It is due a fortnight after the NEWEST quote you sent that broker, not the oldest.** Anchoring
+  it on the oldest punishes the broker you are working with hardest: send a fifth quote today and the
+  row would still read eleven weeks late, because the first one is. Measured on the real book, the
+  oldest rule put fourteen brokers more than two months late; the newest rule puts four — and it
+  leaves alone the seven quoted in the last fortnight, who should not be chased at all.
+- **A quote nobody has touched for three months stops being a follow-up.** It is a dead lead, not
+  work. Without that cut-off the page would list every quote back to 2008, because the old imported
+  ones all count as pending.
+- ⏳ **RFP Watch has nothing in it yet**, so that chip reads zero. It is wired now rather than later
+  because the day those dates arrive they are hard external deadlines, and a missed close date is an
+  opportunity that cannot be recovered. **The chip stays on screen showing a zero rather than
+  disappearing** — a chip that vanishes when it is empty cannot be told apart from one that was
+  never built.
+- 🔴 **The client list is deliberately NOT a source.** A renewal calendar needs an anniversary, and
+  only 158 of the 3,190 client records carry a start date — every one of them recorded as an
+  estimate. A calendar that prints an estimate as a due date is inventing work.
+- **A to-do with no date gets its own list**, rather than being given a made-up day or quietly
+  dropped.
+- **Months more than three out are folded**, with a line saying what is inside. Three months is the
+  same horizon the other view uses, so the two agree about what counts as near. ⭐ **A folded month
+  opens itself if anything in it has already passed** — a fold that can hide something late is worse
+  than no fold.
+- **If one of the five sources cannot be read, the page says so at the top.** Otherwise it would
+  simply show a shorter list, which nobody can tell apart from a quiet week.
+
 ### Clients
 
 **ABY's actual book — 3,190 records, 2,213 active and 977 termed.**
