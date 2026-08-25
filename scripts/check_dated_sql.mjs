@@ -34,23 +34,43 @@ const WIN = process.platform === "win32";
 // shell:true is required on Windows -- Node refuses to spawn a .cmd without one -- and is safe here
 // because nothing long-lived is started. Same reasoning as check_crm.mjs, which does start one.
 const NPX = WIN ? "npx.cmd" : "npx";
+// PINNED, AND NOT OUT OF CAUTION. A bare `npx wrangler` resolves to whatever is newest at the
+// moment the checker runs, so a release upstream can change what this file measures without a line
+// of it changing -- and on the day it happened here npx could not even install the new version
+// (EBUSY renaming its own cache) and the checker refused to run. A checker's tools are part of the
+// experiment. Override with ABY_WRANGLER when a version needs testing.
+const WRANGLER = process.env.ABY_WRANGLER || "wrangler@4.125.0";
 const SELF_TEST = process.argv.includes("--self-test");
+// TWO DATABASES, AND THIS IS THE WHOLE REASON THE FIRST RUN LIED.
+//
+// The statement pass needs stand-in tables so the /admin/today queries can be planned at all, and
+// it writes them with minimal shapes. The fresh-build pass needs a database with NOTHING in it. Run
+// against one database the first poisons the second: `rfp_opportunity` got created by the fixture
+// with seven columns, the real CREATE TABLE IF NOT EXISTS became a no-op, and the index over
+// `solicitation_number` failed -- which this checker then reported as "an object that exists only
+// in production", the exact F-391 shape, entirely of its own making.
+// A CHECKER THAT SHARES STATE BETWEEN PASSES IS TESTING THE ORDER ITS PASSES HAPPEN TO RUN IN.
 const STATE = mkdtempSync(join(tmpdir(), "abysql-"));
-process.on("exit", () => { try { rmSync(STATE, { recursive: true, force: true }); } catch {} });
+const STATE_FRESH = mkdtempSync(join(tmpdir(), "abyfresh-"));
+process.on("exit", () => {
+  for (const d of [STATE, STATE_FRESH]) {
+    try { rmSync(d, { recursive: true, force: true }); } catch {}
+  }
+});
 
 function die(msg) {
   console.log("\nCANNOT RUN: " + msg + "\n");
   process.exit(2);
 }
 
-function d1(sql) {
+function d1(sql, state) {
   // WITH shell:true NOTHING QUOTES THE ARGUMENTS FOR YOU. The first version of this passed the SQL
   // unquoted, the shell split it on spaces, and wrangler answered with its usage text -- which the
   // caller reported as "no local D1". A tool that cannot run and a tool that is absent look the
   // same from the outside, so the quoting is done here, deliberately.
   const q = (a) => (/[ "]/.test(a) ? '"' + a.split('"').join('\\"') + '"' : a);
-  const args = ["wrangler", "d1", "execute", "aby-quotes", "--local",
-                "--persist-to", STATE, "--config", "wrangler.test.jsonc",
+  const args = [WRANGLER, "d1", "execute", "aby-quotes", "--local",
+                "--persist-to", state || STATE, "--config", "wrangler.test.jsonc",
                 "--json", "--command", sql].map(q);
   const r = spawnSync(NPX, args, { cwd: REPO, shell: true, encoding: "utf8", timeout: 120000 });
   const out = String(r.stdout || "") + String(r.stderr || "");
@@ -73,16 +93,94 @@ function d1(sql) {
 
 const SRC = readFileSync(join(REPO, "worker.js"), "utf8");
 
-function abyTaskMigrations() {
-  const out = [];
-  const re = /\{ sql: ((?:"[^"]*"(?:\s*\+\s*)?)+),/g;
-  let m;
-  while ((m = re.exec(SRC))) {
-    // eslint-disable-next-line no-eval
-    const sql = eval(m[1]);
-    if (/aby_task/.test(sql)) out.push(sql);
+/**
+ * Strip `//` comments that sit OUTSIDE a double-quoted string.
+ *
+ * THIS IS NOT TIDINESS, IT IS THE DIFFERENCE BETWEEN 86 STATEMENTS AND 88. Several MIGRATIONS
+ * entries interleave a comment between the concatenated pieces of ONE statement --
+ *     "CREATE TABLE IF NOT EXISTS crm_events (" +
+ *     "  entity_type TEXT NOT NULL," +      // 'agency' or 'person'
+ * -- and a regex that walks quoted chunks stops dead at the first one. The first version of this
+ * checker missed exactly those two CREATE TABLEs, then reported the three indexes that depend on
+ * them as "objects that exist only in production".
+ * A PARSER THAT READS TOO FEW STATEMENTS DOES NOT GO QUIET -- IT INVENTS FINDINGS, and they are
+ * convincing, because the shape it reports is a real defect that really did happen here before.
+ */
+function stripLineComments(src) {
+  let out = "", i = 0, inStr = false;
+  while (i < src.length) {
+    const c = src[i];
+    if (inStr) {
+      if (c === "\\") { out += src.slice(i, i + 2); i += 2; continue; }
+      if (c === '"') inStr = false;
+      out += c; i++; continue;
+    }
+    if (c === '"') { inStr = true; out += c; i++; continue; }
+    if (c === "/" && src[i + 1] === "/") {
+      const j = src.indexOf("\n", i);
+      i = j === -1 ? src.length : j;
+      continue;
+    }
+    out += c; i++;
   }
   return out;
+}
+
+function migrationsBody() {
+  const i = SRC.indexOf("const MIGRATIONS = [");
+  if (i === -1) die("MIGRATIONS is not in worker.js -- has it been renamed?");
+  return stripLineComments(SRC.slice(i, SRC.indexOf("\n];", i)));
+}
+
+/**
+ * Split a .sql file into statements.
+ *
+ * schema.sql's own comments contain semicolons -- it documents the hand-run ALTERs inside `--`
+ * lines -- so splitting the raw text on ";" produces fragments that are not SQL. That is the same
+ * defect as `wrangler d1 execute --file`, which this repo has already been bitten by (TRAPS #300).
+ */
+function splitSql(text) {
+  const noComments = text.split("\n").map((l) => {
+    const i = l.indexOf("--");
+    return i === -1 ? l : l.slice(0, i);
+  }).join("\n");
+  // FLATTENED TO ONE LINE, AND THAT IS NOT COSMETIC. These statements go to wrangler as a
+  // --command argument through a shell, and a Windows shell truncates an argument at the first
+  // newline -- so a multi-line CREATE TABLE arrived as its first line and came back "incomplete
+  // input", which reads exactly like a broken schema file rather than a broken caller.
+  // Safe here: the only string literals in schema.sql are '', '[]' and 'P', none of which carry
+  // meaningful whitespace.
+  return noComments.split(";")
+    .map((x) => x.replace(/\s+/g, " ").trim())
+    .filter((x) => x.length > 0);
+}
+
+function allMigrations() {
+  const body = migrationsBody();
+  const out = [];
+  const re = /\{ sql: ((?:"[^"]*"(?:\s*\+\s*)?\s*)+),/g;
+  let m;
+  while ((m = re.exec(body))) {
+    // eslint-disable-next-line no-eval
+    out.push(eval(m[1].replace(/\s*\+\s*$/, "")));
+  }
+  return out;
+}
+
+function abyTaskMigrations() {
+  return allMigrations().filter((sql) => /aby_task/.test(sql));
+}
+
+/**
+ * The same three-phase ordering handleMigrate applies before it runs anything: tables, then the
+ * columns that alter them, then the indexes over both. Copied deliberately rather than imported --
+ * worker.js is a Cloudflare module and cannot be require()d here -- and asserted below to still
+ * match the worker's own list, so the copy cannot drift silently.
+ */
+function phase(sql) {
+  if (/^\s*CREATE\s+TABLE/i.test(sql)) return 0;
+  if (/^\s*ALTER\s+TABLE/i.test(sql)) return 1;
+  return 2;
 }
 
 /**
@@ -152,6 +250,77 @@ for (const sql of [
   if (!r.ok) { console.log("  FAIL fixture table: " + r.msg); bad++; }
 }
 
+// ── F-391: CAN THE MIGRATION LIST BUILD A DATABASE ON ITS OWN? ────────────────────────────────
+//
+// THE REGRESSION THIS GUARDS, AND IT REALLY HAPPENED. Production has tables, columns and indexes
+// that arrived as hand-run ALTERs and were never written into MIGRATIONS at all -- broker_directory
+// had no CREATE TABLE anywhere in the repo, while four ALTERs and an INDEX named it. Nothing
+// noticed, because production is the one environment somebody is always looking at, and it already
+// had the table. A fresh database is the only place the gap is visible.
+//
+// 🔴 F-391 SAID THIS WAS GUARDED BY scripts/check_migrations_real.mjs. THAT FILE HAS NEVER EXISTED
+// -- no file, no commit, no mention anywhere in the repo (measured 2026-08-25). The code fixes it
+// describes are real; the proof was not. So the guard lives here instead, in the file that already
+// builds a fresh local D1, rather than in a second harness.
+console.log("\nBUILDING A DATABASE THE DOCUMENTED WAY -- schema.sql, then every migration\n");
+{
+  // 🔴 THE QUESTION HAD TO BE CORRECTED, AND THE WRONG VERSION LOOKED LIKE A FINDING.
+  // Asking "can MIGRATIONS build a database on its own" produced nineteen failures naming `quotes`
+  // and `commitments` -- because those tables live in schema.sql and MIGRATIONS is the INCREMENT,
+  // exactly as /api/migrate documents ("for an existing database, run these once"). The real
+  // question, and the one F-391 was about, is whether the two TOGETHER reproduce production.
+  const base = splitSql(readFileSync(join(REPO, "schema.sql"), "utf8"));
+  let baseBad = 0;
+  for (const sql of base) {
+    const r = d1(sql, STATE_FRESH);
+    if (!r.ok && !/duplicate column name|already exists/i.test(String(r.msg))) {
+      baseBad++;
+      if (baseBad <= 4) {
+        console.log("  FAIL schema.sql: " + sql.slice(0, 84));
+        console.log("         -> " + String(r.msg).replace(/\s+/g, " ").slice(0, 140));
+      }
+    }
+  }
+  console.log("  " + (baseBad ? "FAIL" : "ok  ") + " schema.sql applied (" + base.length + " statements)");
+  if (baseBad) bad++;
+
+  const all = allMigrations();
+  // Counted against the list's OWN entries, never against a floor. `{ sql:` appears once per entry,
+  // so the two numbers must agree exactly -- a floor of "at least 50" is what let two missing
+  // statements through and turned a parser bug into three invented findings.
+  const declared = (migrationsBody().match(/\{ sql:/g) || []).length;
+  if (all.length !== declared) {
+    console.log("  FAIL parsed " + all.length + " statements but MIGRATIONS declares " + declared + ".");
+    console.log("       Every statement below is therefore judged against an incomplete list.");
+    bad++;
+  } else {
+    console.log("  ok   parsed all " + declared + " entries MIGRATIONS declares");
+  }
+  const ordered = all.map((sql, i) => [i, sql]).sort((a, b) => phase(a[1]) - phase(b[1]) || a[0] - b[0]);
+  const failures = [];
+  for (const [, sql] of ordered) {
+    const r = d1(sql, STATE_FRESH);
+    // "duplicate column name" and "already exists" mean an earlier statement got there first, which
+    // on a fresh database is the list saying the same thing twice -- harmless, and NOT a failure.
+    const benign = !r.ok && /duplicate column name|already exists/i.test(String(r.msg));
+    if (!r.ok && !benign) failures.push([sql, r.msg]);
+  }
+  console.log("  " + (failures.length ? "FAIL" : "ok  ") + " " + all.length +
+              " statements, applied in the worker's own phase order, on a database that started empty");
+  for (const [sql, msg] of failures.slice(0, 12)) {
+    console.log("       " + sql.slice(0, 92));
+    console.log("         -> " + String(msg).replace(/\s+/g, " ").slice(0, 150));
+  }
+  if (failures.length > 12) console.log("       ... and " + (failures.length - 12) + " more");
+  if (failures.length) {
+    bad++;
+    console.log("");
+    console.log("       A statement that fails on an EMPTY database is one whose object exists only");
+    console.log("       in production, put there by hand and never written down. That is exactly the");
+    console.log("       F-391 defect, and it is invisible everywhere except here.");
+  }
+}
+
 console.log("\nRUNNING EVERY STATEMENT /admin/today MAKES\n");
 const statements = datedStatements();
 if (statements.length !== 5) {
@@ -198,6 +367,22 @@ if (SELF_TEST) {
   const r2 = d1("SELECT * FROM aby_task_that_is_not_there");
   console.log("  " + (r2.ok ? "GREEN -- IT ACCEPTED A MISSING TABLE" : "RED   a missing table is reported as a failure"));
   if (r2.ok) bad++;
+
+  // The fresh-build pass has to be able to fail too, or it is decoration. An ALTER naming a table
+  // no CREATE ever makes is the exact F-391 shape.
+  const r3 = d1("ALTER TABLE table_that_no_migration_creates ADD COLUMN x TEXT", STATE_FRESH);
+  const benign3 = !r3.ok && /duplicate column name|already exists/i.test(String(r3.msg));
+  console.log("  " + ((!r3.ok && !benign3) ? "RED   an ALTER on a table nothing created is a failure, not a benign skip"
+                                           : "GREEN -- IT SWALLOWED AN ALTER ON A TABLE THAT DOES NOT EXIST"));
+  if (r3.ok || benign3) bad++;
+
+  // And the phase sort must really move things, or "applied in phase order" means nothing.
+  const sorted = ["CREATE INDEX i ON t(a)", "ALTER TABLE t ADD COLUMN a TEXT", "CREATE TABLE t (id TEXT)"]
+    .map((sql, i) => [i, sql]).sort((a, b) => phase(a[1]) - phase(b[1]) || a[0] - b[0]).map((x) => x[1]);
+  const phaseOk = /^CREATE TABLE/.test(sorted[0]) && /^ALTER/.test(sorted[1]) && /^CREATE INDEX/.test(sorted[2]);
+  console.log("  " + (phaseOk ? "RED   the phase sort puts tables before columns before indexes"
+                              : "GREEN -- THE PHASE SORT DID NOT REORDER ANYTHING"));
+  if (!phaseOk) bad++;
 }
 
 console.log(bad ? "\n" + bad + " problem(s).\n" : "\nevery statement runs on a fresh D1.\n");
