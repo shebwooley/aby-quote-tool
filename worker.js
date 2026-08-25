@@ -89,6 +89,8 @@ export default {
     if (path === '/api/admin/tidy-dismiss'     && method === 'POST') return withAuth(request, env, () => handleTidyDismiss(request, env));
     if (path === '/api/admin/tidy-note/delete' && method === 'POST') return withAuth(request, env, () => handleTidyNoteDelete(request, env));
     if (path === '/api/admin/crm/status'       && method === 'POST') return withAuth(request, env, () => handleCrmRecordStatus(request, env));
+    if (path === '/api/admin/dated'    && method === 'GET')  return withAuth(request, env, () => handleAbyDated(request, env));
+    if (path === '/api/admin/task'     && method === 'POST') return withAuth(request, env, () => handleAbyTask(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
     // Referral partners (F-referrals, Eric 2026-08-19)
     if (path === '/api/admin/referrals' && method === 'GET')  return withAuth(request, env, () => handleAdminReferrals(request, env));
@@ -177,6 +179,10 @@ export default {
     }
 
     // ── Admin page ──────────────────────────────────────────────────────────────
+    if (path === '/admin/today') {
+      return withAuth(request, env, () => new Response(adminTodayHTML(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
+    }
     if (path === '/admin/pipeline') {
       return withAuth(request, env, () => new Response(adminPipelineHTML(), {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
@@ -9751,10 +9757,718 @@ load();
 </body></html>`;
 }
 
+// ─── The dated things one ABY admin screen is built from (F-403) ───────────────
+//
+// ERIC, 2026-08-25: "I want to work on adding a to do list and calendar similar to what we just
+// did to the ABY admin area."
+//
+// WHAT THE BROKER DASHBOARD DID AND WHY THIS IS NOT A COPY OF IT. There, the value was the MERGE:
+// five sources -- compliance requirements, renewal milestones, renewal dates, quotes and the
+// broker's own to-dos -- landing on one list, because a broker was checking five screens. ABY's
+// admin does not have five sources. Counted against live D1 on 2026-08-25, before a line of this
+// was written:
+//
+//   rfp_opportunity      0 rows          (the RFP watch is built and empty -- F-385, with Niels)
+//   commitments          1 row
+//   aby_clients          3,190 rows, of which 158 carry an effective_date
+//                        AND ALL 158 ARE FLAGGED AN ESTIMATE
+//   quotes               6,168 rows, of which only 150 hold a real ISO effective date;
+//                        1,581 hold PROSE such as "Aug 2025 or later"
+//
+// So this is a TO-DO LIST with a few genuine dated rows beside it, which is what F-403 itself said
+// to build if the measurement came out this way. A five-source merge would have rendered empty.
+//
+// WHY aby_clients IS NOT A SOURCE, STATED SO IT IS NOT ADDED LATER BY SOMEBODY READING THE TABLE
+// AND NOT THE DATA: a renewal calendar needs an anniversary, every anniversary available here is
+// an ESTIMATE, and a calendar that prints an estimated date as a due date is inventing work. The
+// rule this project already has for that case is to print the blank and say why.
+//
+// THE PROSE TRAP IS LOAD-BEARING AND IT BIT DURING THIS BUILD. Comparing effective_date against
+// today in SQL is TRUE for every one of the 1,581 prose rows, because in a string comparison the
+// letter A sorts after the digit 2. The first measurement of this feature said 1,513 pending
+// quotes had a future effective date. The real number is 11. Every read of that column goes
+// through isoDay().
+
+/** A calendar day, or null. Rejects anything that is not exactly YYYY-MM-DD, including prose. */
+function isoDay(v) {
+  const s = String(v == null ? '' : v).trim().slice(0, 10);
+  if (s.length !== 10 || s[4] !== '-' || s[7] !== '-') return null;
+  const y = Number(s.slice(0, 4)), m = Number(s.slice(5, 7)), d = Number(s.slice(8, 10));
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return null;
+  if (y < 1900 || y > 2999 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+  // Reject a day that does not exist in that month, so 2026-02-30 cannot become a due date.
+  const back = new Date(Date.UTC(y, m - 1, d));
+  if (back.getUTCFullYear() !== y || back.getUTCMonth() + 1 !== m || back.getUTCDate() !== d) return null;
+  return s;
+}
+
+/** Whole days from `from` to `to`, both YYYY-MM-DD. Negative means `to` is in the past. */
+function daysBetween(from, to) {
+  const a = isoDay(from), b = isoDay(to);
+  if (!a || !b) return null;
+  // Built from the PARTS, never through new Date(string). new Date of a bare "2026-03-01" is the
+  // 28th of February in a US timezone, which would move every due date by a day for everybody.
+  const ta = Date.UTC(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10));
+  const tb = Date.UTC(+b.slice(0, 4), +b.slice(5, 7) - 1, +b.slice(8, 10));
+  return Math.round((tb - ta) / 86400000);
+}
+
+/** Today as YYYY-MM-DD, in UTC, so the server and every reader agree on which day it is. */
+function todayIso() { return new Date().toISOString().slice(0, 10); }
+
+/** `days` after an ISO day, as an ISO day. */
+function addDays(iso, days) {
+  const a = isoDay(iso);
+  if (!a) return null;
+  const t = Date.UTC(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10)) + days * 86400000;
+  return new Date(t).toISOString().slice(0, 10);
+}
+
+// A quote that has sat Pending this long is due a chase. Eric has not set a number; 14 days is the
+// tool's own rhythm -- a quote is emailed, the broker takes it to the employer, and a fortnight of
+// silence is the point where somebody should ring rather than wait.
+const FOLLOWUP_AFTER_DAYS = 14;
+// And a quote nobody has touched in this long is not a follow-up any more, it is a dead lead.
+// Without this bound the list is 5,977 rows: every row of a fifteen-year back catalogue is 'P',
+// because the import had no status to give it.
+const FOLLOWUP_UNTIL_DAYS = 90;
+
+/**
+ * Everything with a date on it, from every source that has one, as one list.
+ *
+ * Each row: { key, kind, title, entity, dueOn (ISO or null), days (or null), owner, note }
+ * `days` is negative for overdue. `dueOn: null` is a REAL answer -- an undated to-do -- and the
+ * screen gives it its own section rather than dropping it or inventing a date.
+ */
+async function abyDatedThings(env, opts) {
+  const today = (opts && opts.today) || todayIso();
+  const out = [];
+  const counts = { todo: 0, quote: 0, followup: 0, rfp: 0, commitment: 0 };
+  const problems = [];
+
+  // ① The to-dos. The only source somebody TYPES, and the reason this screen exists.
+  try {
+    const r = await env.DB.prepare(
+      "SELECT id, title, due_on, owner, entity_type, entity_id, entity_label, note, done_at " +
+      "FROM aby_task WHERE done_at IS NULL ORDER BY COALESCE(due_on,'9999') ASC"
+    ).all();
+    for (const t of (r.results || [])) {
+      const due = isoDay(t.due_on);
+      out.push({
+        key: 'todo:' + t.id,
+        kind: 'todo',
+        id: t.id,
+        title: String(t.title || ''),
+        entity: String(t.entity_label || ''),
+        owner: String(t.owner || ''),
+        note: String(t.note || ''),
+        dueOn: due,
+        days: due ? daysBetween(today, due) : null,
+      });
+      counts.todo++;
+    }
+  } catch (e) {
+    // A source that cannot be read is REPORTED, never silently absent. A missing source renders as
+    // a slightly shorter list, which nobody can tell from a quiet week -- the exact failure this
+    // whole screen exists to prevent.
+    problems.push({ source: 'todo', error: String((e && e.message) || e) });
+  }
+
+  // ② Quotes with a real effective date still ahead of them, still Pending. The employer's
+  // coverage is meant to start that day, so it is the date the chase has to beat.
+  try {
+    const r = await env.DB.prepare(
+      "SELECT quote_number, client_name, effective_date, broker_agency, broker_name " +
+      "FROM quotes WHERE COALESCE(status,'P') = 'P' AND effective_date LIKE '____-__-__' " +
+      "AND effective_date >= ? ORDER BY effective_date ASC"
+    ).bind(today).all();
+    for (const q of (r.results || [])) {
+      // Re-checked in JavaScript rather than trusted from SQL: the LIKE matches the SHAPE, so
+      // "2026-13-45" gets through it. isoDay is the one place that decides what a date is.
+      const due = isoDay(q.effective_date);
+      if (!due) continue;
+      out.push({
+        key: 'quote:' + q.quote_number,
+        kind: 'quote',
+        id: String(q.quote_number || ''),
+        title: 'Coverage starts on quote ' + String(q.quote_number || ''),
+        entity: String(q.client_name || ''),
+        owner: '',
+        note: String(q.broker_agency || q.broker_name || ''),
+        dueOn: due,
+        days: daysBetween(today, due),
+      });
+      counts.quote++;
+    }
+  } catch (e) {
+    problems.push({ source: 'quote', error: String((e && e.message) || e) });
+  }
+
+  // ③ Follow-ups, ROLLED UP PER BROKER rather than per quote, because the action is one phone call.
+  // Measured 2026-08-25: 130 pending quotes in the window, 51 people to ring. A per-quote list here
+  // is the wall Eric complained about on the dashboard, in a place where it is cheap to avoid.
+  try {
+    const from = addDays(today, -FOLLOWUP_UNTIL_DAYS);
+    const until = addDays(today, -FOLLOWUP_AFTER_DAYS);
+    const r = await env.DB.prepare(
+      "SELECT LOWER(COALESCE(NULLIF(broker_email,''), NULLIF(broker_agency,''), '?')) AS k, " +
+      "COUNT(*) AS n, MIN(created_at) AS oldest, " +
+      "MAX(COALESCE(NULLIF(broker_name,''), broker_agency)) AS who, " +
+      "MAX(broker_agency) AS agency " +
+      "FROM quotes WHERE COALESCE(status,'P') = 'P' AND created_at >= ? AND created_at <= ? " +
+      "GROUP BY k ORDER BY n DESC"
+    ).bind(from, until + 'T23:59:59.999Z').all();
+    for (const g of (r.results || [])) {
+      const oldest = isoDay(g.oldest);
+      const due = oldest ? addDays(oldest, FOLLOWUP_AFTER_DAYS) : null;
+      const n = Number(g.n || 0);
+      out.push({
+        key: 'followup:' + String(g.k || ''),
+        kind: 'followup',
+        id: String(g.k || ''),
+        title: n === 1 ? 'Chase 1 quote that has had no answer'
+                       : 'Chase ' + n + ' quotes that have had no answer',
+        entity: String(g.who || g.agency || g.k || ''),
+        owner: '',
+        note: oldest ? ('oldest ' + oldest) : '',
+        dueOn: due,
+        days: due ? daysBetween(today, due) : null,
+        count: n,
+      });
+      counts.followup++;
+    }
+  } catch (e) {
+    problems.push({ source: 'followup', error: String((e && e.message) || e) });
+  }
+
+  // ④ RFP deadlines. ZERO ROWS TODAY and that is expected -- the watch list is built and waiting on
+  // Niels (F-385). It is wired now rather than later because the day those rows arrive they carry
+  // HARD EXTERNAL DEADLINES, and a missed close date is an opportunity that cannot be recovered.
+  // An empty source is REPORTED as empty on the page, never quietly omitted: a chip that vanishes
+  // when its source is empty is indistinguishable from a chip that was never built.
+  try {
+    const r = await env.DB.prepare(
+      "SELECT o.id, o.entity_name, o.title, o.closes_at, o.questions_due_at, o.pre_proposal_at, " +
+      "o.pre_proposal_mandatory, COALESCE(d.disposition,'new') AS disposition " +
+      "FROM rfp_opportunity o LEFT JOIN rfp_decision d ON d.opportunity_id = o.id"
+    ).all();
+    for (const o of (r.results || [])) {
+      // A passed opportunity is not work. Everything else keeps its dates.
+      if (String(o.disposition || '') === 'pass') continue;
+      const slots = [
+        ['closes', o.closes_at, 'Proposal due'],
+        ['questions', o.questions_due_at, 'Questions due'],
+        ['preproposal', o.pre_proposal_at,
+          Number(o.pre_proposal_mandatory) === 1 ? 'Pre-proposal meeting (MANDATORY)' : 'Pre-proposal meeting'],
+      ];
+      for (const slot of slots) {
+        const due = isoDay(slot[1]);
+        if (!due) continue;
+        out.push({
+          key: 'rfp:' + o.id + ':' + slot[0],
+          kind: 'rfp',
+          id: String(o.id || ''),
+          title: slot[2] + ' -- ' + String(o.title || ''),
+          entity: String(o.entity_name || ''),
+          owner: '',
+          note: '',
+          dueOn: due,
+          days: daysBetween(today, due),
+        });
+        counts.rfp++;
+      }
+    }
+  } catch (e) {
+    problems.push({ source: 'rfp', error: String((e && e.message) || e) });
+  }
+
+  // ⑤ A signed authorization with a start date. One row today, and it is the strongest buying
+  // signal the system has, so it belongs on the screen even at one.
+  try {
+    const r = await env.DB.prepare(
+      "SELECT id, quote_number, employer_name, start_date FROM commitments"
+    ).all();
+    for (const c of (r.results || [])) {
+      const due = isoDay(c.start_date);
+      if (!due) continue;
+      out.push({
+        key: 'commitment:' + c.id,
+        kind: 'commitment',
+        id: String(c.id || ''),
+        title: 'Signed authorization starts -- quote ' + String(c.quote_number || ''),
+        entity: String(c.employer_name || ''),
+        owner: '',
+        note: '',
+        dueOn: due,
+        days: daysBetween(today, due),
+      });
+      counts.commitment++;
+    }
+  } catch (e) {
+    problems.push({ source: 'commitment', error: String((e && e.message) || e) });
+  }
+
+  // Undated last, dated by date. A stable order matters: the page re-renders on every filter click,
+  // and rows that reshuffle look like rows that changed.
+  out.sort(function (a, b) {
+    if (!a.dueOn && !b.dueOn) return a.title < b.title ? -1 : 1;
+    if (!a.dueOn) return 1;
+    if (!b.dueOn) return -1;
+    if (a.dueOn !== b.dueOn) return a.dueOn < b.dueOn ? -1 : 1;
+    return a.key < b.key ? -1 : 1;
+  });
+
+  return { today, rows: out, counts, problems };
+}
+
+async function handleAbyDated(request, env) {
+  const data = await abyDatedThings(env);
+  return jsonResp(data);
+}
+
+/**
+ * The owner vocabulary, in ONE place.
+ *
+ * '' , 'eric' and 'niels' -- the same three values assigned_rep and the pipeline filters already
+ * use. Returns null for anything else, which the callers turn into a 400. A value spelled a fourth
+ * way does not fail; it becomes a row that no filter can ever show again.
+ */
+function abyOwner(v) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (s === '' || s === 'eric' || s === 'niels') return s;
+  return null;
+}
+
+/**
+ * Add, edit, tick or delete one to-do.
+ *
+ * EVERY WRITE NAMES ITS OWN ROW. The dashboard's F-244 was a shared list stored as one JSON blob on
+ * the agency record, so saving one task rewrote the lot and two people editing at once lost each
+ * other's work. Two people share this admin; one row per to-do is what stops that repeating.
+ */
+async function handleAbyTask(request, env) {
+  let body;
+  try { body = await request.json(); }
+  catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+
+  const action = String(body.action || 'add');
+  const now = new Date().toISOString();
+
+  if (action === 'add') {
+    const title = String(body.title || '').trim();
+    if (!title) return jsonResp({ error: 'A to-do needs some words.' }, 400);
+    // A due date that is not a date is REFUSED, not stored. Storing prose in a date column is how
+    // quotes.effective_date ended up with 1,581 rows that no query can compare.
+    const dueRaw = String(body.dueOn || '').trim();
+    const due = dueRaw ? isoDay(dueRaw) : null;
+    if (dueRaw && !due) return jsonResp({ error: 'That due date is not a calendar date (YYYY-MM-DD).' }, 400);
+    const owner = abyOwner(body.owner);
+    if (owner === null) return jsonResp({ error: 'Owner must be eric, niels, or nobody.' }, 400);
+    const id = crypto.randomUUID();
+    try {
+      await env.DB.prepare(
+        "INSERT INTO aby_task (id, title, due_on, owner, entity_type, entity_id, entity_label, note, created_at, created_by, done_at) " +
+        "VALUES (?,?,?,?,?,?,?,?,?,?,NULL)"
+      ).bind(id, title, due, owner,
+             String(body.entityType || '') || null, String(body.entityId || '') || null,
+             String(body.entityLabel || ''), String(body.note || ''), now, String(body.createdBy || '')).run();
+    } catch (e) {
+      return jsonResp({ error: 'Could not save it: ' + String((e && e.message) || e) }, 500);
+    }
+    return jsonResp({ ok: true, id });
+  }
+
+  const id = String(body.id || '').trim();
+  if (!id) return jsonResp({ error: 'Which to-do?' }, 400);
+
+  if (action === 'done' || action === 'undone') {
+    try {
+      await env.DB.prepare("UPDATE aby_task SET done_at = ? WHERE id = ?")
+        .bind(action === 'done' ? now : null, id).run();
+    } catch (e) {
+      return jsonResp({ error: String((e && e.message) || e) }, 500);
+    }
+    return jsonResp({ ok: true });
+  }
+
+  if (action === 'delete') {
+    try { await env.DB.prepare("DELETE FROM aby_task WHERE id = ?").bind(id).run(); }
+    catch (e) { return jsonResp({ error: String((e && e.message) || e) }, 500); }
+    return jsonResp({ ok: true });
+  }
+
+  if (action === 'update') {
+    const sets = [], vals = [];
+    if (body.title !== undefined) {
+      const t = String(body.title || '').trim();
+      if (!t) return jsonResp({ error: 'A to-do needs some words.' }, 400);
+      sets.push('title = ?'); vals.push(t);
+    }
+    if (body.dueOn !== undefined) {
+      const raw = String(body.dueOn || '').trim();
+      const d = raw ? isoDay(raw) : null;
+      if (raw && !d) return jsonResp({ error: 'That due date is not a calendar date (YYYY-MM-DD).' }, 400);
+      sets.push('due_on = ?'); vals.push(d);
+    }
+    if (body.owner !== undefined) {
+      const o = abyOwner(body.owner);
+      if (o === null) return jsonResp({ error: 'Owner must be eric, niels, or nobody.' }, 400);
+      sets.push('owner = ?'); vals.push(o);
+    }
+    if (body.note !== undefined) { sets.push('note = ?'); vals.push(String(body.note || '')); }
+    if (!sets.length) return jsonResp({ error: 'Nothing to change.' }, 400);
+    vals.push(id);
+    try { await env.DB.prepare("UPDATE aby_task SET " + sets.join(', ') + " WHERE id = ?").bind(...vals).run(); }
+    catch (e) { return jsonResp({ error: String((e && e.message) || e) }, 500); }
+    return jsonResp({ ok: true });
+  }
+
+  return jsonResp({ error: 'Unknown action.' }, 400);
+}
+
+/**
+ * /admin/today -- the to-do list and calendar for the ABY admin (F-403).
+ *
+ * THE SHAPE IS THE BROKER DASHBOARD'S, THE CONTENT IS NOT. What travels from that build is the
+ * arrangement: one list of dated things, two lenses over it, a chip per source, a permanent add
+ * box, undated items with a home of their own, and a fold that says what is inside it. What does
+ * NOT travel is any code -- that screen is Next.js on Supabase, this is a Worker on D1.
+ *
+ * THE ONE THING TO KNOW BEFORE CHANGING ANYTHING HERE: THIS LIST IS SHARED AND IT IS NOT "MINE".
+ * The ABY admin is one shared password with no user identity, so the worker cannot tell Eric from
+ * Niels. Every label on this page says so -- "Owner", never "My to-dos" -- and the owner is a value
+ * somebody picks, not something the session knows. The dashboard shipped the other version of this
+ * once (F-244) and it took two people's work with it.
+ */
+function adminTodayHTML() {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Today &mdash; ABY admin</title>
+<style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
+${ADMIN_HEADER_CSS}
+ main{max-width:1120px;margin:22px auto;padding:0 18px}
+ .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
+ h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
+ .muted{color:#8a97a8}
+ .addrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+ .addrow input[type=text]{flex:3;min-width:230px;padding:8px 10px;border:1px solid #c8d2de;border-radius:6px;font-size:14px}
+ .addrow input[type=date]{padding:7px 9px;border:1px solid #c8d2de;border-radius:6px;font-size:14px}
+ select{padding:6px 8px;border:1px solid #c8d2de;border-radius:6px;font-size:13px}
+ button.go{background:#1a5c3a;color:#fff;border:0;font-weight:600;padding:8px 16px;border-radius:6px;cursor:pointer}
+ button.go:hover{background:#237a4c}
+
+ /* The lens and source chips. A chip that is ON is FILLED; a chip that is OFF is an outline.
+    Stated because the dashboard shipped these inverted and the selected lens read as switched off
+    -- on a control whose whole job is to say which view you are in. */
+ .chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 16px}
+ .chips .lbl{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#5b6b7f;margin-right:2px}
+ .chip{border:1px solid #c8d2de;background:#fff;color:#5b6b7f;border-radius:16px;padding:6px 14px;
+       font-size:13px;font-weight:600;cursor:pointer}
+ .chip:hover{border-color:#1a5c3a;color:#1a5c3a}
+ .chip.on{background:#1a5c3a;border-color:#1a5c3a;color:#fff}
+ .chip.on:hover{background:#237a4c;color:#fff}
+ .chip .n{opacity:.75;font-weight:600;margin-left:5px}
+ .chip.empty{opacity:.55}
+
+ .sect{margin:0 0 14px}
+ .sect h3{font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin:0 0 6px;color:#5b6b7f}
+ .sect.late h3{color:#a12622}
+ .rows{border:1px solid #dfe5ec;border-radius:10px;background:#fff;overflow:hidden}
+ .sect.late .rows{background:#fdf4f4;border-color:#f3c2c2}
+ .row{display:flex;gap:12px;align-items:flex-start;padding:10px 14px;border-bottom:1px solid #eef2f6}
+ .row:last-child{border-bottom:0}
+ .row .when{flex:0 0 84px;font-weight:700;font-size:13.5px;color:#8a5a12}
+ .row.od .when{color:#a12622}
+ .row .what{flex:1;min-width:0}
+ .row .who{flex:0 0 auto;color:#5b6b7f;font-size:13px;text-align:right;max-width:34%}
+ .row .act{flex:0 0 auto;display:flex;gap:8px;align-items:center}
+ .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11.5px;font-weight:600;margin-left:8px}
+ .t-todo{background:#e6eefb;color:#1c4587} .t-quote{background:#e8f4ec;color:#1a5c3a}
+ .t-followup{background:#fdf1e0;color:#8a5a12} .t-rfp{background:#f0e8fb;color:#4b2d80}
+ .t-commitment{background:#e8f4ec;color:#1a5c3a}
+ .own{font-size:11.5px;color:#5b6b7f}
+ a.del{color:#a12622;font-size:12.5px;text-decoration:none} a.del:hover{text-decoration:underline}
+ .tick{width:16px;height:16px;cursor:pointer;margin-top:3px}
+
+ /* A folded month names what is inside it. A fold that says only "March" is a fold that hides. */
+ .mon{border:1px solid #dfe5ec;border-radius:10px;background:#fff;margin:0 0 12px;overflow:hidden}
+ .mon > .head{display:flex;gap:10px;align-items:center;padding:10px 14px;background:#f7f9fb;
+              border-bottom:1px solid #eef2f6;cursor:pointer;user-select:none}
+ .mon > .head .nm{font-size:12px;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
+ .mon > .head .cnt{background:#e6eefb;color:#1c4587;border-radius:10px;padding:1px 8px;font-size:11.5px;font-weight:700}
+ .mon > .head .inside{color:#5b6b7f;font-size:12.5px}
+ .mon.haslate > .head{background:#fdf4f4} .mon.haslate > .head .nm{color:#a12622}
+ .mon.haslate > .head .why{color:#a12622;font-size:12px;font-weight:600}
+ .warn{background:#fdecec;color:#a12622;border:1px solid #f3c2c2;border-radius:8px;padding:10px 13px;margin:0 0 16px;font-size:13.5px}
+ .msg{display:none;margin-top:10px;padding:10px 12px;border-radius:6px;font-size:13px}
+</style></head><body>
+${abyAdminNav('/admin/today')}
+<main>
+  <div id="warn" class="warn" style="display:none"></div>
+
+  <div class="card">
+    <h2>Add a to-do</h2>
+    <p class="sub">Shared with everyone who logs into this admin, so say who it is for.
+      A to-do with no date is fine &mdash; it gets its own list rather than a made-up day.</p>
+    <div class="addrow">
+      <input type="text" id="tTitle" placeholder="e.g. Send Brown &amp; Brown the revised COBRA rates">
+      <select id="tOwner"><option value="">Nobody in particular</option><option value="eric">Eric</option><option value="niels">Niels</option></select>
+      <input type="date" id="tDue">
+      <button class="go" id="tAdd">Add</button>
+    </div>
+    <div class="msg" id="tMsg"></div>
+  </div>
+
+  <div class="chips">
+    <span class="lbl">View</span>
+    <button class="chip on" id="lensDue" data-lens="due">What&rsquo;s due</button>
+    <button class="chip" id="lensMonth" data-lens="month">By month</button>
+    <span class="lbl" style="margin-left:14px">Owner</span>
+    <select id="fOwner"><option value="">Everyone</option><option value="eric">Eric</option><option value="niels">Niels</option><option value="none">Unassigned</option></select>
+  </div>
+  <div class="chips" id="srcChips"><span class="lbl">Show</span></div>
+
+  <div id="body"><p class="muted">Loading...</p></div>
+</main>
+<script>
+ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+ function logout(){ fetch('/api/admin/logout',{method:'POST'}).then(function(){ location.href='/admin'; }); }
+
+ var MON=['January','February','March','April','May','June','July','August','September','October','November','December'];
+ var SRC=[{k:'todo',label:'To-dos'},{k:'quote',label:'Quote effective dates'},
+          {k:'followup',label:'Follow-ups'},{k:'rfp',label:'RFP deadlines'},
+          {k:'commitment',label:'Signed'}];
+ var LENS='due', OWNER='', OFF={}, DATA=null;
+ // The server's idea of today, carried on the payload so the page and the list agree about
+ // which day it is. Read as a FACT by the fold guard below.
+ var TODAY_STR='';
+
+ function msg(el,t,good){el.textContent=t;el.style.display='block';el.style.background=good?'#e8f4ec':'#fdecec';el.style.color=good?'#1a5c3a':'#a12622'}
+
+ // The visible set. Owner filters TO-DOS only: nothing else on this page has an owner, and
+ // silently dropping every derived row when somebody picks a name would look like a broken filter.
+ function visible(){
+   if(!DATA) return [];
+   return DATA.rows.filter(function(r){
+     if(OFF[r.kind]) return false;
+     if(OWNER==='') return true;
+     if(r.kind!=='todo') return true;
+     if(OWNER==='none') return !r.owner;
+     return r.owner===OWNER;
+   });
+ }
+
+ function dayLabel(iso){
+   if(!iso) return '';
+   var m=Number(iso.slice(5,7)), d=Number(iso.slice(8,10));
+   return MON[m-1].slice(0,3)+' '+d;
+ }
+ function ownerLabel(o){ return o==='eric'?'Eric':(o==='niels'?'Niels':'unassigned'); }
+
+ function rowHTML(r){
+   var od = (r.days!==null && r.days<0);
+   var h='<div class="row'+(od?' od':'')+'">';
+   h+='<div class="when">'+(r.dueOn?esc(dayLabel(r.dueOn)):'<span class="muted">no date</span>')+'</div>';
+   h+='<div class="what">'+esc(r.title)+'<span class="tag t-'+esc(r.kind)+'">'+esc(kindLabel(r.kind))+'</span>';
+   if(r.kind==='todo') h+='<div class="own">'+esc(ownerLabel(r.owner))+(r.note?' \\u00b7 '+esc(r.note):'')+'</div>';
+   else if(r.note) h+='<div class="own">'+esc(r.note)+'</div>';
+   h+='</div>';
+   h+='<div class="who">'+esc(r.entity||'')+'</div>';
+   h+='<div class="act">';
+   if(r.kind==='todo'){
+     h+='<input class="tick" type="checkbox" data-done="'+esc(r.id)+'" title="Mark it done">';
+     h+='<a href="#" class="del" data-del="'+esc(r.id)+'">Delete</a>';
+   }
+   h+='</div></div>';
+   return h;
+ }
+ function kindLabel(k){
+   for(var i=0;i<SRC.length;i++) if(SRC[i].k===k) return SRC[i].label;
+   return k;
+ }
+ function sect(title,rows,late){
+   if(!rows.length) return '';
+   return '<div class="sect'+(late?' late':'')+'"><h3>'+esc(title)+' &middot; '+rows.length+'</h3>'+
+          '<div class="rows">'+rows.map(rowHTML).join('')+'</div></div>';
+ }
+
+ // ── LENS ONE: what is due ────────────────────────────────────────────────────────────────────
+ // Overdue, this week, the next 90 days, then everything with no date at all. Anything further
+ // out is COUNTED AND NAMED rather than silently cut, so the list never stops without saying so.
+ function renderDue(rows){
+   var od=[],wk=[],soon=[],far=[],un=[];
+   rows.forEach(function(r){
+     if(r.days===null){un.push(r);return}
+     if(r.days<0) od.push(r);
+     else if(r.days<=7) wk.push(r);
+     else if(r.days<=90) soon.push(r);
+     else far.push(r);
+   });
+   var h='';
+   h+=sect('Overdue',od,true);
+   h+=sect('This week',wk);
+   h+=sect('Next 90 days',soon);
+   h+=sect('No date yet',un);
+   if(far.length) h+='<p class="muted" style="margin:4px 2px 18px">'+far.length+
+     (far.length===1?' more thing is':' more things are')+' further than 90 days out.</p>';
+   if(!od.length&&!wk.length&&!soon.length&&!un.length&&!far.length)
+     h+='<div class="card"><p class="muted" style="margin:0">Nothing is due. Add a to-do above.</p></div>';
+   return h;
+ }
+
+ // ── LENS TWO: by month ───────────────────────────────────────────────────────────────────────
+ // The grid rotates from this month. Months more than three out are FOLDED -- three months is the
+ // same 90-day horizon the other lens uses, so the two agree about what "near" means instead of
+ // each inventing one.
+ //
+ // AND A FOLDED MONTH IS FORCE-OPENED IF IT HOLDS ANYTHING LATE. On this page every one-off date
+ // that has passed is lifted into the Late block above the grid, so a folded month "cannot" hold a
+ // late row -- and that argument is exactly what the same guard on the dashboard disproved on its
+ // first run against real data, where it fired for three months. The proof costs a paragraph and
+ // can be wrong; the guard costs a clause and cannot hide anything.
+ function renderMonth(rows){
+   var late=[],un=[],byMon={};
+   rows.forEach(function(r){
+     if(r.days===null){un.push(r);return}
+     if(r.days<0){late.push(r);return}
+     var key=r.dueOn.slice(0,7);
+     (byMon[key]=byMon[key]||[]).push(r);
+   });
+   var h='';
+   if(late.length) h+='<div class="sect late"><h3>Late &middot; dates that have passed &middot; '+late.length+'</h3>'+
+                      '<div class="rows">'+late.map(rowHTML).join('')+'</div></div>';
+   var keys=Object.keys(byMon).sort();
+   keys.forEach(function(k,i){
+     var rs=byMon[k];
+     // Asks the DATE, not the arithmetic. A row whose dueOn has passed while its days is
+     // still positive -- a stale payload, a page left open overnight -- is exactly the row a
+     // fold would hide, and the only one the days test cannot see.
+     var hasLate=rs.some(function(r){
+       if(r.days!==null&&r.days<0) return true;
+       return !!(TODAY_STR&&r.dueOn&&r.dueOn<TODAY_STR);
+     });
+     var open = OPEN[k]!==undefined ? OPEN[k] : (i<3 || hasLate);
+     var nm=MON[Number(k.slice(5,7))-1]+' '+k.slice(0,4);
+     var kinds={};
+     rs.forEach(function(r){kinds[r.kind]=(kinds[r.kind]||0)+1});
+     var inside=Object.keys(kinds).map(function(x){return kinds[x]+' '+kindLabel(x).toLowerCase()}).join(' \\u00b7 ');
+     h+='<div class="mon'+(hasLate?' haslate':'')+'"><div class="head" data-mon="'+esc(k)+'">'+
+        '<span class="nm">'+esc(nm)+'</span><span class="cnt">'+rs.length+'</span>'+
+        (open?'':'<span class="inside">'+esc(inside)+'</span>')+
+        (hasLate?'<span class="why">still open from earlier</span>':'')+
+        '<span class="muted" style="margin-left:auto;font-size:12px">'+(open?'hide':'show')+'</span></div>'+
+        (open?'<div class="rows">'+rs.map(rowHTML).join('')+'</div>':'')+'</div>';
+   });
+   if(un.length) h+=sect('No date yet',un);
+   if(!keys.length&&!late.length&&!un.length)
+     h+='<div class="card"><p class="muted" style="margin:0">Nothing dated. Add a to-do above.</p></div>';
+   return h;
+ }
+ var OPEN={};
+
+ function renderChips(){
+   var el=document.getElementById('srcChips');
+   var html='<span class="lbl">Show</span>';
+   SRC.forEach(function(s){
+     var n=DATA?(DATA.counts[s.k]||0):0;
+     // An EMPTY source still shows its chip, dimmed, with a zero on it. A chip that disappears
+     // when its source is empty cannot be told apart from a chip that was never built -- and one
+     // of these sources (RFP) is genuinely empty today and will not stay that way.
+     html+='<button class="chip'+(OFF[s.k]?'':' on')+(n?'':' empty')+'" data-src="'+s.k+'">'+
+           esc(s.label)+'<span class="n">'+n+'</span></button>';
+   });
+   el.innerHTML=html;
+   Array.prototype.forEach.call(el.querySelectorAll('[data-src]'),function(b){
+     b.onclick=function(){ var k=b.getAttribute('data-src'); OFF[k]=!OFF[k]; renderChips(); render(); };
+   });
+ }
+
+ function render(){
+   var rows=visible();
+   document.getElementById('body').innerHTML = LENS==='due'?renderDue(rows):renderMonth(rows);
+   wire();
+ }
+
+ function wire(){
+   Array.prototype.forEach.call(document.querySelectorAll('[data-done]'),function(c){
+     c.onchange=function(){ task({action:'done',id:c.getAttribute('data-done')}); };
+   });
+   Array.prototype.forEach.call(document.querySelectorAll('[data-del]'),function(a){
+     a.onclick=function(e){ e.preventDefault(); task({action:'delete',id:a.getAttribute('data-del')}); };
+   });
+   Array.prototype.forEach.call(document.querySelectorAll('[data-mon]'),function(hd){
+     hd.onclick=function(){
+       var k=hd.getAttribute('data-mon');
+       var cur = OPEN[k]!==undefined ? OPEN[k] : null;
+       // First click flips whatever it currently shows, which is why the current state is read off
+       // the rendered element rather than assumed to be closed.
+       OPEN[k] = cur===null ? !hd.parentNode.querySelector('.rows') : !cur;
+       render();
+     };
+   });
+ }
+
+ async function task(payload){
+   var r=await fetch('/api/admin/task',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify(payload)});
+   var d=await r.json().catch(function(){return{}});
+   if(!r.ok){ document.getElementById('warn').style.display='block';
+              document.getElementById('warn').textContent=d.error||'That did not save.'; return; }
+   document.getElementById('warn').style.display='none';
+   load();
+ }
+
+ document.getElementById('tAdd').onclick=function(){
+   var t=document.getElementById('tTitle').value.trim();
+   if(!t){ msg(document.getElementById('tMsg'),'Type the to-do first.',false); return; }
+   fetch('/api/admin/task',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({action:'add',title:t,owner:document.getElementById('tOwner').value,
+                          dueOn:document.getElementById('tDue').value})})
+   .then(function(r){return r.json().then(function(d){return{ok:r.ok,d:d}})})
+   .then(function(x){
+     msg(document.getElementById('tMsg'), x.ok?'Added.':(x.d.error||'Could not save it.'), x.ok);
+     if(x.ok){ document.getElementById('tTitle').value=''; document.getElementById('tDue').value=''; load(); }
+   });
+ };
+ document.getElementById('lensDue').onclick=function(){ setLens('due') };
+ document.getElementById('lensMonth').onclick=function(){ setLens('month') };
+ function setLens(l){
+   LENS=l;
+   document.getElementById('lensDue').className='chip'+(l==='due'?' on':'');
+   document.getElementById('lensMonth').className='chip'+(l==='month'?' on':'');
+   // The URL carries the lens, so a link to the month view can be bookmarked and shared.
+   try{ history.replaceState(null,'', l==='month'?'/admin/today?view=calendar':'/admin/today'); }catch(e){}
+   render();
+ }
+ document.getElementById('fOwner').onchange=function(){ OWNER=this.value; render(); };
+
+ async function load(){
+   var r=await fetch('/api/admin/dated');
+   if(!r.ok){ document.getElementById('body').innerHTML='<div class="warn">Could not load the list.</div>'; return; }
+   DATA=await r.json();
+   TODAY_STR=DATA.today||'';
+   // A source that FAILED is named on screen. It would otherwise render as a shorter list, which
+   // is indistinguishable from a quiet week -- the one failure this page must not have.
+   if(DATA.problems&&DATA.problems.length){
+     var w=document.getElementById('warn');
+     w.style.display='block';
+     w.textContent='Some of this list could not be read, so it is INCOMPLETE: '+
+       DATA.problems.map(function(p){return p.source+' ('+p.error+')'}).join('; ');
+   }
+   renderChips(); render();
+ }
+ if(location.search.indexOf('view=calendar')!==-1) setLens('month');
+ load();
+</script>
+</body></html>`;
+}
+
 const ABY_ADMIN_LINKS = [
   { href: '/aby',              label: 'Run a quote',          cls: 'act',
     title: 'Run a quote as ABY, with the internal price adjustments' },
   { href: '/admin',            label: 'Quote log' },
+  // Second, and deliberately not last: it is the screen you open to find out what today holds, so
+  // burying it behind the reference pages would make it the page nobody starts on.
+  { href: '/admin/today',      label: 'Today' },
   // Sits next to the quote log because the two answer adjacent questions -- who we quoted, and
   // who we actually serve -- and the whole point of F-377 is that those are not the same list.
   { href: '/admin/clients',    label: 'Clients' },
@@ -10674,6 +11388,42 @@ const MIGRATIONS = [
     table: "agencies", column: "name_confirmed_at" },
   { sql: "ALTER TABLE agencies ADD COLUMN name_confirmed_by TEXT",
     table: "agencies", column: "name_confirmed_by" },
+
+  // -- THE ADMIN'S OWN TO-DO LIST (F-403, Eric 2026-08-25) --------------------------------------
+  //
+  // ERIC: "I want to work on adding a to do list and calendar similar to what we just did to the
+  // ABY admin area." The dashboard's version merges FIVE sources; this one is mostly a list you
+  // type into, and that is a measured decision rather than a shortcut. Counted in live D1 on
+  // 2026-08-25: rfp_opportunity had ZERO rows, commitments ONE, and of 3,190 aby_clients only 158
+  // carry an effective_date -- every one of which is flagged an ESTIMATE. There was no five-source
+  // merge available to build.
+  //
+  // WHY THERE IS AN owner COLUMN AND NO user COLUMN, WHICH IS THE ONE THING TO UNDERSTAND HERE.
+  // The ABY admin has NO USER IDENTITY: /admin is one shared ADMIN_PASSWORD and the session token
+  // is derived from that password, so the worker cannot tell Eric from Niels. A list called
+  // "my to-dos" would therefore be a lie on a shared screen -- which is the dashboard's own F-244,
+  // where one shared list was labelled My tasks and saving one rewrote the whole agency record.
+  // So the list is SHARED and the owner is TYPED IN, using the same eric / niels vocabulary that
+  // assigned_rep and the pipeline filters already use. A value spelled a third way is invisible.
+  //
+  // due_on IS NULLABLE AND NULL IS A REAL ANSWER. "Ring the Gallagher office some time" is a
+  // to-do with no date; giving it a fake one puts it in a calendar it does not belong in, and
+  // dropping it loses it. It gets its own section on the page instead.
+  //
+  // entity_label IS DENORMALISED ON PURPOSE. A to-do says what it was about at the time it was
+  // written; it must not change meaning because an agency was renamed afterwards.
+  { sql: "CREATE TABLE IF NOT EXISTS aby_task (id TEXT PRIMARY KEY, " +
+         "title TEXT NOT NULL, due_on TEXT, owner TEXT NOT NULL DEFAULT '', " +
+         "entity_type TEXT, entity_id TEXT, entity_label TEXT NOT NULL DEFAULT '', " +
+         "note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, " +
+         "created_by TEXT NOT NULL DEFAULT '', done_at TEXT)",
+    table: "aby_task", column: "title" },
+  { sql: "CREATE INDEX IF NOT EXISTS aby_task_due ON aby_task (due_on)",
+    index: "aby_task_due" },
+  // Every read of this table filters on done_at, so it is the column worth an index even though
+  // the table is small today. It will not stay small.
+  { sql: "CREATE INDEX IF NOT EXISTS aby_task_done ON aby_task (done_at)",
+    index: "aby_task_done" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column

@@ -85,3 +85,28 @@ CREATE TABLE IF NOT EXISTS commitments (
 CREATE INDEX IF NOT EXISTS commitments_submitted_at   ON commitments (submitted_at DESC);
 CREATE INDEX IF NOT EXISTS commitments_quote_number   ON commitments (quote_number);
 CREATE INDEX IF NOT EXISTS commitments_client_id      ON commitments (client_id);
+
+-- ── The admin's own to-do list (F-403, 2026-08-25) ───────────────────────────
+-- Also in worker.js MIGRATIONS, so /api/migrate creates it on an existing database.
+-- ⚠️ There is no user identity behind /admin (one shared ADMIN_PASSWORD), so `owner` is a value
+-- somebody PICKS -- '' , 'eric' or 'niels', the same vocabulary as assigned_rep. The list is
+-- shared and must never be labelled "my" anything.
+-- ⚠️ due_on is NULLABLE and NULL is a real answer: an undated to-do gets its own section on the
+-- page rather than a made-up date.
+
+CREATE TABLE IF NOT EXISTS aby_task (
+  id            TEXT PRIMARY KEY,
+  title         TEXT NOT NULL,
+  due_on        TEXT,                      -- 'YYYY-MM-DD', or NULL for no date
+  owner         TEXT NOT NULL DEFAULT '',  -- '' | 'eric' | 'niels'
+  entity_type   TEXT,                      -- 'agency' | 'broker' | 'client' | 'quote' | NULL
+  entity_id     TEXT,
+  entity_label  TEXT NOT NULL DEFAULT '',  -- denormalised: what it was about WHEN IT WAS WRITTEN
+  note          TEXT NOT NULL DEFAULT '',
+  created_at    TEXT NOT NULL,
+  created_by    TEXT NOT NULL DEFAULT '',
+  done_at       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS aby_task_due  ON aby_task (due_on);
+CREATE INDEX IF NOT EXISTS aby_task_done ON aby_task (done_at);

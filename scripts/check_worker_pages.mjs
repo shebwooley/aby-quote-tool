@@ -122,6 +122,7 @@ function scanTemplateText(name, fnSrc) {
 // emitted it -- the page was written, the checker said "this checker does not cover", and it
 // refused to pass. Second time that mechanism has paid for itself.
 const PAGES = ["adminHTML", "adminBrokersHTML", "adminRatesHTML", "adminPipelineHTML",
+               "adminTodayHTML",
                "adminReferralsHTML", "adminClientsHTML", "brokerPageHTML", "setPasswordPageHTML",
                "adminRfpHTML",
                "loginHTML",
