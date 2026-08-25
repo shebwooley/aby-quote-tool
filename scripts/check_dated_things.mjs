@@ -97,6 +97,7 @@ async function loadModule(mutate) {
     extract(page, "dayLabel", "function"),
     extract(page, "ownerLabel", "function"),
     extract(page, "kindLabel", "function"),
+    extract(page, "kindCount", "function"),
     extract(page, "rowHTML", "function"),
     extract(page, "sect", "function"),
     extract(page, "renderDue", "function"),

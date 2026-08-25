@@ -9968,7 +9968,7 @@ async function abyDatedThings(env, opts) {
           key: 'rfp:' + o.id + ':' + slot[0],
           kind: 'rfp',
           id: String(o.id || ''),
-          title: slot[2] + ' -- ' + String(o.title || ''),
+          title: slot[2] + ' — ' + String(o.title || ''),
           entity: String(o.entity_name || ''),
           owner: '',
           note: '',
@@ -9995,7 +9995,7 @@ async function abyDatedThings(env, opts) {
         key: 'commitment:' + c.id,
         kind: 'commitment',
         id: String(c.id || ''),
-        title: 'Signed authorization starts -- quote ' + String(c.quote_number || ''),
+        title: 'Signed authorization starts — quote ' + String(c.quote_number || ''),
         entity: String(c.employer_name || ''),
         owner: '',
         note: '',
@@ -10234,9 +10234,11 @@ ${abyAdminNav('/admin/today')}
  function logout(){ fetch('/api/admin/logout',{method:'POST'}).then(function(){ location.href='/admin'; }); }
 
  var MON=['January','February','March','April','May','June','July','August','September','October','November','December'];
- var SRC=[{k:'todo',label:'To-dos'},{k:'quote',label:'Quote effective dates'},
-          {k:'followup',label:'Follow-ups'},{k:'rfp',label:'RFP deadlines'},
-          {k:'commitment',label:'Signed'}];
+ var SRC=[{k:'todo',label:'To-dos',one:'to-do'},
+          {k:'quote',label:'Quote effective dates',one:'quote effective date'},
+          {k:'followup',label:'Follow-ups',one:'follow-up'},
+          {k:'rfp',label:'RFP deadlines',one:'RFP deadline'},
+          {k:'commitment',label:'Signed',one:'signed authorization'}];
  var LENS='due', OWNER='', OFF={}, DATA=null;
  // The server's idea of today, carried on the payload so the page and the list agree about
  // which day it is. Read as a FACT by the fold guard below.
@@ -10284,6 +10286,12 @@ ${abyAdminNav('/admin/today')}
  function kindLabel(k){
    for(var i=0;i<SRC.length;i++) if(SRC[i].k===k) return SRC[i].label;
    return k;
+ }
+ // What a fold says it is hiding, counted. "1 to-dos" is the kind of sentence that makes a screen
+ // look unfinished, and a folded month holding exactly one thing is the ordinary case here.
+ function kindCount(k,n){
+   for(var i=0;i<SRC.length;i++) if(SRC[i].k===k) return n+' '+(n===1?SRC[i].one:SRC[i].label.toLowerCase());
+   return n+' '+k;
  }
  function sect(title,rows,late){
    if(!rows.length) return '';
@@ -10350,7 +10358,7 @@ ${abyAdminNav('/admin/today')}
      var nm=MON[Number(k.slice(5,7))-1]+' '+k.slice(0,4);
      var kinds={};
      rs.forEach(function(r){kinds[r.kind]=(kinds[r.kind]||0)+1});
-     var inside=Object.keys(kinds).map(function(x){return kinds[x]+' '+kindLabel(x).toLowerCase()}).join(' \\u00b7 ');
+     var inside=Object.keys(kinds).map(function(x){return kindCount(x,kinds[x])}).join(' \\u00b7 ');
      h+='<div class="mon'+(hasLate?' haslate':'')+'"><div class="head" data-mon="'+esc(k)+'">'+
         '<span class="nm">'+esc(nm)+'</span><span class="cnt">'+rs.length+'</span>'+
         (open?'':'<span class="inside">'+esc(inside)+'</span>')+
