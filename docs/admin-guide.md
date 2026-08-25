@@ -114,6 +114,13 @@ sent to somebody.
 - **A quote nobody has touched for three months stops being a follow-up.** It is a dead lead, not
   work. Without that cut-off the page would list every quote back to 2008, because the old imported
   ones all count as pending.
+- 🔴 **CHECK BEFORE YOU RING, AND THE PAGE SAYS SO.** Most of the quotes behind these rows did not
+  come through the tool at all — they were loaded from the quote spreadsheet, and **on those rows
+  Pending means either *still open* or *nobody wrote down what happened*.** Nothing in the data can
+  tell the two apart. On the real book that is **122 of the 130** quotes in the window. So each row
+  says how many of its quotes came from the spreadsheet, and a line above the list gives the total.
+  ▶️ **If somebody knows those outcomes, recording them is what turns this from a caveat into a
+  clean list.**
 - ⏳ **RFP Watch has nothing in it yet**, so that chip reads zero. It is wired now rather than later
   because the day those dates arrive they are hard external deadlines, and a missed close date is an
   opportunity that cannot be recovered. **The chip stays on screen showing a zero rather than

@@ -159,10 +159,10 @@ const FIXTURE = {
     // In the follow-up window, a different broker, so the roll-up has two groups to make.
     { quote_number: "TX260720-0004-C", client_name: "Bonham", effective_date: "", status: "P",
       created_at: ts(-36), broker_agency: "Blumberg Benefits", broker_name: "Ken Blumberg",
-      broker_email: "ken@blumberg.com" },
+      broker_email: "ken@blumberg.com", source_tag: "import-2026" },
     { quote_number: "TX260722-0005-C", client_name: "Mackenzie", effective_date: "", status: "P",
       created_at: ts(-34), broker_agency: "Blumberg Benefits", broker_name: "Ken Blumberg",
-      broker_email: "ken@blumberg.com" },
+      broker_email: "ken@blumberg.com", source_tag: "import-2026" },
     // Too new to chase, and too old to still be a lead. Neither is a follow-up.
     { quote_number: "TX260824-0006-C", client_name: "Yesterday", effective_date: "", status: "P",
       created_at: ts(-1), broker_agency: "Fresh Agency", broker_name: "", broker_email: "new@fresh.com" },
@@ -210,13 +210,16 @@ function fakeDB(opts) {
             // other in a sabotage is something this stand-in can actually feel.
             const wantsNewest = /MAX\(created_at\) AS newest/.test(sql);
             const wantsOldestAsNewest = /MIN\(created_at\) AS newest/.test(sql);
+            const wantsImported = /AS imported/.test(sql);
             const groups = new Map();
             for (const q of FIXTURE.quotes) {
               if ((q.status || "P") !== "P") continue;
               if (!(q.created_at >= from)) continue;
               const k = String(q.broker_email || q.broker_agency || "?").toLowerCase();
-              const g = groups.get(k) || { k, n: 0, oldest: null, latest: null, who: null, agency: null };
+              const g = groups.get(k) || { k, n: 0, oldest: null, latest: null, imported: 0,
+                                          who: null, agency: null };
               g.n++;
+              if (/^import-/.test(String(q.source_tag || ""))) g.imported++;
               if (!g.oldest || q.created_at < g.oldest) g.oldest = q.created_at;
               if (!g.latest || q.created_at > g.latest) g.latest = q.created_at;
               g.who = q.broker_name || q.broker_agency;
@@ -226,6 +229,7 @@ function fakeDB(opts) {
             return { results: [...groups.values()].map((g) => ({
               k: g.k, n: g.n, oldest: g.oldest,
               newest: wantsOldestAsNewest ? g.oldest : (wantsNewest ? g.latest : null),
+              imported: wantsImported ? g.imported : null,
               who: g.who, agency: g.agency,
             })).sort((a, b) => b.n - a.n) };
           }
@@ -381,6 +385,20 @@ function rules(M) {
         // Ken's quotes are 36 and 34 days old. Newest plus fourteen is twenty days ago; the oldest
         // anchor would say twenty-two.
         return !!ken && ken.days === -20 && ken.note.indexOf("newest") === 0;
+      } },
+
+    { name: "a follow-up says how many of its quotes came from the spreadsheet",
+      why: "Pending on an imported row means either 'still open' or 'nobody wrote the outcome down', and 122 of the 130 in the live window are imported -- a row that hides that has somebody ringing a broker about a quote settled in June",
+      async holds() {
+        const { rows, followupSource } = await run();
+        const ken = rows.find((r) => r.kind === "followup" && r.id === "ken@blumberg.com");
+        // Jane's two in-window quotes were run through the tool, Ken's two came from the
+        // spreadsheet. A fixture where every row is the same kind cannot tell a report of the
+        // SPLIT from a report of the total.
+        const jane = rows.find((r) => r.kind === "followup" && r.id === "jane@acme.com");
+        return !!ken && ken.imported === 2 && ken.note.indexOf("quote spreadsheet") !== -1 &&
+               !!jane && jane.imported === 0 && jane.note.indexOf("spreadsheet") === -1 &&
+               !!followupSource && followupSource.imported === 2 && followupSource.total > 2;
       } },
 
     { name: "a quote older than the window is not a follow-up any more",
@@ -579,6 +597,8 @@ const SABOTAGE = [
    (s) => s.replace('"GROUP BY k ORDER BY n DESC"', '"ORDER BY n DESC"')],
   ["a broker quoted yesterday is not chased YET -- the row is future-dated, not overdue",
    (s) => s.replace("const FOLLOWUP_AFTER_DAYS = 14;", "const FOLLOWUP_AFTER_DAYS = 0;")],
+  ["a follow-up says how many of its quotes came from the spreadsheet",
+   (s) => s.replace("\"SUM(CASE WHEN COALESCE(source_tag,'') LIKE 'import-%' THEN 1 ELSE 0 END) AS imported, \" +", "")],
   ["the chase is dated off the NEWEST quote to that broker, not the oldest",
    (s) => s.replace("\"COUNT(*) AS n, MAX(created_at) AS newest, MIN(created_at) AS oldest, \" +",
                     "\"COUNT(*) AS n, MIN(created_at) AS newest, MIN(created_at) AS oldest, \" +")],

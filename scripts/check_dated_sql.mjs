@@ -137,8 +137,12 @@ for (const sql of migrations) {
 // planned against a table that does not exist -- so the fixtures below are the minimum shape that
 // lets the real statements be tested at all. They are DELIBERATELY the production shapes.
 for (const sql of [
+  // source_tag was missing here on the first run and this checker is what said so -- the follow-up
+  // query gained a column and the fresh-database shape did not hear about it. That is the exact
+  // asymmetry this file exists for: production has the column because somebody ran an ALTER once.
   "CREATE TABLE IF NOT EXISTS quotes (quote_number TEXT, client_name TEXT, effective_date TEXT, " +
-    "status TEXT, created_at TEXT, broker_agency TEXT, broker_name TEXT, broker_email TEXT)",
+    "status TEXT, created_at TEXT, broker_agency TEXT, broker_name TEXT, broker_email TEXT, " +
+    "source_tag TEXT)",
   "CREATE TABLE IF NOT EXISTS rfp_opportunity (id TEXT, entity_name TEXT, title TEXT, closes_at TEXT, " +
     "questions_due_at TEXT, pre_proposal_at TEXT, pre_proposal_mandatory INTEGER)",
   "CREATE TABLE IF NOT EXISTS rfp_decision (opportunity_id TEXT, disposition TEXT)",

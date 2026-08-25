@@ -9845,6 +9845,9 @@ async function abyDatedThings(env, opts) {
   const out = [];
   const counts = { todo: 0, quote: 0, followup: 0, rfp: 0, commitment: 0 };
   const problems = [];
+  // Reported alongside the rows so the page can say what it is looking at. See the long note above
+  // the follow-up query: on the live book 122 of the 130 pending quotes in the window are imported.
+  let importedQuotes = 0, windowQuotes = 0;
 
   // ① The to-dos. The only source somebody TYPES, and the reason this screen exists.
   try {
@@ -9916,6 +9919,7 @@ async function abyDatedThings(env, opts) {
     const r = await env.DB.prepare(
       "SELECT LOWER(COALESCE(NULLIF(broker_email,''), NULLIF(broker_agency,''), '?')) AS k, " +
       "COUNT(*) AS n, MAX(created_at) AS newest, MIN(created_at) AS oldest, " +
+      "SUM(CASE WHEN COALESCE(source_tag,'') LIKE 'import-%' THEN 1 ELSE 0 END) AS imported, " +
       "MAX(COALESCE(NULLIF(broker_name,''), broker_agency)) AS who, " +
       "MAX(broker_agency) AS agency " +
       "FROM quotes WHERE COALESCE(status,'P') = 'P' AND created_at >= ? " +
@@ -9926,6 +9930,15 @@ async function abyDatedThings(env, opts) {
       const oldest = isoDay(g.oldest);
       const due = newest ? addDays(newest, FOLLOWUP_AFTER_DAYS) : null;
       const n = Number(g.n || 0);
+      const imported = Number(g.imported || 0);
+      // Both ends, because they answer different questions: the newest is why it is due now, the
+      // oldest is how long this has been going on. And the imported count, because it is the
+      // difference between "they have not answered" and "nobody wrote down whether they did".
+      const bits = [];
+      if (newest) bits.push('newest ' + newest);
+      if (oldest && oldest !== newest) bits.push('oldest ' + oldest);
+      if (imported) bits.push(imported === n ? 'all from the quote spreadsheet'
+                                             : imported + ' from the quote spreadsheet');
       out.push({
         key: 'followup:' + String(g.k || ''),
         kind: 'followup',
@@ -9934,14 +9947,15 @@ async function abyDatedThings(env, opts) {
                        : 'Chase ' + n + ' quotes that have had no answer',
         entity: String(g.who || g.agency || g.k || ''),
         owner: '',
-        // Both ends, because they answer different questions: the newest is why it is due now, the
-        // oldest is how long this has been going on.
-        note: newest ? ('newest ' + newest + (oldest && oldest !== newest ? ', oldest ' + oldest : '')) : '',
+        note: bits.join(', '),
         dueOn: due,
         days: due ? daysBetween(today, due) : null,
         count: n,
+        imported: imported,
       });
       counts.followup++;
+      importedQuotes += imported;
+      windowQuotes += n;
     }
   } catch (e) {
     problems.push({ source: 'followup', error: String((e && e.message) || e) });
@@ -10024,7 +10038,8 @@ async function abyDatedThings(env, opts) {
     return a.key < b.key ? -1 : 1;
   });
 
-  return { today, rows: out, counts, problems };
+  return { today, rows: out, counts, problems,
+           followupSource: { imported: importedQuotes, total: windowQuotes } };
 }
 
 async function handleAbyDated(request, env) {
@@ -10232,6 +10247,7 @@ ${abyAdminNav('/admin/today')}
     <select id="fOwner"><option value="">Everyone</option><option value="eric">Eric</option><option value="niels">Niels</option><option value="none">Unassigned</option></select>
   </div>
   <div class="chips" id="srcChips"><span class="lbl">Show</span></div>
+  <p class="sub" id="fuNote" style="display:none;margin:-8px 2px 16px"></p>
 
   <div id="body"><p class="muted">Loading...</p></div>
 </main>
@@ -10379,6 +10395,19 @@ ${abyAdminNav('/admin/today')}
  }
  var OPEN={};
 
+ // WHERE THE FOLLOW-UPS COME FROM, SAID OUT LOUD. Most quotes in the window arrived from the
+ // quote spreadsheet, and Pending on one of those means either "still open" or "nobody wrote down
+ // the outcome". The screen must not present that as though it knew which.
+ function renderSourceNote(){
+   var el=document.getElementById('fuNote');
+   var f=DATA&&DATA.followupSource;
+   if(!f||!f.imported||OFF.followup){ el.style.display='none'; return; }
+   el.style.display='block';
+   el.textContent='Follow-ups: '+f.imported+' of the '+f.total+' quotes behind these rows came in '+
+     'from the quote spreadsheet rather than through the tool, where Pending can mean nobody '+
+     'recorded an outcome. Check before you ring.';
+ }
+
  function renderChips(){
    var el=document.getElementById('srcChips');
    var html='<span class="lbl">Show</span>';
@@ -10399,6 +10428,7 @@ ${abyAdminNav('/admin/today')}
  function render(){
    var rows=visible();
    document.getElementById('body').innerHTML = LENS==='due'?renderDue(rows):renderMonth(rows);
+   renderSourceNote();
    wire();
  }
 
