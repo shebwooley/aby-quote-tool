@@ -205,20 +205,29 @@ function fakeDB(opts) {
           }
           if (/FROM quotes/.test(sql) && /GROUP BY k/.test(sql)) {
             if (broken.followup) throw new Error("no such column: broker_email");
-            const [from, until] = binds;
+            const from = binds[0];
+            // MIN and MAX are honoured only if the statement asks for them, so swapping one for the
+            // other in a sabotage is something this stand-in can actually feel.
+            const wantsNewest = /MAX\(created_at\) AS newest/.test(sql);
+            const wantsOldestAsNewest = /MIN\(created_at\) AS newest/.test(sql);
             const groups = new Map();
             for (const q of FIXTURE.quotes) {
               if ((q.status || "P") !== "P") continue;
-              if (!(q.created_at >= from && q.created_at <= until)) continue;
+              if (!(q.created_at >= from)) continue;
               const k = String(q.broker_email || q.broker_agency || "?").toLowerCase();
-              const g = groups.get(k) || { k, n: 0, oldest: null, who: null, agency: null };
+              const g = groups.get(k) || { k, n: 0, oldest: null, latest: null, who: null, agency: null };
               g.n++;
               if (!g.oldest || q.created_at < g.oldest) g.oldest = q.created_at;
+              if (!g.latest || q.created_at > g.latest) g.latest = q.created_at;
               g.who = q.broker_name || q.broker_agency;
               g.agency = q.broker_agency;
               groups.set(k, g);
             }
-            return { results: [...groups.values()].sort((a, b) => b.n - a.n) };
+            return { results: [...groups.values()].map((g) => ({
+              k: g.k, n: g.n, oldest: g.oldest,
+              newest: wantsOldestAsNewest ? g.oldest : (wantsNewest ? g.latest : null),
+              who: g.who, agency: g.agency,
+            })).sort((a, b) => b.n - a.n) };
           }
           if (/FROM quotes/.test(sql)) {
             if (broken.quote) throw new Error("no such column: effective_date");
@@ -351,18 +360,27 @@ function rules(M) {
         const { rows } = await run();
         const f = rows.filter((r) => r.kind === "followup");
         const ken = f.find((r) => r.id === "ken@blumberg.com");
-        const jane = f.find((r) => r.id === "jane@acme.com");
-        // Two brokers in the window with three quotes between them: TWO rows, not three, and each
-        // carries how many it stands for. The count is the half that matters -- a roll-up that
-        // loses it is a row that hides work rather than one that summarises it.
-        return f.length === 2 && !!ken && ken.count === 2 && !!jane && jane.count === 1;
+        // Three brokers in the window; Ken stands for two quotes on his own. The COUNT is the half
+        // that matters -- a roll-up that loses it hides work rather than summarising it.
+        return f.length === 3 && !!ken && ken.count === 2;
       } },
 
-    { name: "a quote younger than the follow-up window is not a follow-up yet",
+    { name: "a broker quoted yesterday is not chased YET -- the row is future-dated, not overdue",
       why: "chasing a quote sent yesterday is noise, and noise is what makes a list stop being read",
       async holds() {
         const { rows } = await run();
-        return !rows.some((r) => r.kind === "followup" && r.id === "new@fresh.com");
+        const fresh = rows.find((r) => r.kind === "followup" && r.id === "new@fresh.com");
+        return !!fresh && fresh.days === 13;
+      } },
+
+    { name: "the chase is dated off the NEWEST quote to that broker, not the oldest",
+      why: "the oldest anchor makes the broker you are working with hardest look the most neglected -- on the live book it put 14 rows more than two months late instead of 4",
+      async holds() {
+        const { rows } = await run();
+        const ken = rows.find((r) => r.kind === "followup" && r.id === "ken@blumberg.com");
+        // Ken's quotes are 36 and 34 days old. Newest plus fourteen is twenty days ago; the oldest
+        // anchor would say twenty-two.
+        return !!ken && ken.days === -20 && ken.note.indexOf("newest") === 0;
       } },
 
     { name: "a quote older than the window is not a follow-up any more",
@@ -559,8 +577,11 @@ const SABOTAGE = [
                     "        days: due ? daysBetween(today, due) : 99999,\n      });\n      counts.todo++;")],
   ["follow-ups roll up per broker and carry the count",
    (s) => s.replace('"GROUP BY k ORDER BY n DESC"', '"ORDER BY n DESC"')],
-  ["a quote younger than the follow-up window is not a follow-up yet",
+  ["a broker quoted yesterday is not chased YET -- the row is future-dated, not overdue",
    (s) => s.replace("const FOLLOWUP_AFTER_DAYS = 14;", "const FOLLOWUP_AFTER_DAYS = 0;")],
+  ["the chase is dated off the NEWEST quote to that broker, not the oldest",
+   (s) => s.replace("\"COUNT(*) AS n, MAX(created_at) AS newest, MIN(created_at) AS oldest, \" +",
+                    "\"COUNT(*) AS n, MIN(created_at) AS newest, MIN(created_at) AS oldest, \" +")],
   ["a quote older than the window is not a follow-up any more",
    (s) => s.replace("const FOLLOWUP_UNTIL_DAYS = 90;", "const FOLLOWUP_UNTIL_DAYS = 9000;")],
   ["an overdue row has negative days",

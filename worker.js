@@ -9824,12 +9824,12 @@ function addDays(iso, days) {
   return new Date(t).toISOString().slice(0, 10);
 }
 
-// A quote that has sat Pending this long is due a chase. Eric has not set a number; 14 days is the
-// tool's own rhythm -- a quote is emailed, the broker takes it to the employer, and a fortnight of
-// silence is the point where somebody should ring rather than wait.
+// Silence this long since the LAST thing you sent a broker is worth a phone call. Eric has not set
+// a number; 14 days is the tool's own rhythm -- a quote goes out, the broker takes it to the
+// employer, and a fortnight with nothing back is the point to ring rather than wait.
 const FOLLOWUP_AFTER_DAYS = 14;
-// And a quote nobody has touched in this long is not a follow-up any more, it is a dead lead.
-// Without this bound the list is 5,977 rows: every row of a fifteen-year back catalogue is 'P',
+// And a broker nobody has quoted in this long is not a follow-up any more, they are a dead lead.
+// Without this bound the list is 5,977 quotes: every row of a fifteen-year back catalogue is 'P',
 // because the import had no status to give it.
 const FOLLOWUP_UNTIL_DAYS = 90;
 
@@ -9905,22 +9905,26 @@ async function abyDatedThings(env, opts) {
   }
 
   // ③ Follow-ups, ROLLED UP PER BROKER rather than per quote, because the action is one phone call.
-  // Measured 2026-08-25: 130 pending quotes in the window, 51 people to ring. A per-quote list here
+  // Measured 2026-08-25: 121 pending quotes in the window, 45 people to ring. A per-quote list here
   // is the wall Eric complained about on the dashboard, in a place where it is cheap to avoid.
+  //
+  // THE DUE DATE IS THE NEWEST QUOTE PLUS THE WINDOW, NOT THE OLDEST. See the note above the two
+  // constants: anchoring on the oldest makes a broker you are actively quoting look the most
+  // neglected, and puts fourteen rows more than two months late on a screen somebody has to trust.
   try {
     const from = addDays(today, -FOLLOWUP_UNTIL_DAYS);
-    const until = addDays(today, -FOLLOWUP_AFTER_DAYS);
     const r = await env.DB.prepare(
       "SELECT LOWER(COALESCE(NULLIF(broker_email,''), NULLIF(broker_agency,''), '?')) AS k, " +
-      "COUNT(*) AS n, MIN(created_at) AS oldest, " +
+      "COUNT(*) AS n, MAX(created_at) AS newest, MIN(created_at) AS oldest, " +
       "MAX(COALESCE(NULLIF(broker_name,''), broker_agency)) AS who, " +
       "MAX(broker_agency) AS agency " +
-      "FROM quotes WHERE COALESCE(status,'P') = 'P' AND created_at >= ? AND created_at <= ? " +
+      "FROM quotes WHERE COALESCE(status,'P') = 'P' AND created_at >= ? " +
       "GROUP BY k ORDER BY n DESC"
-    ).bind(from, until + 'T23:59:59.999Z').all();
+    ).bind(from).all();
     for (const g of (r.results || [])) {
+      const newest = isoDay(g.newest);
       const oldest = isoDay(g.oldest);
-      const due = oldest ? addDays(oldest, FOLLOWUP_AFTER_DAYS) : null;
+      const due = newest ? addDays(newest, FOLLOWUP_AFTER_DAYS) : null;
       const n = Number(g.n || 0);
       out.push({
         key: 'followup:' + String(g.k || ''),
@@ -9930,7 +9934,9 @@ async function abyDatedThings(env, opts) {
                        : 'Chase ' + n + ' quotes that have had no answer',
         entity: String(g.who || g.agency || g.k || ''),
         owner: '',
-        note: oldest ? ('oldest ' + oldest) : '',
+        // Both ends, because they answer different questions: the newest is why it is due now, the
+        // oldest is how long this has been going on.
+        note: newest ? ('newest ' + newest + (oldest && oldest !== newest ? ', oldest ' + oldest : '')) : '',
         dueOn: due,
         days: due ? daysBetween(today, due) : null,
         count: n,
