@@ -121,7 +121,11 @@ function scanTemplateText(name, fnSrc) {
 // 🆕 `adminClientsHTML` (F-377) was likewise caught by the scope check on the run that first
 // emitted it -- the page was written, the checker said "this checker does not cover", and it
 // refused to pass. Second time that mechanism has paid for itself.
-const PAGES = ["adminHTML", "adminBrokersHTML", "adminRatesHTML", "adminPipelineHTML",
+// ⛔ `adminPipelineHTML` WAS REMOVED FROM THIS LIST ON 2026-08-26, IN THE SAME EDIT THAT DELETED
+// THE FUNCTION (F-408). Leaving it here would have failed the scope check, which is the mechanism
+// working: this list is a claim about what the worker emits, and a page that no longer exists
+// cannot be covered.
+const PAGES = ["adminHTML", "adminBrokersHTML", "adminRatesHTML",
                "adminTodayHTML",
                "adminReferralsHTML", "adminClientsHTML", "brokerPageHTML", "setPasswordPageHTML",
                "adminRfpHTML",
@@ -220,7 +224,13 @@ function runAll(text) {
   const flat = text.replace(/\r\n/g, "\n");
   // ⚠️ ORDER MATTERS: a declaration that reads another must come after it.
   for (const decl of ["const PRODUCT_SHORT = ", "const PRODUCT_NAME_TO_ID = ", "function shortProductName(",
-                      "const ADMIN_HEADER_CSS = ", "const ABY_ADMIN_LINKS = ", "function abyAdminNav("]) {
+                      "const ADMIN_HEADER_CSS = ", "const ABY_ADMIN_LINKS = ", "function abyAdminNav(",
+                      // 🆕 2026-08-26: the quote log's "Log a quote" panel builds its product pills
+                      // and its rep dropdown from these, so they are module-scope dependencies of
+                      // adminHTML exactly like PRODUCT_SHORT. The checker caught the omission on the
+                      // first run after the panel was written -- which is the fifth time this
+                      // prelude has recorded "not defined" meaning "not in this list".
+                      "const QUOTE_REP_NAMES = ", "const QUOTE_PRODUCT_IDS = "]) {
     const at = flat.indexOf("\n" + decl);
     const isFn = decl.startsWith("function");
     // ⚠️ A const may be an OBJECT or an ARRAY, so both closers are tried and the NEARER one wins.

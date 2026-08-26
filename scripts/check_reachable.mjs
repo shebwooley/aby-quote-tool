@@ -30,6 +30,13 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
 
+// Source with its // comments removed, for rules that assert something is ABSENT.
+// A rule saying "nothing calls X any more" is answered by the code, never by the note explaining
+// why X went -- and that note is the single most likely place for the name to still appear.
+// Deliberately line comments only: block comments are rare here, and a naive block stripper would
+// eat the contents of the template literals these pages are built from.
+const codeOnly = (src) => src.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+
 // SCOPED TO ONE PAGE ON PURPOSE. Every other admin page calls load() at boot and is right to:
 // they have a single view and nothing cheaper to show first. A worker-wide grep for a bare
 // load() would redden all of them.
@@ -207,7 +214,19 @@ const RULES = [
       // own comments record twice.
       const norm = (r) => r.replace(/\.html$/, "").replace(/\/$/, "") || "/admin";
       const nav = new Set(linked.map(norm));
-      const pages = [...new Set(routes.map(norm))].filter((r) => !r.startsWith("/admin/api"));
+      // A ROUTE THAT REDIRECTS IS DELIBERATELY UNLINKED, AND THAT IS THE WHOLE POINT OF IT.
+      // Added 2026-08-26 when /admin/pipeline was retired (F-408): the page is gone, the URL
+      // survives so old bookmarks land somewhere useful, and putting it back in the nav would
+      // undo the retirement. This rule failed on a correct tree until it knew the difference --
+      // exactly the cry-wolf failure its own comment above warns about, arriving from a new angle.
+      // Detected from the route's own body rather than from a list of exceptions kept here: an
+      // exception list is a second thing to remember, and nothing would notice it going stale.
+      const redirects = new Set(
+        [...f.worker.matchAll(/path === ['"](\/admin[^'"]*)['"]\)?\s*\{([\s\S]{0,400}?)\n    \}/g)]
+          .filter((m) => /Response\.redirect/.test(m[2]))
+          .map((m) => norm(m[1])));
+      const pages = [...new Set(routes.map(norm))]
+        .filter((r) => !r.startsWith("/admin/api") && !redirects.has(r));
       const missing = pages.filter((p) => !nav.has(p));
       if (missing.length) console.log("         unlinked: " + missing.join(", "));
       return missing.length === 0;
@@ -347,9 +366,212 @@ const RULES = [
        + " achieved nothing.",
     holds: (f) => /NOT IN \('succeeded','alias'\)/.test(f.worker),
   },
+
+  // -- RETIRING THE PIPELINE PAGE (F-408, 2026-08-26) --------------------------------------
+  //
+  // WHY A REMOVAL GETS MORE RULES THAN THE FEATURE DID, and it is the counter-lesson from F-400
+  // on the dashboard side: A MERGE IS A REMOVAL, AND THE FAILURE MODE OF A REMOVAL IS SILENCE.
+  // A successor that quietly stops being emitted does not throw, does not fail a syntax check,
+  // and renders as a slightly shorter page nobody can tell from a quiet week. So each of the
+  // retired page's three jobs is asserted to still have a home.
+  {
+    name: "the retired /admin/pipeline URL still answers, as a redirect",
+    why: "Bookmarks, the admin guide and every note that named it would 404 otherwise -- the same"
+       + " rule the dashboard follows for its ?view=calendar links.",
+    holds: (f) => /path === '\/admin\/pipeline'/.test(f.worker)
+               && /\/admin\/brokers\?view=marketing&quoted=no/.test(f.worker),
+  },
+  {
+    name: "the page it redirects to honours ?view= and ?quoted=",
+    why: "A retired page that redirects to whichever view you happened to leave the target on is a"
+       + " broken link with extra steps. The destination has to obey the URL it was sent.",
+    holds: (f) => /QS\.get\('view'\) === 'marketing'/.test(f.worker)
+               && /QS\.get\('quoted'\)/.test(f.worker),
+  },
+  {
+    name: "the page really is gone, not merely unlinked",
+    why: "Half a retirement -- the function still there, the nav entry removed -- leaves a screen"
+       + " reachable by URL that nobody maintains and no checker covers.",
+    holds: (f) => !/function adminPipelineHTML\(/.test(f.worker)
+               && !/href: '\/admin\/pipeline'/.test(f.worker),
+  },
+  {
+    name: "successor 1 of 3: Log a quote is on the quote log",
+    why: "It was the one thing on Pipeline with no equivalent elsewhere. If this stops being"
+       + " emitted, the only way to record an emailed quote is gone and nothing else notices.",
+    holds: (f) => /<details class="logq" id="logq">/.test(f.worker)
+               && /id="qAdd"/.test(f.worker)
+               && /fetch\('\/api\/admin\/quote'/.test(f.worker),
+  },
+  {
+    name: "successor 2 of 3: a list of people can still be pasted in",
+    why: "Pipeline's Add prospects box died with it. The Marketing view's event import is its"
+       + " successor and writes to the right tables -- but only while it exists.",
+    holds: (f) => /id="importBox"/.test(f.worker)
+               && /fetch\('\/api\/admin\/crm\/import'/.test(f.worker),
+  },
+  {
+    name: "successor 3 of 3: never-quoted firms can still be filtered to",
+    why: "Pipeline's whole list was its prospect status. That question now lives as the Never"
+       + " quoted option, and losing it would silently lose the page's reason for existing.",
+    holds: (f) => /id="mQuoted"/.test(f.worker)
+               && /<option value="no">Never quoted<\/option>/.test(f.worker),
+  },
+  {
+    name: "the deleted endpoints have no orphaned routes",
+    why: "A route pointing at a function that no longer exists is a 500 waiting for whoever"
+       + " remembers the URL, and it throws at request time rather than at deploy time.",
+    // TWICE DEFEATED BY THE COMMENT THAT RECORDS THE DELETION, WHICH IS THE LESSON WORTH KEEPING.
+    // v1 matched the bare name and went red on the note naming what was removed. v2 matched a
+    // CALL -- and the note writes the names with parentheses, so it went red again.
+    // A NEGATIVE RULE MUST READ CODE, NOT PROSE. Tightening the pattern was chasing the phrasing;
+    // stripping the comments answers the question actually being asked. This project already has
+    // the mirror of this written down -- a comment SATISFYING the checker that parses it -- and
+    // this is the same confusion arriving from the failing side.
+    holds: (f) => {
+      const code = codeOnly(f.worker);
+      return !/handleAdminPipeline\s*\(/.test(code)
+          && !/handleAdminAddProspects\s*\(/.test(code);
+    },
+  },
+
+  // -- LOG A QUOTE: THE TWO DEFECTS ERIC REPORTED (2026-08-26) ------------------------------
+  {
+    name: "products are pills built from the catalog, not typed into a box",
+    why: "The old free-text field mapped typed words through a lookup table, and the server took"
+       + " whatever the page sent. Both ends now speak one vocabulary.",
+    holds: (f) => /const QUOTE_PRODUCT_IDS = \[/.test(f.worker)
+               && /class="pp" data-pid="/.test(f.worker)
+               && /QUOTE_PRODUCT_IDS\.indexOf\(bare\) === -1/.test(f.worker),
+  },
+  {
+    name: "every product the tool sells can be logged",
+    why: "Section 127, Lifestyle and Direct Billing had NO entry in the old lookup table, so they"
+       + " could not be logged by any spelling and the error blamed the typist. Read out of"
+       + " products.js so a new product cannot be forgotten here.",
+    holds: (f) => {
+      const m = /const QUOTE_PRODUCT_IDS = \[([\s\S]*?)\];/.exec(f.worker);
+      if (!m) return false;
+      const offered = new Set((m[1].match(/'([A-Za-z0-9]+)'/g) || []).map((x) => x.slice(1, -1)));
+      // READ OUT OF products.js, NEVER RESTATED HERE. A hardcoded expected list is a second copy
+      // of the catalog, and the two would disagree the first time a product is added.
+      const sold = (f.products.match(/^    id: '([A-Za-z0-9]+)',$/gm) || [])
+        .map((x) => /'([A-Za-z0-9]+)'/.exec(x)[1]);
+      if (!sold.length) return false;   // a fixture that finds nothing is a FAILURE, not a pass
+      return sold.every((id) => offered.has(id));
+    },
+  },
+  {
+    name: "a hand-logged quote stores the rep's DISPLAY NAME, not the dropdown's id",
+    why: "Eric, 2026-08-26: it 'assigned me but didn't capitalize my name'. The log's rep filter is"
+       + " keyed on the full name, so 'eric' and 'Eric Johnson' become two people in that dropdown"
+       + " and picking either hides the other's quotes.",
+    holds: (f) => /const QUOTE_REP_NAMES = \{/.test(f.worker)
+               && /const rep = repId \? QUOTE_REP_NAMES\[repId\] : '';/.test(f.worker),
+  },
+  {
+    name: "the rep names match the ones the quote tool itself writes",
+    why: "Two copies of one list -- worker.js and assets/js/data/reps.js -- and nothing enforced"
+       + " that they agree. One fix applied to one copy of a pattern is not applied to the pattern.",
+    holds: (f) => {
+      const m = /const QUOTE_REP_NAMES = \{([\s\S]*?)\};/.exec(f.worker);
+      if (!m) return false;
+      const mine = (m[1].match(/'([^']+)'/g) || []).map((x) => x.slice(1, -1)).sort();
+      const theirs = (f.reps.match(/name: '([^']+)'/g) || [])
+        .map((x) => /'([^']+)'/.exec(x)[1]).sort();
+      if (!theirs.length) return false;  // could not read the tool's list: unchecked, not fine
+      return mine.length === theirs.length && mine.every((n, i) => n === theirs[i]);
+    },
+  },
+  {
+    name: "the agency list has an A-Z bar, and a chosen letter is not capped",
+    why: "Eric, 2026-08-26: 'with so many letters, it takes a long time to scroll.' The list is"
+       + " capped at 150 rows, so a letter bar that did not lift the cap would answer 'take me to"
+       + " S' with the first 150 firms -- the scrolling problem again, with a click in front of it.",
+    holds: (f) => /id="azbar"/.test(f.worker)
+               && /function renderAZ\(\)/.test(f.worker)
+               && /var shown = \(MKT_ALL \|\| mktLetter\) \? tops : tops\.slice\(0, MKT_CAP\);/.test(f.worker),
+  },
+  {
+    name: "a letter-filtered list says which letter is filtering it",
+    why: "A list showing 42 of 665 firms with nothing on screen explaining why is how somebody"
+       + " concludes four hundred agencies have gone missing. Same rule as every other filter here.",
+    holds: (f) => /mktLetter \? ' \\u2014 ' \+ \(mktLetter === '#'/.test(f.worker),
+  },
+  {
+    name: "a hand-logged quote can carry an effective date",
+    why: "/admin/today builds its deadline rows from effective_date. The old form never asked for"
+       + " one, so a quote logged specifically so somebody would circle back could not appear on"
+       + " the page whose whole job is reminding you to circle back.",
+    holds: (f) => /id="qEffective"/.test(f.worker)
+               && /effectiveDate: document\.getElementById\('qEffective'\)\.value/.test(f.worker),
+  },
 ];
 
 const SABOTAGES = [
+  // -- F-408: the pipeline retirement. Each sabotage is a way the merge could silently lose a job.
+  {
+    // Every rule in the block above has one of these. Written last because it was MISSING: nine
+    // sabotages covered nine rules and "the page really is gone" had none, which would have made
+    // it a claim nobody had ever seen fail. TRAPS #332 -- run it, then write it.
+    why: "the retired page function is put back, so a screen nobody maintains is live again",
+    apply: (f) => ({ ...f, worker: f.worker + "\nfunction adminPipelineHTML() { return ''; }\n" }),
+  },
+  {
+    why: "the retired /admin/pipeline URL stops redirecting, so every old link 404s",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/view=marketing&quoted=no/g, "view=nowhere") }),
+  },
+  {
+    why: "the destination stops honouring ?view=, so the redirect lands on the wrong tab",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/QS\.get\('view'\)/g, "QS.get('ignored')") }),
+  },
+  {
+    why: "Log a quote stops being emitted on the quote log -- the job with no other home",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/<details class="logq" id="logq">/g,
+                                                   '<details class="gone" id="gone">') }),
+  },
+  {
+    why: "the event import disappears, so a list of people can no longer be pasted in anywhere",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/id="importBox"/g, 'id="wasImportBox"') }),
+  },
+  {
+    why: "the Never quoted filter goes, taking the retired page's whole question with it",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/<option value="no">Never quoted<\/option>/g,
+                                                   '<option value="no">Some other thing</option>') }),
+  },
+  {
+    why: "a route is left pointing at a handler that was deleted",
+    apply: (f) => ({ ...f, worker: f.worker + "\nhandleAdminPipeline(request, env);\n" }),
+  },
+  {
+    why: "a product the tool sells is dropped from the pill list, so it cannot be logged at all",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/'directBilling',\n/g, "") }),
+  },
+  {
+    why: "the rep goes back to being stored as the dropdown's lowercase id",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/const rep = repId \? QUOTE_REP_NAMES\[repId\] : '';/g,
+                                                   "const rep = repId;") }),
+  },
+  {
+    why: "worker.js and reps.js disagree about a rep's name",
+    apply: (f) => ({ ...f, reps: f.reps.replace(/name: 'Eric Johnson'/g, "name: 'Eric R Johnson'") }),
+  },
+  {
+    why: "the A-Z bar stops lifting the row cap, so a letter shows the first 150 firms again",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /var shown = \(MKT_ALL \|\| mktLetter\) \? tops : tops\.slice\(0, MKT_CAP\);/g,
+      "var shown = MKT_ALL ? tops : tops.slice(0, MKT_CAP);") }),
+  },
+  {
+    why: "the count stops naming the active letter, so a short list looks like lost data",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /mktLetter \? ' \\u2014 ' \+ \(mktLetter === '#'/g, "false ? '' + (mktLetter === '#'") }),
+  },
+  {
+    why: "the effective date is dropped from the log-a-quote form, hiding the row from Today",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/id="qEffective"/g, 'id="qWhatever"') }),
+  },
+
   {
     why: "the tidy-up screen loses its caller, so the finder is unreachable again",
     apply: (f) => ({ ...f, worker: f.worker.replace(/function loadDupes\(/g, "function unusedDupes(") }),
@@ -433,6 +655,11 @@ function load() {
     app: read("assets/js/app.js"),
     hook: read("save-hook.js"),
     worker: read("worker.js"),
+    // ADDED 2026-08-26. Two rules compare worker.js against the tool's OWN data files rather than
+    // against a list restated in here -- a restated list is a third copy and rots faster than
+    // either of the two it is meant to police.
+    products: read("assets/js/data/products.js"),
+    reps: read("assets/js/data/reps.js"),
   };
 }
 

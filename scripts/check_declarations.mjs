@@ -44,6 +44,35 @@ function names(src) {
   return out;
 }
 
+// ── DELIBERATE RETIREMENTS ────────────────────────────────────────────────────────────────────
+//
+// This guard was written for a name that vanished by ACCIDENT -- cut out along with the function
+// above it -- and it had no way to say yes to a name removed on purpose. So until 2026-08-26 a
+// page could not be retired from this repo at all without bypassing the pre-commit hook, and
+// "just use --no-verify" is how a guard stops being a guard.
+//
+// ⛔ A NAME GOES HERE ONLY WITH A DATE AND A REASON, and only once its callers are gone -- which
+// is a separate rule, enforced separately: check_reachable.mjs asserts that nothing CALLS these.
+// Two independent checks, because "I meant to delete it" and "nothing refers to it" are different
+// claims and this file can only ever answer the first.
+//
+// ⚠️ Entries stay after the commit lands. They cost nothing -- the name is gone from HEAD too, so
+// the comparison never sees it again -- and they are the record of what was retired and why.
+const RETIRED = {
+  // F-408, 2026-08-26. Eric: "Yes I think we should kill the pipeline page." All three of its
+  // jobs moved: Log a quote to the quote log, Add prospects to the Marketing view's event import,
+  // Everyone we track to that view's Never quoted filter. /admin/pipeline redirects rather than
+  // 404s. The two endpoints went with it -- handleAdminAddProspects wrote into `brokers`, which
+  // holds 6 rows on production and all 6 are leftover checker fixtures.
+  "worker.js": [
+    "adminPipelineHTML",
+    "handleAdminPipeline",
+    "handleAdminAddProspects",
+    "pipelineStatusSql",
+    "PIPELINE_WINDOW_DAYS",
+  ],
+};
+
 function committed(file) {
   try {
     return execFileSync("git", ["show", `HEAD:${file}`], { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -59,7 +88,15 @@ function check(fileList) {
     const was = committed(f);
     if (was === null) { console.log(`  skip ${f} (not committed yet)`); continue; }
     const before = names(was), after = names(now);
-    const gone = [...before].filter((n) => !after.has(n));
+    const retired = new Set(RETIRED[f] || []);
+    const allGone = [...before].filter((n) => !after.has(n));
+    const gone = allGone.filter((n) => !retired.has(n));
+    const onPurpose = allGone.filter((n) => retired.has(n));
+    // NAMED, NOT SILENT. A removal waved through without a word on screen is indistinguishable
+    // from one nobody noticed, which is the whole failure this file exists for.
+    if (onPurpose.length) {
+      console.log(`  retired ${f}: ${onPurpose.join(", ")}  (listed as deliberate -- see RETIRED)`);
+    }
     if (gone.length) {
       console.log(`  LOST ${f}: ${gone.join(", ")}`);
       console.log("        A top-level declaration is in the last commit and not in the file now.");

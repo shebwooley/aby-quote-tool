@@ -71,6 +71,19 @@ agencies.
 - ⏳ **A quote that simply got no answer is not the same as one that was lost**, and the tool cannot
   yet tell them apart.
 
+#### Logging a quote that never went through the tool
+
+**Sometimes an agent asks for rates and we just reply by email.** *Log a quote* — the folding panel
+at the top of this page — records one, so the opportunity is tracked and you know to circle back.
+
+- **Products are picked from buttons, not typed.** Click the ones the quote covered. Every product
+  ABY sells is there, in the order they are actually quoted, so nothing can be misspelled or missed.
+- **Set the effective date if you know it.** That is what puts the quote on **Today** as something
+  with a deadline. Without it the row still exists but nothing will ever remind you about it.
+- **The quote number carries an `M`** — `TX260826-M453-C` — so a hand-logged row is obvious in a
+  list without opening anything. That is deliberate: *"how much is the quoting tool being used?"*
+  must never be answered with a number inflated by rows somebody typed.
+
 ### Today
 
 **What is due, across everything the tool knows about, on one page.** Built 2026-08-25, after the
@@ -168,12 +181,23 @@ quotes, sales, clients, how many are still with us, and who at ABY owns the rela
 them.** It is the second button at the top of Brokers & Agencies, and the page remembers which
 one you left it on. **Full description under *The CRM* below.**
 
-### Pipeline / prospects
+### ~~Pipeline / prospects~~ — retired 2026-08-26
 
-Agents and agencies ABY wants to work with **who have never quoted**. They cannot appear on Brokers &
-Agencies, which is built from the quote log.
+**This page is gone. Nothing it did was lost.** Its three jobs moved to where each belonged:
 
-- ⚠️ **The page is empty because no list has ever been pasted into it**, not because it is broken.
+| It used to | Now |
+|---|---|
+| **Log a quote** | on the **Quote log**, beside the other 6,170 quotes |
+| **Add prospects** | *Add a list from an event*, on **Brokers & Agencies → Marketing** |
+| **Everyone we track** | the **Never quoted** filter on that same Marketing view |
+
+⚠️ **The old address still works** — `/admin/pipeline` sends you to the Marketing view already
+filtered to firms that have never quoted, so old links and bookmarks do not break.
+
+⭐ **Why the paste box was not simply moved:** the Marketing one is better. It takes a person with
+**no email address** (name and firm are enough), it **adopts** an address that arrives later onto
+the person already on file rather than making a second copy, it tags a whole list at once, and it
+recognizes anybody already known instead of duplicating them. The old box demanded an email.
 
 ### Referrals
 

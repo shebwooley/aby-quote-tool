@@ -61,8 +61,6 @@ export default {
     if (path === '/api/admin/brokers' && method === 'GET')  return withAuth(request, env, () => handleAdminBrokers(request, env));
     if (path === '/api/admin/assign'  && method === 'POST') return withAuth(request, env, () => handleAdminAssign(request, env));
     if (path === '/api/admin/stats'   && method === 'GET')  return withAuth(request, env, () => handleAdminStats(request, env));
-    if (path === '/api/admin/pipeline' && method === 'GET')  return withAuth(request, env, () => handleAdminPipeline(request, env));
-    if (path === '/api/admin/prospects' && method === 'POST') return withAuth(request, env, () => handleAdminAddProspects(request, env));
     // The CRM (F-383). Every one is behind withAuth: these are ABY's own notes about who they
     // are courting, and nothing here is broker-facing.
     if (path === '/api/admin/rfp'          && method === 'GET')  return withAuth(request, env, () => handleRfpList(request, env));
@@ -183,9 +181,14 @@ export default {
       return withAuth(request, env, () => new Response(adminTodayHTML(), {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
     }
+    // 🔴 RETIRED 2026-08-26 (F-408). The page is gone; the URL is NOT, because bookmarks, the
+    // admin guide and every note that ever named it would otherwise 404. It lands on the view that
+    // replaced it, already filtered to the never-quoted firms it used to list.
+    // ⛔ 302, not 301: a permanent redirect is cached by the browser forever and cannot be taken
+    // back if this lands somewhere better later.
     if (path === '/admin/pipeline') {
-      return withAuth(request, env, () => new Response(adminPipelineHTML(), {
-        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
+      return withAuth(request, env, () => Response.redirect(
+        new URL('/admin/brokers?view=marketing&quoted=no', request.url).toString(), 302));
     }
     if (path === '/admin/brokers') {
       return withAuth(request, env, () => new Response(adminBrokersHTML(), {
@@ -1574,6 +1577,54 @@ async function handleQuoteNote(request, id, env) {
  * ⚠️ VALUE IS OPTIONAL AND STAYS NULL WHEN UNKNOWN. Eric was clear that a minimum-billing figure
  * would be worse than a blank, because a floor stops looking like a guess the moment it is stored.
  */
+
+/**
+ * 🔴 THE REP STORED ON A QUOTE IS A DISPLAY NAME, NEVER AN ID.
+ *
+ * ERIC, 2026-08-26: "I selected my name from the drop-down and it assigned me but didn't
+ * capitalize my name." The form posted the id -- eric -- and it went into rep_name verbatim,
+ * while every quote run through the tool stores "Eric Johnson". The log's Rep column prints the
+ * FIRST WORD of rep_name, so his manually logged row read "eric" beside nine reading "Eric".
+ *
+ * ⛔ THIS IS NOT COSMETIC: the log's rep filter builds its options FROM rep_name, keyed on the
+ * full string. Two spellings of one person are two entries in that dropdown, and picking either
+ * hides the other person's quotes. Measured on production before the fix: 1 row said "eric",
+ * 9 said "Eric Johnson".
+ *
+ * ⚠️ THE NAMES HAVE TO MATCH assets/js/data/reps.js EXACTLY, because that file is what the quote
+ * tool writes. They are two copies of one list and nothing enforced that, so check_reachable.mjs
+ * now asserts they agree -- one fix applied to one copy of a pattern is not applied to the
+ * pattern (TRAPS #197).
+ *
+ * ⛔ DELIBERATELY THE PUBLIC TWO ONLY. The seven ABY staff on the internal overlay are account
+ * managers who FIELD requests; the rep named on a quote is who it came from. If that turns out
+ * to be wrong it is Eric's call, not a tidy-up.
+ */
+const QUOTE_REP_NAMES = {
+  eric:  'Eric Johnson',
+  niels: 'Niels Christiansen',
+};
+
+/**
+ * The products a hand-logged quote may carry, ORDERED BY HOW OFTEN EACH IS ACTUALLY QUOTED.
+ *
+ * 📊 Measured on production 2026-08-26 across all 6,170 quotes: COBRA 3,145 - FSA 1,693 -
+ * ERISA 1,369 - POP 883 - HSA 830 - HRA 829 - ACA 403 - State Continuation 67 - QTB 63 -
+ * Medicare HRA 23 - ICHRA 19 - LSB 15. Section 127 and Direct Billing have never been quoted,
+ * so they sit last rather than being left out -- never quoted is not the same as not sold.
+ * ⭐ Alphabetical or catalog order would put the two nobody picks above the one everybody does.
+ *
+ * ⛔ THE THREE LEGACY IDS IN PRODUCT_SHORT ARE NOT HERE ON PURPOSE. form5500, ndt and hipaa are
+ * not in products.js -- the tool no longer sells them -- so offering them would let somebody log
+ * a quote for something ABY cannot fulfil. They stay in PRODUCT_SHORT because 77 imported rows
+ * still have to render.
+ */
+const QUOTE_PRODUCT_IDS = [
+  'cobra', 'fsa', 'erisa', 'pop', 'hsa', 'hra', 'aca',
+  'stateContinuation', 'ichra', 'section132', 'mpra', 'lifestyle',
+  'section127', 'directBilling',
+];
+
 async function handleAdminAddQuote(request, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
   const employer = String(body.employer || '').trim().slice(0, 160);
@@ -1581,13 +1632,38 @@ async function handleAdminAddQuote(request, env) {
 
   const agency = String(body.agency || '').trim().slice(0, 160);
   const when = String(body.quotedOn || '').trim() || new Date().toISOString().slice(0, 10);
-  const rep = String(body.rep || '').trim().toLowerCase();
+  // ⛔ AN UNKNOWN REP IS REFUSED, NEVER STORED AND NEVER SILENTLY BLANKED. Storing the raw string
+  // is what produced the lowercase "eric"; blanking it would lose the one fact the person typing
+  // actually knew. Same shape as the unrecognised-product refusal on this form.
+  const repId = String(body.rep || '').trim().toLowerCase();
+  if (repId && !Object.prototype.hasOwnProperty.call(QUOTE_REP_NAMES, repId)) {
+    return jsonResp({ error: 'Unknown rep.' }, 400);
+  }
+  const rep = repId ? QUOTE_REP_NAMES[repId] : '';
   const status = ['P', 'I', 'S', 'D', 'N'].includes(String(body.status || 'P')) ? String(body.status || 'P') : 'P';
 
   // Product ids arrive as the tool's own vocabulary, so a manual row filters and reports exactly
   // like a generated one.
-  const ids = Array.isArray(body.products) ? body.products.slice(0, 20) : [];
-  const products = JSON.stringify(ids.map((id) => ({ id: String(id), name: String(id).replace(/^product-/, ''), inputs: {} })));
+  // 🔴 THE SERVER VALIDATES THEM, because the browser is no longer the only caller that could
+  // send one. Before the pills shipped, the page mapped typed words through a table and rejected
+  // what it did not recognise -- so the ONLY guard against a bad product id lived in the page.
+  // A checker that only reads the form would have agreed with itself perfectly.
+  const rawIds = Array.isArray(body.products) ? body.products.slice(0, 20) : [];
+  const ids = [], badIds = [];
+  rawIds.forEach((raw) => {
+    const bare = String(raw).replace(/^product-/, '');
+    if (QUOTE_PRODUCT_IDS.indexOf(bare) === -1) badIds.push(String(raw));
+    else if (ids.indexOf(bare) === -1) ids.push(bare);
+  });
+  if (badIds.length) return jsonResp({ error: 'Not a product we sell: ' + badIds.join(', ') }, 400);
+  // ⚠️ `name` carries the SHORT LABEL the quote log renders, not the bare id. It used to store the
+  // id, so anything reading the name rather than looking the id up printed "cobra" in a column of
+  // "COBRA". The id is still the identity; the name is display, and both are now right.
+  const products = JSON.stringify(ids.map((id) => ({
+    id: 'product-' + id,
+    name: (PRODUCT_SHORT[id] && PRODUCT_SHORT[id].def) || id,
+    inputs: {},
+  })));
 
   const value = Number(body.firstYearValue);
   const heads = Number(body.employeeCount);
@@ -1622,118 +1698,21 @@ async function handleAdminAddQuote(request, env) {
   return jsonResp({ ok: true, quoteNumber });
 }
 
-// ─── The sales pipeline (Eric, 2026-08-18) ─────────────────────────────────────
-
-/**
- * The four statuses, as SQL over the quote history.
- *
- * ⭐⭐ ERIC SET THE LINE AT A YEAR, and his reasoning is worth keeping because it is what makes a
- * long window correct: "since we'll reach out more to the quoting or producing ones, if they truly
- * go a year without quoting anything, they likely are really dormant."
- *
- * ⚠️ `Producing` is keyed on a SOLD quote, not on quoting volume. Somebody can quote constantly and
- * place nothing; that is a different conversation from somebody writing business, and collapsing
- * them would hide exactly the account worth a phone call.
- */
-const PIPELINE_WINDOW_DAYS = 365;
-
-function pipelineStatusSql(emailExpr) {
-  const recent = `datetime('now','-${PIPELINE_WINDOW_DAYS} days')`;
-  return (
-    "CASE " +
-    `WHEN EXISTS (SELECT 1 FROM quotes q WHERE lower(trim(q.broker_email)) = ${emailExpr} AND q.status = 'S' AND q.created_at >= ${recent}) THEN 'producing' ` +
-    `WHEN EXISTS (SELECT 1 FROM quotes q WHERE lower(trim(q.broker_email)) = ${emailExpr} AND q.created_at >= ${recent}) THEN 'quoting' ` +
-    `WHEN EXISTS (SELECT 1 FROM quotes q WHERE lower(trim(q.broker_email)) = ${emailExpr}) THEN 'dormant' ` +
-    "ELSE 'prospect' END"
-  );
-}
-
-/** Everyone ABY tracks: accounts and prospects alike, with status derived and priority as stored. */
-async function handleAdminPipeline(request, env) {
-  const u = new URL(request.url).searchParams;
-  const rep = (u.get('rep') || '').trim().toLowerCase();
-  const status = (u.get('status') || '').trim().toLowerCase();
-  const priority = (u.get('priority') || '').trim().toUpperCase();
-
-  const st = pipelineStatusSql("lower(trim(b.email))");
-  const where = [], args = [];
-  if (rep) { where.push("lower(COALESCE(b.assigned_rep, a.assigned_rep, '')) = ?"); args.push(rep); }
-  if (priority) { where.push("COALESCE(b.priority, a.priority, '') = ?"); args.push(priority); }
-
-  const sql =
-    "SELECT b.id, b.email, b.name, b.phone, b.priority, b.notes, b.assigned_rep, " +
-    "       CASE WHEN b.password_hash = '' THEN 0 ELSE 1 END AS has_account, " +
-    "       a.id AS agency_id, COALESCE(a.name, b.agency) AS agency_name, " +
-    "       a.priority AS agency_priority, a.assigned_rep AS agency_rep, " +
-    `       ${st} AS status, ` +
-    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '') AS quote_count, " +
-    "       (SELECT MAX(q.created_at) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '') AS last_quote " +
-    "FROM brokers b LEFT JOIN agencies a ON a.id = b.agency_id " +
-    (where.length ? ('WHERE ' + where.join(' AND ') + ' ') : '') +
-    "ORDER BY b.name LIMIT 1000";
-  try {
-    const r = await env.DB.prepare(sql).bind(...args).all();
-    let rows = r.results || [];
-    // ⚠️ Filtered in JS, not SQL, because `status` is a derived alias and SQLite will not let a
-    // WHERE clause reference it. Filtering on the whole expression again would mean writing it
-    // twice, and two copies of a rule is how they stop agreeing.
-    if (status) rows = rows.filter((x) => x.status === status);
-
-    // How much friction is between this person and their next quote? ABY's own account is already
-    // on the row; this adds the BenefitLab half. `null` means we could not ask, and the screen says
-    // so rather than guessing "no".
-    const bl = await benefitlabAccounts(env, rows.map((x) => String(x.email || '').toLowerCase()));
-    for (const r of rows) {
-      r.benefitlab = bl ? !!bl[String(r.email || '').toLowerCase()] : null;
-    }
-    return jsonResp({ people: rows, windowDays: PIPELINE_WINDOW_DAYS, benefitlabChecked: bl !== null });
-  } catch (err) {
-    return jsonResp({ people: [], error: String(err && err.message || err) });
-  }
-}
-
-/** Add prospects: agency name, agent name, email. Pasted or typed, same shape as an invite list. */
-async function handleAdminAddProspects(request, env) {
-  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
-  const rows = Array.isArray(body.people) ? body.people.slice(0, 500) : [];
-  if (!rows.length) return jsonResp({ error: 'Nothing to add.' }, 400);
-  const rep = String(body.rep || '').trim().toLowerCase();
-  const priority = String(body.priority || '').trim().toUpperCase();
-  const added = [], skipped = [], failed = [];
-
-  for (const person of rows) {
-    const email = String(person.email || '').trim().toLowerCase();
-    const name = String(person.name || '').trim().slice(0, 120);
-    const agencyName = String(person.agency || '').trim().slice(0, 120);
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { failed.push({ email: email || '(blank)', why: 'not a valid email' }); continue; }
-
-    const existing = await env.DB.prepare('SELECT id FROM brokers WHERE lower(trim(email)) = ?').bind(email).first();
-    // ⛔ NEVER TOUCH AN EXISTING ROW. They may already have an account, quotes, and a rating; a
-    // re-pasted list must not quietly rewrite any of it.
-    if (existing) { skipped.push({ email, why: 'already on the list' }); continue; }
-
-    // Reuse an agency of the same name if there is one, so pasting ten agents from one agency does
-    // not create ten agencies. Matched case-insensitively on the typed name, which is all there is.
-    let agencyId = null;
-    if (agencyName) {
-      const a = await env.DB.prepare('SELECT id FROM agencies WHERE lower(trim(name)) = ?').bind(agencyName.toLowerCase()).first();
-      if (a) agencyId = a.id;
-      else {
-        agencyId = crypto.randomUUID();
-        await env.DB.prepare('INSERT INTO agencies (id, name, share_quotes, created_at, assigned_rep, priority) VALUES (?,?,?,?,?,?)')
-          .bind(agencyId, agencyName, 0, new Date().toISOString(), rep || null, priority || null).run();
-      }
-    }
-    // password_hash '' == no account. This person is on ABY's list, not in the tool.
-    await env.DB.prepare(
-      'INSERT INTO brokers (id, email, password_hash, name, agency, phone, agency_id, role, created_at, assigned_rep, priority) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
-    ).bind(crypto.randomUUID(), email, '', name, agencyName, String(person.phone || '').slice(0, 40),
-           agencyId, 'member', new Date().toISOString(), rep || null, priority || null).run();
-    added.push({ email });
-  }
-  return jsonResp({ ok: true, added, skipped, failed });
-}
-
+// 🔴 THE PIPELINE API WENT WITH THE PIPELINE PAGE, 2026-08-26 (F-408).
+//
+// Deleted here: PIPELINE_WINDOW_DAYS, pipelineStatusSql() and handleAdminPipeline() -- the
+// "Everyone we track" list -- plus handleAdminAddProspects(), the "Add prospects" paste box.
+// ⛔ THEY HAD EXACTLY ONE CALLER EACH AND IT WAS THAT PAGE. Leaving a write endpoint alive with
+// no door is how a half-retired feature comes back later as a mystery.
+//
+// ⚠️ handleAdminAddProspects WROTE INTO `brokers`, AND THAT IS THE REAL REASON IT IS GONE rather
+// than rehomed. Measured on production 2026-08-26: `brokers` holds SIX rows, all six of them
+// leftover checker fixtures (zz-test-*@example.invalid, "ZZ Test Agency"), and NOT ONE of the
+// 6,170 quotes joins to it. The channel register is `people` + `agencies`, which is what the
+// Marketing view import writes to. A second door onto the wrong table would have entrenched the
+// model the contact register was built to replace.
+// 📄 The Referrals page still reads `brokers` and is filed separately -- that is a design
+// question, not a cleanup.
 
 // ── THE CRM: notes and tags on an agency or an agent (F-383) ───────────────────────────────────
 //
@@ -4241,286 +4220,50 @@ async function handleAdminRate(request, env) {
   return jsonResp({ ok: true });
 }
 
-// The sales pipeline screen (Eric, 2026-08-18). Brokers and agencies ABY sells TO -- not
-// employers, and deliberately sales-only: no service history, or it becomes a second place where
-// client information lives.
-function adminPipelineHTML() {
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Pipeline — ABY admin</title>
-<style> *{box-sizing:border-box} body{margin:0;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}
-${ADMIN_HEADER_CSS}
- main{max-width:1240px;margin:22px auto;padding:0 18px}
- .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
- h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
- table{width:100%;border-collapse:collapse;font-size:14px}
- th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
- /* Sortable headers. The arrow sits in the label rather than a fixed slot because this table's
-    headers are short and a reserved gap on nine of them reads as a rendering fault. */
- th.srt{cursor:pointer;user-select:none}
- th.srt:hover{color:#1a5c3a;background:#eef2f7}
- td{padding:7px 6px;border-bottom:1px solid #eef2f6} .muted{color:#8a97a8}
- .n{text-align:right;font-variant-numeric:tabular-nums}
- .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
- .filters button{border:1px solid #c8d2de;border-radius:6px;padding:7px 13px;cursor:pointer;font-size:14px}
- select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
-
- .pill{display:inline-block;padding:2px 9px;border-radius:11px;font-size:12px;font-weight:600}
- .producing{background:#e8f4ec;color:#1a5c3a} .quoting{background:#e6eefb;color:#1c4587}
- .dormant{background:#fdf1e0;color:#8a5a12} .prospect{background:#eef1f5;color:#5b6b7f}
- textarea{width:100%;padding:9px 11px;border:1px solid #c8d2de;border-radius:6px;font:14px monospace}
- .note{width:100%;border:1px solid transparent;background:transparent;border-radius:5px;padding:4px 6px;font-size:13px}
- .note:focus{border-color:#c8d2de;background:#fff;outline:none}
-</style></head><body>
-${abyAdminNav('/admin/pipeline')}
-<main>
-  <div id="warn" style="display:none;background:#fdecec;color:#a12622;border:1px solid #f3c2c2;border-radius:8px;padding:10px 13px;margin:0 0 16px;font-size:13.5px"></div>
-  <div class="card">
-    <h2>Add prospects</h2>
-    <p class="sub">One per line, as <strong>agency, name, email</strong>. Nobody is emailed and no account is created &mdash; this is your list, not an invitation.</p>
-    <textarea id="box" rows="4" placeholder="Acme Benefits, Jane Smith, jane@acme.com&#10;Boyd &amp; Co, Tanya Boyd, tanya@boyd.com"></textarea>
-    <div class="filters" style="margin-top:10px">
-      <span class="muted" style="font-size:13px">Owner:</span>
-      <select id="newRep"><option value="">—</option><option value="eric">Eric</option><option value="niels">Niels</option></select>
-      <span class="muted" style="font-size:13px">Priority:</span>
-      <select id="newPri"><option value="">—</option><option>A</option><option>B</option><option>C</option></select>
-      <button id="add" style="background:#1a5c3a;color:#fff;border:0;font-weight:600">Add to the list</button>
-    </div>
-    <div class="msg" id="addMsg" style="display:none;margin-top:10px;padding:10px 12px;border-radius:6px;font-size:13px"></div>
-  </div>
-
-  <div class="card">
-    <h2>Log a quote</h2>
-    <p class="sub">For rates sent by email rather than run through the tool &mdash; so the opportunity is tracked and you know to circle back.</p>
-    <div class="filters">
-      <input type="text" id="qEmployer" placeholder="Employer" style="flex:2;min-width:180px;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px">
-      <input type="text" id="qAgency" placeholder="Agency" style="flex:2;min-width:160px;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px">
-      <input type="date" id="qWhen" style="padding:6px 8px;border:1px solid #c8d2de;border-radius:6px">
-    </div>
-    <div class="filters">
-      <input type="text" id="qProducts" placeholder="Products, e.g. COBRA, FSA, ERISA Wrap" style="flex:3;min-width:240px;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px">
-      <input type="number" id="qValue" placeholder="First-year value (optional)" style="flex:1;min-width:170px;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px">
-      <input type="number" id="qHeads" placeholder="Employees (optional)" style="flex:1;min-width:150px;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px">
-    </div>
-    <div class="filters">
-      <span class="muted" style="font-size:13px">Rep:</span>
-      <select id="qRep"><option value="">—</option><option value="eric">Eric</option><option value="niels">Niels</option></select>
-      <span class="muted" style="font-size:13px">Status:</span>
-      <select id="qStatus"><option value="P">Pending</option><option value="I">In process</option><option value="S">Sold</option><option value="D">Dead</option><option value="N">No Response</option></select>
-      <label style="font-size:13px"><input type="checkbox" id="qComm" checked style="margin-right:6px">Commission</label>
-      <button id="qAdd" style="background:#1a5c3a;color:#fff;border:0;font-weight:600">Log it</button>
-    </div>
-    <div class="msg" id="qMsg" style="display:none;margin-top:10px;padding:10px 12px;border-radius:6px;font-size:13px"></div>
-  </div>
-
-  <div class="filters">
-    <span class="muted" style="font-size:13px">Owner:</span>
-    <select id="fRep"><option value="">Everyone</option><option value="eric">Eric</option><option value="niels">Niels</option></select>
-    <span class="muted" style="font-size:13px">Status:</span>
-    <select id="fStatus"><option value="">All</option><option value="producing">Producing</option><option value="quoting">Quoting</option><option value="dormant">Dormant</option><option value="prospect">Prospect</option></select>
-    <span class="muted" style="font-size:13px">Priority:</span>
-    <select id="fPri"><option value="">All</option><option>A</option><option>B</option><option>C</option></select>
-    <span class="muted" id="counts" style="margin-left:auto;font-size:13px"></span>
-  </div>
-
-  <div class="card">
-    <h2>Everyone we track</h2>
-    <p class="sub" id="explain"></p>
-    <div id="list"><p class="muted">Loading...</p></div>
-  </div>
-</main>
-<script>
- function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
- function day(s){return s?String(s).slice(0,10):'\u2014'}
- var LBL={producing:'Producing',quoting:'Quoting',dormant:'Dormant',prospect:'Prospect'};
- // Least friction first. BenefitLab carries name, agency, phone, email AND logo into the quote;
- // an ABY account prefills their own details; neither means retyping everything, every time --
- // which is the row worth a phone call.
- function canQuote(x){
-   if(x.benefitlab===true) return '<span class="pill producing">BenefitLab</span>';
-   if(x.has_account) return '<span class="pill quoting">ABY account</span>';
-   if(x.benefitlab===null) return '<span class="pill prospect" title="BenefitLab could not be reached, so this may be understated">unknown</span>';
-   return '<span class="muted">neither</span>';
- }
- function msg(el,t,good){el.textContent=t;el.style.display='block';el.style.background=good?'#e8f4ec':'#fdecec';el.style.color=good?'#1a5c3a':'#a12622'}
- function priSelect(kind,id,cur){
-   return '<select data-k="'+kind+'" data-id="'+esc(id)+'" class="pri">'
-     +['','A','B','C'].map(function(v){return '<option value="'+v+'"'+((cur||'')===v?' selected':'')+'>'+(v||'\u2014')+'</option>'}).join('')+'</select>';
- }
- document.getElementById('add').onclick=async function(){
-   var people=document.getElementById('box').value.split(/\\r?\\n/).map(function(l){
-     var pcs=l.split(','); if(pcs.length<2) return null;
-     return {agency:(pcs[0]||'').trim(), name:(pcs.length>2?pcs[1]:'').trim(), email:pcs[pcs.length-1].trim()};
-   }).filter(function(x){return x&&x.email});
-   if(!people.length){msg(document.getElementById('addMsg'),'Add at least one line as: agency, name, email',false);return}
-   var r=await fetch('/api/admin/prospects',{method:'POST',headers:{'Content-Type':'application/json'},
-     body:JSON.stringify({people:people,rep:document.getElementById('newRep').value,priority:document.getElementById('newPri').value})});
-   var d=await r.json().catch(function(){return{}});
-   if(!r.ok){msg(document.getElementById('addMsg'),d.error||'Could not add.',false);return}
-   var bits=[];
-   if(d.added.length) bits.push(d.added.length+' added');
-   if(d.skipped.length) bits.push(d.skipped.length+' already on the list');
-   if(d.failed.length) bits.push(d.failed.length+' rejected ('+d.failed.map(function(x){return x.email}).join(', ')+')');
-   msg(document.getElementById('addMsg'),bits.join('. '),!d.failed.length);
-   document.getElementById('box').value=''; load();
- };
- // The spreadsheet's own spellings, mapped to the tool's product ids -- the same table the 2026
- // import used, so a manually logged quote filters and reports exactly like a generated one.
- var PMAP={'cobra':'cobra','erisa wrap':'erisa','erisa':'erisa','fsa':'fsa','dcap':'fsa','lfsa':'fsa',
-   'hsa':'hsa','pop':'pop','pop / section 125':'pop','section 125':'pop','aca':'aca',
-   'aca 1094/1095 reporting':'aca','hra':'hra','tx state continuation':'stateContinuation',
-   'state continuation':'stateContinuation','qtb':'section132','medicare hra':'mpra','ichra':'ichra'};
- document.getElementById('qAdd').onclick=async function(){
-   var raw=document.getElementById('qProducts').value.split(',').map(function(x){return x.trim()}).filter(Boolean);
-   var ids=[], unknown=[];
-   raw.forEach(function(x){ var id=PMAP[x.toLowerCase()]; if(id) ids.push('product-'+id); else unknown.push(x); });
-   // ⛔ An unrecognised product is REPORTED, never dropped. A silently missing product is an
-   // understated count that nobody can see.
-   if(unknown.length){
-     var m=document.getElementById('qMsg');
-     m.textContent='Not recognized: '+unknown.join(', ')+'. Use names like COBRA, FSA, HSA, POP, ERISA Wrap, ACA, HRA, QTB.';
-     m.style.display='block'; m.style.background='#fdecec'; m.style.color='#a12622'; return;
-   }
-   var r=await fetch('/api/admin/quote',{method:'POST',headers:{'Content-Type':'application/json'},
-     body:JSON.stringify({employer:document.getElementById('qEmployer').value,
-       agency:document.getElementById('qAgency').value, quotedOn:document.getElementById('qWhen').value,
-       products:ids, rep:document.getElementById('qRep').value, status:document.getElementById('qStatus').value,
-       commissionIncluded:document.getElementById('qComm').checked,
-       firstYearValue:document.getElementById('qValue').value, employeeCount:document.getElementById('qHeads').value})});
-   var d=await r.json().catch(function(){return{}});
-   var m=document.getElementById('qMsg');
-   m.style.display='block';
-   m.style.background=r.ok?'#e8f4ec':'#fdecec'; m.style.color=r.ok?'#1a5c3a':'#a12622';
-   m.textContent=r.ok?('Logged as '+d.quoteNumber):(d.error||'Could not log it.');
-   if(r.ok){['qEmployer','qAgency','qProducts','qValue','qHeads'].forEach(function(i){document.getElementById(i).value=''}); load();}
- };
- ['fRep','fStatus','fPri'].forEach(function(id){document.getElementById(id).onchange=load});
-
- // Sorting for "Everyone we track". Eric asked for it on the quote log -- "Why can't we sort by
- // agent name or agency name?" -- and this is the page that IS the list of agents and agencies,
- // so the same want applies with more force.
- // ⭐ The rows are HELD rather than re-fetched on each sort. Re-querying the server to reorder rows
- // already on screen is slow, and it can quietly return a DIFFERENT set if anything changed in
- // between -- so the list would appear to sort and also silently gain or lose a row.
- var PEOPLE=[], sortKey='agency', sortDir=1;
- var SORTV={
-   agency:function(x){return String(x.agency_name||'').toLowerCase()},
-   agent:function(x){return String(x.name||'').toLowerCase()},
-   email:function(x){return String(x.email||'').toLowerCase()},
-   status:function(x){return String(x.status||'')},
-   quotes:function(x){return Number(x.quote_count||0)},
-   last:function(x){return String(x.last_quote||'')},
-   priority:function(x){return String(x.priority||'')}
- };
- function sortPeople(list){
-   var g=SORTV[sortKey]||SORTV.agency;
-   return list.slice().sort(function(a,b){
-     var x=g(a), y=g(b);
-     // ⚠️ BLANKS SINK IN BOTH DIRECTIONS. A prospect with no agency name is not "first
-     // alphabetically", it is unknown -- and floating the unnamed to the top of every ascending
-     // sort buries the rows somebody is actually looking for. Same rule as the quote log.
-     var xe=(x===''||x===null||x===undefined), ye=(y===''||y===null||y===undefined);
-     if(xe&&!ye) return 1;
-     if(!xe&&ye) return -1;
-     if(x<y) return -1*sortDir;
-     if(x>y) return 1*sortDir;
-     return 0;
-   });
- }
- function arrow(k){ return sortKey===k ? (sortDir===1?' ▲':' ▼') : ''; }
- function hcell(k,label,cls){
-   return '<th class="srt'+(cls?' '+cls:'')+'" data-k="'+k+'">'+label+arrow(k)+'</th>';
- }
-
- async function load(){
-   var q=[];
-   if(document.getElementById('fRep').value) q.push('rep='+document.getElementById('fRep').value);
-   if(document.getElementById('fStatus').value) q.push('status='+document.getElementById('fStatus').value);
-   if(document.getElementById('fPri').value) q.push('priority='+document.getElementById('fPri').value);
-   var d=await (await fetch('/api/admin/pipeline'+(q.length?('?'+q.join('&')):''))).json().catch(function(){return{}});
-   var rows=d.people||[];
-   document.getElementById('explain').textContent=
-     'Status is worked out from the quote history and cannot be edited: Producing means a sold quote in the last '
-     +(d.windowDays||365)+' days, Quoting means a quote in that window, Dormant means quoted before but not since, Prospect means never quoted.';
-   var c={producing:0,quoting:0,dormant:0,prospect:0};
-   rows.forEach(function(x){c[x.status]=(c[x.status]||0)+1});
-   if(d.benefitlabChecked===false)
-     document.getElementById('explain').textContent+=
-       ' \u26a0 BenefitLab could not be reached, so "Can quote" shows unknown rather than guessing.';
-   document.getElementById('counts').textContent=
-     c.producing+' producing \u00b7 '+c.quoting+' quoting \u00b7 '+c.dormant+' dormant \u00b7 '+c.prospect+' prospect';
-   PEOPLE = rows;
-   renderList();
- }
-
- function renderList(){
-   var rows = sortPeople(PEOPLE);
-   document.getElementById('list').innerHTML = rows.length
-     ? '<table><thead><tr>'
-       + hcell('agency','Agency') + hcell('agent','Agent') + hcell('email','Email')
-       + hcell('status','Status') + hcell('quotes','Quotes','n') + hcell('last','Last quote')
-       // ⛔ "Can quote" and "Note" are NOT sortable, deliberately. Can-quote is a live lookup
-       // against BenefitLab that can read "unknown" when it could not be reached, so an order built
-       // on it would change meaning between refreshes; Note is free text nobody scans in order.
-       + '<th>Can quote</th>' + hcell('priority','Priority') + '<th>Note</th>'
-       + '</tr></thead><tbody>'
-       + rows.map(function(x){
-           return '<tr><td>'+esc(x.agency_name||'\u2014')+'</td><td>'+esc(x.name||'\u2014')+'</td><td>'+esc(x.email)+'</td>'
-             +'<td><span class="pill '+x.status+'">'+LBL[x.status]+'</span></td>'
-             +'<td class="n">'+x.quote_count+'</td><td>'+day(x.last_quote)+'</td>'
-             +'<td>'+canQuote(x)+'</td>'
-             +'<td>'+priSelect('broker',x.id,x.priority)+'</td>'
-             +'<td><input class="note" data-id="'+esc(x.id)+'" value="'+esc(x.notes||'')+'" placeholder="\u2026"></td></tr>';
-         }).join('')+'</tbody></table>'
-     : '<p class="muted">Nobody on the list yet. Paste some above.</p>';
-   // ⭐ Clicking the SAME column flips direction; a NEW column starts at its natural direction --
-   // A-Z for a name, and biggest-first for a count or a date, because "who has quoted most" and
-   // "who quoted most recently" are the questions those columns get opened for.
-   Array.prototype.forEach.call(document.querySelectorAll('th.srt'),function(h){
-     h.onclick=function(){
-       var k=h.getAttribute('data-k');
-       if(k===sortKey) sortDir=-sortDir;
-       else { sortKey=k; sortDir=(k==='quotes'||k==='last')?-1:1; }
-       renderList();
-     };
-   });
-   Array.prototype.forEach.call(document.querySelectorAll('select.pri'),function(sel){
-     sel.onchange=async function(){
-       var r=await fetch('/api/admin/rate',{method:'POST',headers:{'Content-Type':'application/json'},
-         body:JSON.stringify({kind:sel.getAttribute('data-k'),id:sel.getAttribute('data-id'),priority:sel.value})});
-       if(r.ok) load(); else await failed(r,'Could not save that priority.');
-     };
-   });
-   Array.prototype.forEach.call(document.querySelectorAll('input.note'),function(inp){
-     inp.onchange=async function(){
-       // ⚠️ THIS ONE HAD NO RELOAD EITHER, so a failed save left the typed note sitting on screen
-       // looking saved, with nothing anywhere that disagreed.
-       var r=await fetch('/api/admin/rate',{method:'POST',headers:{'Content-Type':'application/json'},
-         body:JSON.stringify({kind:'broker',id:inp.getAttribute('data-id'),notes:inp.value})});
-       if(!r.ok) await failed(r,'Could not save that note.');
-     };
-   });
- }
-
- // ⛔⛔ A WRITE THAT FAILS MUST SAY SO. These handlers used to be "await fetch(...); load();" with
- // the result thrown away, so a 500 was indistinguishable from a save: the control either snapped
- // back for no stated reason, or -- worse, where there was no reload -- kept showing what you typed
- // while the database still held the old value.
- // ⭐ Reload FIRST so the screen matches the server, then say why.
- async function failed(r, fallback){
-   var d=await r.json().catch(function(){return{}});
-   try { await load(); } catch(e) {}
-   var w=document.getElementById('warn');
-   if(w){ w.style.display='block'; w.textContent=(d.error||fallback); }
- }
-
- load();
-</script></body></html>`;
-}
+// 🔴 THE PIPELINE PAGE WAS DELETED HERE ON 2026-08-26 (F-408). Eric: "Yes I think we should kill
+// the pipeline page."
+//
+// ⭐⭐ IT WAS RETIRED BECAUSE EVERYTHING ON IT NOW LIVES SOMEWHERE BETTER, not because it was
+// unloved. It carried three things and each had a successor:
+//   - "Log a quote"      -> the QUOTE LOG, where the other 6,170 quotes are. Moved, not rebuilt.
+//   - "Add prospects"    -> the Marketing view's "Add a list from an event", which is strictly
+//                           better: it identifies a person by name AND firm when there is no
+//                           email, ADOPTS an address that arrives later, tags, and de-duplicates.
+//                           The old box demanded an email and wrote into `brokers`.
+//   - "Everyone we track" -> the Marketing view, whose "Never quoted" filter IS this page's
+//                           `prospect` status, alongside priority, owner, tags and bulk apply.
+//
+// ⛔ /admin/pipeline STILL ANSWERS -- it redirects. Old links, bookmarks and the guide must not
+// break, which is the same rule the dashboard follows for ?view=calendar.
+// 🔬 check_reachable.mjs asserts the redirect and asserts the Marketing view still carries all
+// three successors. A merge is a REMOVAL, and the failure mode of a removal is SILENCE.
 
 // ─── ABY admin sub-pages (Eric, 2026-08-18) ────────────────────────────────────
 //
 // ⭐ SEPARATE PAGES RATHER THAN MORE TABS ON `adminHTML()`. That function is the quote log, it
 // works, and it is long. New capability goes beside it so a mistake here cannot take the log down.
+//
+// ── WHY THE STATUS CELL NO LONGER PRINTS A SECOND LINE WHEN NOTHING IS RECORDED (2026-08-26) ──
+//
+// It printed the words under EVERY row, and that was true of every row: measured on production,
+// 0 of 665 firms carried a recorded status and 0 status events had ever been written. Eric asked
+// "what is [it] for?", which is the question a label identical on all 665 rows always provokes.
+//
+// ⛔ THE COMMENT THAT USED TO SIT IN THAT BRANCH ARGUED THE OPPOSITE, and it is worth saying why
+// it was wrong rather than just deleting it. It said the two states -- nothing recorded, versus
+// recorded and unchanged -- would look identical if this said nothing. They are different facts,
+// but they never looked identical: the recorded-and-unchanged branch prints "same since <date>".
+// Silence against a dated sentence already tells them apart. The label was defending a distinction
+// the other branch was already making, and charging every row a line of height for it.
+//
+// ⭐ THE PAGE'S OWN RULE ALREADY SAID SO, two screens further down: "A column where every row
+// looks the same is a column nobody reads." The rule was here; this cell was what broke it.
+//
+// ⚠️ AND THE REASON THIS PARAGRAPH IS OUT HERE RATHER THAN BESIDE THE CODE: everything between the
+// backticks below is SHIPPED TO THE BROWSER, comments included. Written in place, it added
+// fourteen lines to every load of this page -- and it put the retired phrase back into the emitted
+// HTML, where check_admin_render.mjs correctly failed on it. A long explanation belongs outside
+// the template literal; a pointer belongs inside it.
 function adminBrokersHTML() {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Brokers &amp; Agencies — ABY admin</title>
@@ -4574,6 +4317,20 @@ ${ADMIN_HEADER_CSS}
  .views button.on{background:#1a5c3a;color:#fff;border-color:#1a5c3a}
  .vhint{margin-left:14px;color:#8a97a8;font-size:13px}
  .mfilters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 14px}
+ /* THE A-Z BAR. Eric, 2026-08-26: "with so many letters, it takes a long time to scroll."
+    It FILTERS rather than scrolling to an anchor, and that is the better answer to what he asked
+    for: the list is capped at 150 rows by default, so an anchor for S would point at a row that
+    has not been rendered. Filtering to one letter also puts the firm at the TOP of the screen
+    instead of somewhere in the middle of a long page.
+    A letter with no firms is DIMMED, never hidden -- a bar whose letters move around as you
+    filter is harder to hit than the scrollbar it replaces. */
+ .azbar{display:flex;flex-wrap:wrap;gap:2px;margin:0 0 12px;align-items:center}
+ .azbar button{border:1px solid transparent;background:none;border-radius:5px;cursor:pointer;
+               font:600 12.5px ui-monospace,Consolas,monospace;color:#2f6f4f;padding:3px 7px;min-width:24px}
+ .azbar button:hover{background:#eef2f7;border-color:#c8d2de}
+ .azbar button.on{background:#1a5c3a;border-color:#1a5c3a;color:#fff}
+ .azbar button.off{color:#c3ccc6;cursor:default;background:none;border-color:transparent}
+ .azbar .all{font-family:inherit;font-size:12.5px;min-width:0;margin-right:4px}
  .bulk{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#eef5f0;border:1px solid #cfe0d5;border-radius:8px;padding:10px 13px;margin:0 0 14px}
  .bulk input{padding:6px 9px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  .bulk button{background:#fff;border:1px solid #c8d2de;border-radius:6px;padding:6px 13px;cursor:pointer;font-size:13px}
@@ -4748,6 +4505,7 @@ ${abyAdminNav('/admin/brokers')}
         <button onclick="clearSel()">Clear</button>
         <span class="muted" id="bulkMsg"></span>
       </div>
+      <div class="azbar" id="azbar"></div>
       <div id="mkt"><p class="muted">Loading...</p></div>
     </div>
   </div>
@@ -6287,6 +6045,41 @@ ${abyAdminNav('/admin/brokers')}
  // only has 150 firms in it. The Find box still searches all of them, so the cap never hides a
  // firm somebody is looking for -- it only defers the ones nobody has scrolled to.
  var MKT_CAP = 150;
+ // '' means every letter. Held next to MKT_CAP because the two interact: picking a letter lifts
+ // the cap for that letter (see paintMkt), which is the whole point of picking one.
+ var mktLetter = '';
+
+ // The letter a firm files under, and it is deliberately the FIRST CHARACTER OF THE NAME AS SHOWN.
+ // "The Daniel and Henry Company" files under T, because T is where it sits in the list this bar
+ // replaces scrolling through. Filing it under D would be a librarian's answer to a question about
+ // scrolling, and the letter you press would not be the letter you can see.
+ function letterOf(name){
+   var c = String(name || '').trim().charAt(0).toUpperCase();
+   return (c >= 'A' && c <= 'Z') ? c : '#';
+ }
+
+ function pickLetter(L){
+   mktLetter = (mktLetter === L) ? '' : L;   // pressing the active letter clears it
+   paintMkt();
+ }
+
+ // Painted from mktRows -- what the SERVER filters returned -- not from the letter-filtered set,
+ // or choosing a letter would grey out every other letter and strand you on it.
+ function renderAZ(){
+   var have = {};
+   for (var i = 0; i < mktRows.length; i++) have[letterOf(mktRows[i].name)] = 1;
+   var letters = ['#'];
+   for (var c = 65; c <= 90; c++) letters.push(String.fromCharCode(c));
+   var h = '<button type="button" class="all' + (mktLetter ? '' : ' on') + '" '
+         + 'onclick="pickLetter(' + "''" + ')">All</button>';
+   for (var k = 0; k < letters.length; k++){
+     var L = letters[k];
+     if (!have[L]) { h += '<button type="button" class="off" disabled>' + L + '</button>'; continue; }
+     h += '<button type="button" class="' + (mktLetter === L ? 'on' : '') + '" '
+        + 'onclick="pickLetter(' + "'" + L + "'" + ')">' + L + '</button>';
+   }
+   q('azbar').innerHTML = h;
+ }
  var MKT_ALL = false;
 
  function agentRows(a){
@@ -6322,16 +6115,22 @@ ${abyAdminNav('/admin/brokers')}
  }
 
  function paintMkt(){
+   renderAZ();
    var find = (q('mFind').value || '').trim().toLowerCase();
    var rows = mktRows;
    if (find) rows = rows.filter(function(x){ return String(x.name || '').toLowerCase().indexOf(find) !== -1; });
+   if (mktLetter) rows = rows.filter(function(x){ return letterOf(x.name) === mktLetter; });
 
-   q('mCount').textContent = rows.length + ' of ' + mktRows.length + ' firms';
+   // The letter is NAMED in the count. A filtered list that does not say what is filtering it is
+   // how somebody concludes we have lost four hundred agencies.
+   q('mCount').textContent = rows.length + ' of ' + mktRows.length + ' firms'
+     + (mktLetter ? ' \u2014 ' + (mktLetter === '#' ? 'not starting with a letter' : mktLetter) : '');
    // ⛔ TESTED ON THE FILTERED LIST, NOT THE FETCHED ONE. Checking mktRows meant that filtering
    // 660 firms down to none fell through to the renderer and drew a header with no rows beneath it.
    if (!rows.length){
      q('mkt').innerHTML = mktRows.length
-       ? '<p class="muted">None of the ' + mktRows.length + ' firms match these filters. Widen them, or clear the tag.</p>'
+       ? '<p class="muted">None of the ' + mktRows.length + ' firms match these filters'
+         + (mktLetter ? ' and start with ' + esc(mktLetter) : '') + '. Widen them, or clear the tag.</p>'
        : '<p class="muted">No firms came back at all. That is unexpected. Check the filters above, then say so.</p>';
      return;
    }
@@ -6403,10 +6202,13 @@ ${abyAdminNav('/admin/brokers')}
      return out;
    }
 
-   var shown = MKT_ALL ? tops : tops.slice(0, MKT_CAP);
+   // A CHOSEN LETTER IS SHOWN WHOLE. The cap exists because 665 rows with their selects and tag
+   // chips is a slow paint; one letter never is. Capping a letter would answer "take me to S" with
+   // the first 150 firms, which is the scrolling problem again with an extra click in front of it.
+   var shown = (MKT_ALL || mktLetter) ? tops : tops.slice(0, MKT_CAP);
    for (var t = 0; t < shown.length; t++) h += firmRow(shown[t], 0);
    h += '</tbody></table></div>';
-   if (tops.length > MKT_CAP){
+   if (tops.length > MKT_CAP && !mktLetter){
      h += '<p style="text-align:center;margin:10px 0 0">'
         + '<button type="button" onclick="MKT_ALL=!MKT_ALL;paintMkt()" style="background:none;border:0;'
         + 'color:#2f6f4f;font-size:12.5px;cursor:pointer;text-decoration:underline">'
@@ -6742,9 +6544,19 @@ ${abyAdminNav('/admin/brokers')}
  // ⭐ A ?firm= LINK OVERRIDES THE REMEMBERED VIEW. Landing on the analysis page because that is
  // where you were last is the wrong answer when the URL names a firm to open.
  var wantsFirm = String(location.search || '').indexOf('firm=') !== -1;
+ // ⭐ ?view= AND ?quoted= ARE HONOURED, AND THAT IS WHAT MAKES THE /admin/pipeline REDIRECT LAND
+ // SOMEWHERE REAL rather than on whichever view you happened to leave this page on. A retired page
+ // that redirects to "the general area" is a broken link with extra steps.
+ var QS = new URLSearchParams(location.search || '');
+ var wantsMkt = QS.get('view') === 'marketing';
+ var wantsQuoted = QS.get('quoted') || '';
+ if (wantsQuoted === 'no' || wantsQuoted === 'yes') {
+   var qsel = document.getElementById('mQuoted');
+   if (qsel) qsel.value = wantsQuoted;
+ }
  try {
-   setView(wantsFirm || localStorage.getItem('abyCrmView') === 'marketing' ? 'marketing' : 'performance');
- } catch(e) { setView(wantsFirm ? 'marketing' : 'performance'); }
+   setView(wantsFirm || wantsMkt || localStorage.getItem('abyCrmView') === 'marketing' ? 'marketing' : 'performance');
+ } catch(e) { setView(wantsFirm || wantsMkt ? 'marketing' : 'performance'); }
 
  // ── THE RECORDED STATUS, BESIDE THE LIVE ONE ────────────────────────────────────────────
  //
@@ -6760,10 +6572,8 @@ ${abyAdminNav('/admin/brokers')}
    var live = a.derivedStatus || '';
    var rec = a.recordedStatus;
    if (!rec) {
-     // ⚠️ NOT RECORDED and RECORDED-AND-UNCHANGED are different facts. Saying nothing here
-     // would make them look identical.
-     return '<span>' + esc(live) + '</span>'
-          + '<div class="muted" style="font-size:11.5px">not recorded</div>';
+     // Nothing recorded: print the live status and stop. See the block above adminBrokersHTML().
+     return '<span>' + esc(live) + '</span>';
    }
    if (rec === live) {
      return '<span>' + esc(live) + '</span>'
@@ -10522,9 +10332,11 @@ const ABY_ADMIN_LINKS = [
   // who we actually serve -- and the whole point of F-377 is that those are not the same list.
   { href: '/admin/clients',    label: 'Clients' },
   { href: '/admin/brokers',    label: 'Brokers &amp; Agencies' },
-  { href: '/admin/pipeline',   label: 'Pipeline' },
-  // Public entities buying direct. Next to Pipeline because both answer 'what should we chase',
-  // and deliberately NOT next to Brokers and Agencies, which is the other channel entirely.
+  // Public entities buying direct: a different CHANNEL from Brokers & Agencies, which is the
+  // firms ABY quotes THROUGH. The two lists never merge.
+  // ⚠️ This used to say "next to Pipeline because both answer what should we chase". Pipeline was
+  // retired on 2026-08-26 and the sentence would have gone on explaining a neighbour that no
+  // longer exists -- a comment describing a deleted thing reads as a description of the code.
   { href: '/admin/rfp-watch',  label: 'RFP Watch' },
   { href: '/admin/referrals',  label: 'Referrals' },
   { href: '/admin/rates',      label: 'Rates' },
@@ -11777,9 +11589,14 @@ const PRODUCT_SHORT = {
   lifestyle:        { def: 'LSB', packages: { fullAdmin: 'Full Admin', docsOnly: 'Docs Only' }, countLabel: 'participants' },
   directBilling:    { def: 'Direct Bill', countLabel: 'participants' },
   // LEGACY-ONLY. These three are NOT in products.js -- the tool no longer offers them -- but they
-  // are in the imported history and therefore on screen: Form 5500 (9 quotes), NDT (7), HIPAA (6).
+  // are in the imported history and therefore on screen: Form 5500 (59 quotes), NDT (12), HIPAA (6).
   // Measured on production, not guessed. Do not delete them to tidy the map: the rows outlive the
   // product, and without an entry each prints whatever name the old spreadsheet happened to use.
+  // RE-MEASURED 2026-08-26. It read "Form 5500 (9), NDT (7), HIPAA (6)" -- true when written, and
+  // then the 2009-2023 back-catalogue landed and Form 5500 went up more than six-fold. Nothing was
+  // wrong with the map; the NUMBER beside it had quietly stopped being true, which is the shape a
+  // measured claim in a comment always rots into. It matters here because these counts are the
+  // argument for keeping the three entries at all.
   form5500:         { def: 'Form 5500' },
   ndt:              { def: 'NDT' },
   hipaa:            { def: 'HIPAA' },
@@ -11888,6 +11705,42 @@ ${ADMIN_HEADER_CSS}
 .toolbar input{flex:1;max-width:400px;padding:.5rem .75rem;border:1px solid #ddd;
                border-radius:6px;font-size:.95rem}
 .toolbar input:focus{outline:none;border-color:#1a5c3a}
+/* ── LOG A QUOTE ────────────────────────────────────────────────────────────────────────
+   MOVED HERE FROM /admin/pipeline, 2026-08-26. Eric: "We need to move log a quote to the
+   quote log page." It was on the prospecting screen because that is where it was built, not
+   because it belonged there -- a quote ABY emailed instead of running is a QUOTE, and it
+   belongs beside the other 6,170 of them.
+   It starts SHUT, which is Eric's own suggestion: "maybe when you click log a quote it should
+   expand to reveal everything." The log is what this page is for; logging one is occasional. */
+.logq{background:#fff;border-bottom:1px solid #e5e5e5}
+.logq>summary{cursor:pointer;user-select:none;list-style:none;padding:10px 24px;
+              font-size:.9rem;font-weight:600;color:#1a5c3a;display:flex;align-items:center;gap:8px}
+.logq>summary::-webkit-details-marker{display:none}
+.logq>summary .tw{font-size:.7rem;transition:transform .12s;display:inline-block}
+.logq[open]>summary .tw{transform:rotate(90deg)}
+.logq>summary .hint{font-weight:400;color:#8a97a8;font-size:.8rem}
+.logq .body{padding:4px 24px 18px}
+.logq .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.logq label.f{display:flex;flex-direction:column;gap:3px;font-size:.72rem;color:#5b6b7f;
+              text-transform:uppercase;letter-spacing:.03em}
+.logq input,.logq select{padding:.45rem .6rem;border:1px solid #ddd;border-radius:6px;font-size:.9rem}
+.logq input:focus,.logq select:focus{outline:none;border-color:#1a5c3a}
+.logq .grow{flex:1;min-width:190px}
+/* ⭐ PRODUCT PILLS, not a comma-separated text box. Eric: "For products, we need to have the
+   pills with the different products that we can click on."
+   🔴 THE OLD FIELD WAS NOT MERELY AWKWARD, IT COULD SILENTLY UNDER-RECORD A QUOTE: it mapped
+   typed words through a lookup table that knew 17 spellings and had NO entry at all for
+   Section 127, Lifestyle or Direct Billing -- so those three could not be logged by any
+   spelling, and the message said "use names like COBRA, FSA..." as though the typist had
+   guessed wrong. A fixed list cannot be misspelled and cannot omit a product. */
+.logq .pills{display:flex;gap:6px;flex-wrap:wrap}
+.logq .pp{border:1px solid #c8d2de;background:#fff;color:#12263f;border-radius:14px;
+          padding:4px 12px;font-size:.82rem;cursor:pointer;font-family:inherit}
+.logq .pp:hover{border-color:#1a5c3a;color:#1a5c3a}
+.logq .pp.on{background:#1a5c3a;border-color:#1a5c3a;color:#fff;font-weight:600}
+.logq .go{background:#1a5c3a;color:#fff;border:0;border-radius:6px;padding:.5rem 1.1rem;
+          font-weight:600;font-size:.9rem;cursor:pointer;font-family:inherit}
+.logq .msg{display:none;margin-top:10px;padding:9px 12px;border-radius:6px;font-size:.85rem}
 /* 🔴 A NOWRAP WHITE-SPACE RULE ON A FLEX ROW THAT COULD NOT WRAP IS WHAT PUSHED THE SOURCES
    DROPDOWN OFF THE RIGHT OF THE PAGE. The count grew when it started reporting a total,
    could not shrink, and had nowhere to go, so it shoved its neighbours out of the window.
@@ -12111,6 +11964,54 @@ ${abyAdminNav('/admin')}
     <option value="">All years</option>
   </select>
 </div>
+<!-- LOG A QUOTE. Moved off /admin/pipeline 2026-08-26 at Eric's instruction; that page is gone.
+     ⭐ The Effective date is here and was NOT on the old form, which is why every hand-logged
+     quote was invisible to /admin/today: Today builds its deadline rows from effective_date, and
+     the old form never asked for one. A row you logged so you would remember to circle back could
+     not appear on the page whose whole job is reminding you to circle back. -->
+<details class="logq" id="logq">
+  <summary><span class="tw">&#9656;</span> Log a quote
+    <span class="hint">for rates sent by email rather than run through the tool</span></summary>
+  <div class="body">
+    <div class="row">
+      <label class="f grow">Employer<input type="text" id="qEmployer" placeholder="Acme Manufacturing"></label>
+      <label class="f grow">Agency<input type="text" id="qAgency" placeholder="Boyd &amp; Co Benefits"></label>
+      <label class="f">Quoted on<input type="date" id="qWhen"></label>
+      <label class="f">Effective<input type="date" id="qEffective"></label>
+    </div>
+    <div class="row">
+      <label class="f grow">Broker<input type="text" id="qAgent" placeholder="Jane Smith (optional)"></label>
+      <label class="f grow">Broker email<input type="email" id="qAgentEmail" placeholder="jane@boyd.com (optional)"></label>
+      <label class="f">First-year value<input type="number" id="qValue" placeholder="optional"></label>
+      <label class="f">Employees<input type="number" id="qHeads" placeholder="optional"></label>
+    </div>
+    <div class="row" style="align-items:flex-start">
+      <label class="f" style="flex:1">Products
+        <div class="pills" id="qPills">${QUOTE_PRODUCT_IDS.map(function (id) {
+          var e = PRODUCT_SHORT[id];
+          var lbl = (e && e.def) || id;
+          return '<button type="button" class="pp" data-pid="' + id + '">' + lbl + '</button>';
+        }).join('')}</div>
+      </label>
+    </div>
+    <div class="row">
+      <label class="f">Rep<select id="qRep">${
+        ['<option value="">&mdash;</option>'].concat(
+          Object.keys(QUOTE_REP_NAMES).map(function (id) {
+            return '<option value="' + id + '">' + QUOTE_REP_NAMES[id] + '</option>';
+          })).join('')
+      }</select></label>
+      <label class="f">Status<select id="qStatus">
+        <option value="P">Pending</option><option value="I">In process</option>
+        <option value="S">Sold</option><option value="D">Dead</option>
+        <option value="N">No Response</option></select></label>
+      <label style="font-size:.85rem;align-self:flex-end;padding-bottom:.5rem">
+        <input type="checkbox" id="qComm" checked style="margin-right:6px">Commission</label>
+      <button class="go" id="qAdd" style="align-self:flex-end">Log it</button>
+    </div>
+    <div class="msg" id="qMsg"></div>
+  </div>
+</details>
 <div class="tabs">
   <button class="tab active" data-status="P">Pending</button>
   <!-- IN PROCESS. Eric agreed this status on 2026-08-18 -- "ones that are buying but we don't
@@ -13327,6 +13228,92 @@ document.getElementById('search').addEventListener('input', function(e) {
 });
 
 load();
+
+// ── LOG A QUOTE ────────────────────────────────────────────────────────────────────────────
+// Moved here from /admin/pipeline, 2026-08-26, and the page it came from no longer exists.
+//
+// ⭐ THE PRODUCTS ARE PILLS, AND THE STATE LIVES IN THE DOM rather than in a parallel array.
+// A second list of "which are selected" is one more thing that can disagree with the buttons
+// the user is looking at; reading the .on class back off them cannot.
+(function () {
+  var pills = document.getElementById('qPills');
+  if (!pills) return;
+  pills.addEventListener('click', function (ev) {
+    var b = ev.target.closest ? ev.target.closest('.pp') : null;
+    if (!b || !pills.contains(b)) return;
+    b.classList.toggle('on');
+  });
+
+  function chosenProducts() {
+    return Array.prototype.map.call(pills.querySelectorAll('.pp.on'), function (b) {
+      return b.getAttribute('data-pid');
+    });
+  }
+  function say(text, good) {
+    var m = document.getElementById('qMsg');
+    m.textContent = text;
+    m.style.display = 'block';
+    m.style.background = good ? '#e8f4ec' : '#fdecec';
+    m.style.color = good ? '#1a5c3a' : '#a12622';
+  }
+
+  document.getElementById('qAdd').addEventListener('click', async function () {
+    var employer = document.getElementById('qEmployer').value.trim();
+    // ⛔ ASKED FOR HERE RATHER THAN LET THE SERVER REFUSE IT. The server still checks -- it is the
+    // only guard that counts -- but a round trip to be told the first field is empty is a worse
+    // sentence than the same one shown instantly.
+    if (!employer) { say('Which employer?', false); return; }
+    var products = chosenProducts();
+    if (!products.length) { say('Pick at least one product.', false); return; }
+
+    var btn = this;
+    btn.disabled = true;
+    var r, d;
+    try {
+      r = await fetch('/api/admin/quote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employer: employer,
+          agency: document.getElementById('qAgency').value.trim(),
+          quotedOn: document.getElementById('qWhen').value,
+          effectiveDate: document.getElementById('qEffective').value,
+          agentName: document.getElementById('qAgent').value.trim(),
+          agentEmail: document.getElementById('qAgentEmail').value.trim(),
+          products: products,
+          rep: document.getElementById('qRep').value,
+          status: document.getElementById('qStatus').value,
+          commissionIncluded: document.getElementById('qComm').checked,
+          firstYearValue: document.getElementById('qValue').value,
+          employeeCount: document.getElementById('qHeads').value
+        })
+      });
+      d = await r.json().catch(function () { return {}; });
+    } catch (netErr) {
+      btn.disabled = false;
+      // ⛔ A NETWORK FAILURE MUST NOT READ AS A REFUSAL. "Could not log it" would have the typist
+      // change the form; nothing about the form is wrong.
+      say('Could not reach the server, so nothing was saved: ' + netErr.message, false);
+      return;
+    }
+    btn.disabled = false;
+    if (!r.ok) { say(d.error || 'Could not log it.', false); return; }
+
+    say('Logged as ' + d.quoteNumber + '. It is in the list below.', true);
+    ['qEmployer', 'qAgency', 'qAgent', 'qAgentEmail', 'qValue', 'qHeads'].forEach(function (id) {
+      document.getElementById(id).value = '';
+    });
+    Array.prototype.forEach.call(pills.querySelectorAll('.pp.on'), function (b) {
+      b.classList.remove('on');
+    });
+    // ⭐ THE LIST RELOADS, which is the whole reason this belongs on THIS page. On the old screen
+    // you logged a quote and then had to go somewhere else to see whether it had landed.
+    // ⚠️ It reloads with the CURRENT search, not with a cleared one -- clearing the box would look
+    // like the search had broken itself.
+    expandedId = null;
+    load(document.getElementById('search').value.trim());
+  });
+})();
 
 document.querySelectorAll('.tab').forEach(function(btn) {
   btn.addEventListener('click', function() {
