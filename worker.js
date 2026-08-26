@@ -75,6 +75,8 @@ export default {
     if (path === '/api/admin/crm/person'  && method === 'GET')  return withAuth(request, env, () => handleCrmPerson(request, env));
     if (path === '/api/admin/crm/link'    && method === 'POST') return withAuth(request, env, () => handleCrmLinkPerson(request, env));
     if (path === '/api/admin/crm/suggest' && method === 'GET')  return withAuth(request, env, () => handleCrmSuggestPeople(request, env));
+    if (path === '/api/admin/rfp/library'     && method === 'GET')  return withAuth(request, env, () => handleRfpLibrary(request, env));
+    if (path === '/api/admin/rfp/answer'      && method === 'POST') return withAuth(request, env, () => handleRfpAnswerSave(request, env));
     if (path === '/api/admin/crm/agencies'     && method === 'GET')  return withAuth(request, env, () => handleCrmAgencies(request, env));
     if (path === '/api/admin/crm/relationship' && method === 'POST') return withAuth(request, env, () => handleCrmRelationship(request, env));
     if (path === '/api/admin/crm/agency'       && method === 'POST') return withAuth(request, env, () => handleCrmAgencyField(request, env));
@@ -2373,6 +2375,131 @@ async function handleCrmSuggestPeople(request, env) {
  * hundred subqueries to decorate six hundred rows is how a page that was fast becomes slow six
  * months later, without anybody changing the page.
  */
+/**
+ * THE RFP ANSWER LIBRARY -- read side.
+ *
+ * ⭐ THE COUNTS ARE COMPUTED OVER THE WHOLE TABLE, NOT OVER THE FILTERED ROWS, and that is
+ * deliberate: this screen is a long job somebody comes back to, so "how much is left" has to mean
+ * the same thing every visit. A progress figure that moves when you change a filter is not
+ * progress, it is arithmetic about the filter.
+ */
+async function handleRfpLibrary(request, env) {
+  const u = new URL(request.url).searchParams;
+  const priority = (u.get('priority') || '').trim();
+  const status = (u.get('status') || '').trim();
+  const topic = (u.get('topic') || '').trim();
+  const find = (u.get('q') || '').trim();
+
+  const where = [], args = [];
+  // ⭐ DEFAULTS TO PRIORITY 1 AND 2 -- Eric's own instruction: "send Niels the filter set to
+  // priority 1 and 2 -- 61 questions, one sitting." Opening on all 367 is what makes somebody
+  // close the tab. The 249 one-offs belong in the library and are not homework.
+  if (priority === 'all') { /* no clause */ }
+  else if (/^[1-4]$/.test(priority)) { where.push('priority = ?'); args.push(Number(priority)); }
+  else { where.push('priority <= 2'); }
+
+  if (status === 'open') where.push("COALESCE(status,'') = ''");
+  else if (['draft', 'verified', 'na'].includes(status)) { where.push('status = ?'); args.push(status); }
+  if (topic) { where.push('topic = ?'); args.push(topic); }
+  if (find) {
+    where.push('(lower(question) LIKE ? OR lower(COALESCE(answer,%27%27)) LIKE ? OR lower(COALESCE(also_asked,%27%27)) LIKE ?)'
+      .replace(/%27%27/g, "''"));
+    const like = '%' + find.toLowerCase() + '%';
+    args.push(like, like, like);
+  }
+
+  try {
+    const rows = await env.DB.prepare(
+      'SELECT id, priority, topic, question, also_asked, asked_by, seed_answer, answer, status, ' +
+      '       needs_doc, doc_note, has_dated_fact, review_by, owner, updated_at ' +
+      'FROM rfp_answer ' + (where.length ? 'WHERE ' + where.join(' AND ') + ' ' : '') +
+      'ORDER BY priority ASC, asked_by DESC, topic ASC, question ASC LIMIT 500'
+    ).bind(...args).all();
+
+    const tot = await env.DB.prepare(
+      "SELECT COUNT(*) AS total, " +
+      "       SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) AS verified, " +
+      "       SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) AS draft, " +
+      "       SUM(CASE WHEN status = 'na' THEN 1 ELSE 0 END) AS na, " +
+      "       SUM(CASE WHEN needs_doc = 1 THEN 1 ELSE 0 END) AS docs, " +
+      "       SUM(CASE WHEN priority <= 2 AND COALESCE(status,'') = '' THEN 1 ELSE 0 END) AS p12_open " +
+      "FROM rfp_answer"
+    ).first();
+
+    const topics = await env.DB.prepare(
+      "SELECT topic, COUNT(*) AS n FROM rfp_answer WHERE COALESCE(topic,'') <> '' " +
+      "GROUP BY topic ORDER BY topic"
+    ).all();
+
+    return jsonResp({
+      rows: rows.results || [],
+      totals: tot || {},
+      topics: (topics.results || []),
+      // ⛔ SAID OUT LOUD RATHER THAN LEFT TO BE DISCOVERED. R2 is not enabled on the account, so a
+      // question can record WHICH document answers it and cannot yet hold the bytes. A silent
+      // half-feature is how somebody thinks a file was stored.
+      uploads: false,
+    });
+  } catch (err) {
+    // 🔴 AN ERROR IS NOT AN EMPTY LIBRARY. Before the migration runs this table does not exist,
+    // and "no questions" would read as a finished job rather than a missing one.
+    return jsonResp({ error: String(err && err.message || err) }, 500);
+  }
+}
+
+/**
+ * Save one field of one answer. Every write is a single question, so nothing can be lost by a
+ * concurrent edit of a different one.
+ *
+ * ⭐ FIELDS ARE OPTIONAL AND ONLY WHAT IS SENT IS WRITTEN. The page autosaves a textarea on blur
+ * and a checkbox on click; sending the whole row each time would let a stale copy of a field the
+ * user never touched overwrite what somebody else just typed.
+ */
+async function handleRfpAnswerSave(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const id = String(body.id || '').trim();
+  if (!id) return jsonResp({ error: 'Which question?' }, 400);
+
+  const sets = [], args = [];
+  if (body.answer != null) { sets.push('answer = ?'); args.push(String(body.answer).slice(0, 20000)); }
+  if (body.status != null) {
+    const st = String(body.status).trim();
+    if (!['', 'draft', 'verified', 'na'].includes(st)) return jsonResp({ error: 'Unknown status.' }, 400);
+    sets.push('status = ?'); args.push(st);
+  }
+  if (body.owner != null) {
+    const ow = String(body.owner).trim().toLowerCase();
+    // Same two-name vocabulary as everywhere else in this admin. '' means nobody in particular,
+    // which is a real answer here -- most of these have not been looked at.
+    if (ow && !['eric', 'niels'].includes(ow)) return jsonResp({ error: 'Unknown person.' }, 400);
+    sets.push('owner = ?'); args.push(ow);
+  }
+  if (body.needsDoc != null) { sets.push('needs_doc = ?'); args.push(body.needsDoc ? 1 : 0); }
+  if (body.docNote != null) { sets.push('doc_note = ?'); args.push(String(body.docNote).slice(0, 1000)); }
+  if (body.hasDatedFact != null) { sets.push('has_dated_fact = ?'); args.push(body.hasDatedFact ? 1 : 0); }
+  if (body.reviewBy != null) { sets.push('review_by = ?'); args.push(String(body.reviewBy).slice(0, 40)); }
+  if (!sets.length) return jsonResp({ error: 'Nothing to save.' }, 400);
+
+  sets.push('updated_at = ?'); args.push(new Date().toISOString());
+  args.push(id);
+
+  try {
+    const res = await env.DB.prepare('UPDATE rfp_answer SET ' + sets.join(', ') + ' WHERE id = ?')
+      .bind(...args).run();
+    // ⛔ A WRITE THAT MATCHED NOTHING IS A FAILURE, NOT A SUCCESS. Without this the page would show
+    // "saved" for a question id that does not exist, which is the worst possible lie on a screen
+    // whose entire job is capturing work somebody is doing by hand.
+    if (!res.meta || res.meta.changes === 0) return jsonResp({ error: 'That question no longer exists.' }, 404);
+    // Read back what was stored, so the screen reflects the DATABASE and not what it hoped it sent.
+    const back = await env.DB.prepare(
+      'SELECT id, answer, status, needs_doc, doc_note, has_dated_fact, review_by, owner, updated_at ' +
+      'FROM rfp_answer WHERE id = ?').bind(id).first();
+    return jsonResp({ ok: true, row: back });
+  } catch (err) {
+    return jsonResp({ error: String(err && err.message || err) }, 500);
+  }
+}
+
 async function handleCrmAgencies(request, env) {
   const u = new URL(request.url).searchParams;
   const rep = (u.get('rep') || '').trim().toLowerCase();
@@ -9324,9 +9451,57 @@ ${ADMIN_HEADER_CSS}
  .sec{margin:18px 0 6px;font-size:13px;font-weight:700;color:#1a5c3a;text-transform:uppercase;letter-spacing:.04em}
  details summary{cursor:pointer;color:#5b6b7f;font-size:13px}
  .note{font-size:12.5px;color:#5b6b7f;margin-top:3px}
+ /* ── THE ANSWER LIBRARY (F-385) ──────────────────────────────────────────────────────────
+    A SECOND VIEW, NOT A TENTH NAV ENTRY. Eric asked to "build that RFP answer library into the
+    page somewhere", and F-408 had just taken the nav from ten entries to nine for being too
+    many. Watch FINDS an opportunity and the library ANSWERS one -- the same job at two moments,
+    which is what earns two views of one page rather than two pages. Same pattern as Brokers and
+    Agencies (Performance / Marketing). */
+ .vsw{display:flex;gap:6px;margin:0 0 16px}
+ .vsw button{border:1px solid #c8d2de;background:#fff;color:#12263f;border-radius:7px;
+             padding:7px 15px;cursor:pointer;font:600 13.5px inherit}
+ .vsw button.on{background:#1a5c3a;border-color:#1a5c3a;color:#fff}
+ .prog{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:#5b6b7f;margin:0 0 12px}
+ .prog b{color:#12263f;font-variant-numeric:tabular-nums}
+ .bar{height:7px;background:#e9eef4;border-radius:4px;overflow:hidden;margin:0 0 14px}
+ .bar i{display:block;height:100%;background:#1a5c3a}
+ .qc{background:#fff;border:1px solid #e3e9f0;border-left:4px solid #c8d2de;border-radius:9px;
+     padding:14px 16px;margin:0 0 12px}
+ /* The left edge carries the STATE, because it is the one thing you scan a long list for. */
+ .qc.s-draft{border-left-color:#c8a23a} .qc.s-verified{border-left-color:#1a5c3a}
+ .qc.s-na{border-left-color:#c3ccc6;background:#fafbfc}
+ .qc .qhead{display:flex;gap:9px;align-items:baseline;flex-wrap:wrap;margin:0 0 7px}
+ .qc .qt{font-weight:600;font-size:14.5px;flex:1;min-width:240px}
+ .pchip{font:600 11px ui-monospace,Consolas,monospace;padding:2px 7px;border-radius:10px;
+        background:#eef2f7;color:#5b6b7f;white-space:nowrap}
+ .pchip.p1{background:#1a5c3a;color:#fff} .pchip.p2{background:#e8f5ee;color:#1a5c3a}
+ .qc textarea{width:100%;min-height:74px;padding:9px 11px;border:1px solid #c8d2de;
+              border-radius:7px;font:14px inherit;resize:vertical}
+ .qc textarea:focus{outline:none;border-color:#1a5c3a}
+ /* The 2025 answer is visibly NOT the answer box. It is a year old, it says "please check" in the
+    workbook it came from, and it covers FSA and LSA only. Styling it like an answer would make 46
+    unchecked claims look like 46 finished ones. */
+ .seed{background:#fbf7ec;border:1px dashed #ddc98d;border-radius:7px;padding:9px 11px;
+       margin:0 0 9px;font-size:13.5px;color:#6b5a2a}
+ .seed .lbl{display:block;font:600 11px inherit;text-transform:uppercase;letter-spacing:.03em;
+            color:#8a7433;margin:0 0 4px}
+ .seed button{background:#fff;border:1px solid #ddc98d;color:#6b5a2a;border-radius:5px;
+              padding:3px 9px;font-size:12px;cursor:pointer;margin-top:6px}
+ .qacts{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:9px;font-size:13px}
+ .qacts label{display:flex;gap:5px;align-items:center;cursor:pointer}
+ .qsave{font-size:12px;color:#8a97a8;margin-left:auto}
+ .qsave.ok{color:#1a5c3a} .qsave.bad{color:#a12622}
+ details.also summary{cursor:pointer;font-size:12.5px;color:#5b6b7f;margin:0 0 6px}
+ details.also div{font-size:12.5px;color:#5b6b7f;white-space:pre-wrap;
+                  border-left:2px solid #e3e9f0;padding-left:10px;margin:0 0 8px}
 </style></head><body>
 ${abyAdminNav('/admin/rfp-watch')}
 <main>
+  <div class="vsw">
+    <button id="vWatch" class="on" onclick="setRfpView('watch')">Opportunities</button>
+    <button id="vLib" onclick="setRfpView('library')">Answer library</button>
+  </div>
+<div id="watchView">
   <div class="card">
     <h2>RFP Watch</h2>
     <p class="sub" id="counts">Loading…</p>
@@ -9343,7 +9518,7 @@ ${abyAdminNav('/admin/rfp-watch')}
 
   <div id="lists"></div>
 
-  <div class="card">
+  <div class="card" id="pasteCard">
     <h2>Paste a list</h2>
     <p class="sub">A table with a heading row: tabs, pipes or commas. It works out the columns itself,
        shows you what it read, and refuses anything it cannot map rather than guessing.
@@ -9369,6 +9544,40 @@ ${abyAdminNav('/admin/rfp-watch')}
   <div class="card">
     <details><summary id="dropSummary">Screened out</summary><div id="dropped"></div></details>
   </div>
+</div><!-- /watchView -->
+
+<div id="libView" style="display:none">
+  <div class="card">
+    <h2>RFP answer library</h2>
+    <p class="sub">Every question the nineteen solicitations asked, folded so the same question
+      appears once. <strong>Answer them here</strong> &mdash; short and tentative is fine to start;
+      tick <em>Verified</em> only when an answer is checked and complete.</p>
+    <div class="prog" id="libProg"><span class="muted">Loading&hellip;</span></div>
+    <div class="bar"><i id="libBar" style="width:0"></i></div>
+    <div class="filters" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="lPri" onchange="loadLib()">
+        <option value="">Priority 1 and 2 (start here)</option>
+        <option value="1">1 &mdash; asked by four or more</option>
+        <option value="2">2 &mdash; asked by three</option>
+        <option value="3">3 &mdash; asked by two</option>
+        <option value="4">4 &mdash; one-offs</option>
+        <option value="all">Everything</option>
+      </select>
+      <select id="lStatus" onchange="loadLib()">
+        <option value="">Any state</option>
+        <option value="open">Not started</option>
+        <option value="draft">Draft</option>
+        <option value="verified">Verified</option>
+        <option value="na">Not applicable</option>
+      </select>
+      <select id="lTopic" onchange="loadLib()"><option value="">Any topic</option></select>
+      <input id="lFind" placeholder="Find a question" oninput="debLib()"
+             style="padding:6px 9px;border:1px solid #c8d2de;border-radius:6px;font-size:13px;min-width:200px">
+      <span class="muted" id="lCount" style="margin-left:auto;font-size:13px"></span>
+    </div>
+  </div>
+  <div id="libList"><p class="muted">Loading&hellip;</p></div>
+</div>
 </main>
 <script>
 var DATA = null;
@@ -9406,6 +9615,232 @@ function load(){
     .catch(function(e){
       document.getElementById('counts').textContent = 'Could not load: ' + (e && e.message ? e.message : e);
     });
+}
+
+// ── THE TWO VIEWS ────────────────────────────────────────────────────────────────────────
+// Watch FINDS an opportunity; the library ANSWERS one. Two moments of one job, which is what
+// earns two views rather than two pages -- the nav had just been cut from ten entries to nine.
+// The choice is REMEMBERED, like the CRM's, because whichever you use is the one you use.
+function setRfpView(v){
+  var lib = (v === 'library');
+  document.getElementById('watchView').style.display = lib ? 'none' : '';
+  document.getElementById('libView').style.display = lib ? '' : 'none';
+  document.getElementById('vWatch').className = lib ? '' : 'on';
+  document.getElementById('vLib').className = lib ? 'on' : '';
+  try { localStorage.setItem('abyRfpView', lib ? 'library' : 'watch'); } catch(e) {}
+  // Each view fetches its own rows the first time it is shown, so opening the page does not pay
+  // for the one you are not looking at.
+  if (lib && !LIB_LOADED) loadLib();
+}
+
+var LIB = [], LIB_LOADED = false, libTimer;
+function debLib(){ clearTimeout(libTimer); libTimer = setTimeout(loadLib, 250); }
+
+function esc2(x){ return String(x == null ? '' : x).replace(/[&<>"]/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+function loadLib(){
+  var p = [];
+  var pri = document.getElementById('lPri').value;
+  var st = document.getElementById('lStatus').value;
+  var tp = document.getElementById('lTopic').value;
+  var fd = document.getElementById('lFind').value.trim();
+  if (pri) p.push('priority=' + encodeURIComponent(pri));
+  if (st) p.push('status=' + encodeURIComponent(st));
+  if (tp) p.push('topic=' + encodeURIComponent(tp));
+  if (fd) p.push('q=' + encodeURIComponent(fd));
+  document.getElementById('libList').innerHTML = '<p class="muted">Loading&hellip;</p>';
+  fetch('/api/admin/rfp/library' + (p.length ? '?' + p.join('&') : ''))
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      // AN ERROR IS NOT AN EMPTY LIBRARY. Before the migration runs the table does not exist, and
+      // "no questions" would read as a finished job rather than a missing one.
+      if (j.error){
+        document.getElementById('libList').innerHTML =
+          '<div class="warn">Could not load the library: ' + esc2(j.error) +
+          '. If this is the first time, open /api/migrate once while signed in, then reload.</div>';
+        return;
+      }
+      LIB_LOADED = true; LIB = j.rows || [];
+      paintProg(j.totals || {});
+      paintTopics(j.topics || []);
+      paintLib();
+    })
+    .catch(function(e){
+      document.getElementById('libList').innerHTML =
+        '<div class="warn">Could not load the library: ' + esc2(e && e.message ? e.message : e) + '</div>';
+    });
+}
+
+// ⭐ THE PROGRESS IS OVER THE WHOLE TABLE, NEVER THE FILTERED ROWS. "How much is left" has to mean
+// the same thing every visit; a figure that moves when you change a filter is arithmetic about
+// the filter, not progress.
+function paintProg(t){
+  var total = Number(t.total || 0), ver = Number(t.verified || 0);
+  var dr = Number(t.draft || 0), na = Number(t.na || 0);
+  var done = ver + na;
+  document.getElementById('libProg').innerHTML =
+      '<span><b>' + ver + '</b> verified</span>'
+    + '<span><b>' + dr + '</b> draft</span>'
+    + '<span><b>' + na + '</b> not applicable</span>'
+    + '<span><b>' + Math.max(0, total - ver - dr - na) + '</b> not started</span>'
+    + '<span><b>' + Number(t.p12_open || 0) + '</b> left in priority 1 and 2</span>'
+    + (Number(t.docs || 0) ? '<span><b>' + t.docs + '</b> need a document</span>' : '');
+  document.getElementById('libBar').style.width = total ? Math.round(done * 100 / total) + '%' : '0';
+}
+
+function paintTopics(list){
+  var sel = document.getElementById('lTopic');
+  if (sel.options.length > 1) return;   // built once; rebuilding would drop the current choice
+  for (var i = 0; i < list.length; i++){
+    var o = document.createElement('option');
+    o.value = list[i].topic;
+    o.textContent = list[i].topic + ' (' + list[i].n + ')';
+    sel.appendChild(o);
+  }
+}
+
+function paintLib(){
+  document.getElementById('lCount').textContent = LIB.length + ' question' + (LIB.length === 1 ? '' : 's');
+  if (!LIB.length){
+    document.getElementById('libList').innerHTML =
+      '<p class="muted">Nothing matches those filters. Widen them, or switch the priority to Everything.</p>';
+    return;
+  }
+  var h = '';
+  for (var i = 0; i < LIB.length; i++) h += card(LIB[i]);
+  document.getElementById('libList').innerHTML = h;
+}
+
+function card(r){
+  var st = r.status || '';
+  var id = esc2(r.id);
+  var pc = 'pchip' + (r.priority === 1 ? ' p1' : r.priority === 2 ? ' p2' : '');
+  var h = '<div class="qc s-' + esc2(st || 'none') + '" id="qc_' + id + '">'
+    + '<div class="qhead">'
+    + '<span class="' + pc + '">P' + esc2(r.priority) + '</span>'
+    + '<span class="qt">' + esc2(r.question) + '</span>'
+    + '<span class="muted" style="font-size:12px">' + esc2(r.topic || '') + '</span>'
+    // ⭐ HOW MANY RFPs ASKED IT is the reason this question is where it is in the list, so it is
+    // on screen rather than implied by the sort order.
+    + '<span class="muted" style="font-size:12px">asked by ' + esc2(r.asked_by) + '</span>'
+    + '</div>';
+
+  if (r.also_asked) h += '<details class="also"><summary>Other wordings</summary><div>'
+    + esc2(r.also_asked) + '</div></details>';
+
+  // The 2025 answer is a SUGGESTION and is styled so it cannot be mistaken for the answer.
+  if (r.seed_answer) h += '<div class="seed"><span class="lbl">ABY told College Station in 2025 &mdash; please check</span>'
+    + esc2(r.seed_answer)
+    + '<br><button type="button" onclick="useSeed(' + "'" + id + "'" + ')">Use this as a starting point</button></div>';
+
+  h += '<textarea id="ta_' + id + '" placeholder="Short and tentative is fine to start" '
+    + 'onblur="saveAnswer(' + "'" + id + "'" + ')">' + esc2(r.answer || '') + '</textarea>'
+    + '<div class="qacts">'
+    + '<label><input type="checkbox" id="vf_' + id + '"' + (st === 'verified' ? ' checked' : '')
+    + ' onchange="setStatus(' + "'" + id + "'" + ', this.checked ? ' + "'verified'" + ' : ' + "'draft'" + ')"> Verified and complete</label>'
+    + '<label><input type="checkbox" id="na_' + id + '"' + (st === 'na' ? ' checked' : '')
+    + ' onchange="setStatus(' + "'" + id + "'" + ', this.checked ? ' + "'na'" + ' : ' + "''" + ')"> Not applicable</label>'
+    + '<label><input type="checkbox" id="nd_' + id + '"' + (r.needs_doc ? ' checked' : '')
+    + ' onchange="setDoc(' + "'" + id + "'" + ', this.checked)"> Needs a document</label>'
+    + '<select onchange="setOwner(' + "'" + id + "'" + ', this.value)" style="font-size:12.5px">'
+    + '<option value=""' + (!r.owner ? ' selected' : '') + '>&mdash; nobody yet &mdash;</option>'
+    + '<option value="niels"' + (r.owner === 'niels' ? ' selected' : '') + '>Niels</option>'
+    + '<option value="eric"' + (r.owner === 'eric' ? ' selected' : '') + '>Eric</option>'
+    + '</select>'
+    + '<span class="qsave" id="sv_' + id + '"></span>'
+    + '</div>'
+    // Only when it is flagged, so 367 empty boxes do not sit on screen asking a question nobody
+    // has been asked yet.
+    + '<div id="dn_' + id + '" style="' + (r.needs_doc ? '' : 'display:none;') + 'margin-top:8px">'
+    + '<input id="di_' + id + '" placeholder="Which document answers this, and where is it?" '
+    + 'value="' + esc2(r.doc_note || '') + '" onblur="saveDocNote(' + "'" + id + "'" + ')" '
+    + 'style="width:100%;padding:7px 9px;border:1px solid #c8d2de;border-radius:6px;font-size:13px">'
+    + '</div>'
+    + '</div>';
+  return h;
+}
+
+function rowOf(id){ for (var i = 0; i < LIB.length; i++) if (LIB[i].id === id) return LIB[i]; return null; }
+function flash(id, text, bad){
+  var el = document.getElementById('sv_' + id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'qsave' + (bad ? ' bad' : (text ? ' ok' : ''));
+}
+
+function post(id, body, after){
+  flash(id, 'Saving...', false);
+  fetch('/api/admin/rfp/answer', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(Object.assign({ id: id }, body)),
+  }).then(function(r){ return r.json().then(function(j){ return { ok: r.ok, j: j }; }); })
+    .then(function(res){
+      if (!res.ok){ flash(id, res.j.error || 'Not saved', true); return; }
+      // ⛔ THE ROW IS REPLACED FROM WHAT THE DATABASE SENT BACK, never from what we hoped we sent.
+      // Otherwise the screen agrees with itself while the store holds something else.
+      var r = rowOf(id);
+      if (r && res.j.row) for (var k in res.j.row) r[k] = res.j.row[k];
+      flash(id, 'Saved', false);
+      if (after) after(r);
+      loadProgOnly();
+    })
+    .catch(function(e){
+      // A NETWORK FAILURE IS NOT A REFUSAL. "Not saved" alone would have somebody retype it.
+      flash(id, 'Could not reach the server, so nothing was saved', true);
+    });
+}
+
+// The counters move on every save, and re-fetching the whole list would throw away a textarea
+// somebody is part way through. So the totals are refreshed on their own.
+function loadProgOnly(){
+  fetch('/api/admin/rfp/library?priority=1&status=verified')
+    .then(function(r){ return r.json(); })
+    .then(function(j){ if (!j.error) paintProg(j.totals || {}); })
+    .catch(function(){});
+}
+
+function saveAnswer(id){
+  var r = rowOf(id); if (!r) return;
+  var v = document.getElementById('ta_' + id).value;
+  if (v === (r.answer || '')) { flash(id, '', false); return; }   // nothing typed: no write, no noise
+  // ⭐ TYPING SOMETHING MAKES IT A DRAFT, unless it is already verified or set aside. Leaving a
+  // typed answer at "not started" is how a question with words in it reads as untouched.
+  var body = { answer: v };
+  if (!r.status) body.status = v.trim() ? 'draft' : '';
+  post(id, body, function(row){ if (row) applyState(id, row); });
+}
+function setStatus(id, st){ post(id, { status: st }, function(row){ if (row) applyState(id, row); }); }
+function setOwner(id, ow){ post(id, { owner: ow }); }
+function setDoc(id, on){
+  document.getElementById('dn_' + id).style.display = on ? '' : 'none';
+  post(id, { needsDoc: on });
+}
+function saveDocNote(id){
+  var r = rowOf(id); if (!r) return;
+  var v = document.getElementById('di_' + id).value;
+  if (v === (r.doc_note || '')) return;
+  post(id, { docNote: v });
+}
+function useSeed(id){
+  var r = rowOf(id); if (!r || !r.seed_answer) return;
+  var ta = document.getElementById('ta_' + id);
+  // ⛔ NEVER OVERWRITES TYPED TEXT. The button is a starting point, and somebody who has already
+  // written something has passed that point.
+  if (ta.value.trim()){ flash(id, 'There is already an answer here', true); return; }
+  ta.value = r.seed_answer;
+  ta.focus();
+  saveAnswer(id);
+}
+
+// Repaint just the chrome of one card, so the state is visible without redrawing the list and
+// losing whatever else is half typed.
+function applyState(id, row){
+  var el = document.getElementById('qc_' + id);
+  if (el) el.className = 'qc s-' + (row.status || 'none');
+  var vf = document.getElementById('vf_' + id), na = document.getElementById('na_' + id);
+  if (vf) vf.checked = row.status === 'verified';
+  if (na) na.checked = row.status === 'na';
 }
 
 function render(j){
@@ -9569,6 +10004,13 @@ function addOne(){
 
 function logout(){ fetch('/api/admin/logout',{method:'POST'}).then(function(){ location.href='/admin'; }); }
 load();
+
+// THE REMEMBERED VIEW IS RESTORED AFTER load(), NOT BEFORE. load() paints the Opportunities
+// list; restoring first would hide the container it is about to write into, and the library
+// would then fetch on top of a page still settling. Watch is the default for a first visit.
+try {
+  if (localStorage.getItem('abyRfpView') === 'library') setRfpView('library');
+} catch (e) { /* private mode: the default view is correct, not an error */ }
 </script>
 </body></html>`;
 }
@@ -11143,6 +11585,57 @@ const MIGRATIONS = [
   // A stored status is a value that rots the moment a deadline passes; the same lesson the recorded
   // broker status taught the other way round. What IS stored is the observation: closes_at_source,
   // verified_at, verified_by.
+  // ── THE RFP ANSWER LIBRARY (F-385) ──────────────────────────────────────────────────────────
+  //
+  // ERIC, 2026-08-26: "the full question list you provided the other day, organized by priority,
+  // with boxes for Niels to answer... we need to capture the answers first, and for that we need
+  // the questions."
+  //
+  // ⭐⭐ CAPTURE FIRST, STRUCTURE LATER, AND HE IS RIGHT: there is nothing to retrieve until
+  // somebody has written an answer. Designing the retrieval over content that does not exist is
+  // how you end up with a beautiful empty screen.
+  //
+  // ⛔ IT IS NOT IN THE BENEFITS RAG AND MUST NOT GO THERE (Eric, 2026-08-26, overruling the
+  // earlier plan): "The ABY answers cannot go into our Benefits RAG knowledge base."
+  //
+  // ⚠️ THE SEED ANSWER AND THE ANSWER ARE TWO COLUMNS, NEVER ONE. `seed_answer` is what ABY told
+  // College Station in 2025; it is a year old, covers FSA and LSA only because that is all that
+  // bid asked, and its own header in the workbook says "please check". Pre-filling `answer` with
+  // it would turn 46 unchecked claims into 46 answers nobody wrote, and nothing would ever
+  // distinguish them again.
+  { sql: "CREATE TABLE IF NOT EXISTS rfp_answer (" +
+         "  id TEXT PRIMARY KEY," +
+         "  priority INTEGER NOT NULL," +          // 1 first, 2 next, 3 later, 4 one-off
+         "  topic TEXT," +
+         "  question TEXT NOT NULL," +
+         "  also_asked TEXT," +                    // the folded duplicate phrasings
+         "  asked_by INTEGER NOT NULL DEFAULT 1," + // how many of the 19 solicitations asked it
+         "  seed_answer TEXT," +                   // ABY's 2025 College Station answer. READ ONLY.
+         "  answer TEXT," +                        // what Niels writes
+         // '' not started | draft | verified | na. ⭐ `na` IS A REAL OUTCOME, NOT A GAP -- the
+         // same ruling RFP Watch already makes with "could not tell". 249 of the 367 are one-offs
+         // and some are questions ABY would never answer; without this, a question deliberately
+         // skipped looks identical to one nobody has reached.
+         "  status TEXT NOT NULL DEFAULT ''," +
+         "  needs_doc INTEGER NOT NULL DEFAULT 0," +
+         "  doc_note TEXT," +                      // WHICH document answers it. See the note below.
+         // ⚠️ Numbers about ABY are FACTS WITH A DATE, not strings. The College Station submission
+         // says 1,250 active clients in Tab A and 750+ in Tab B -- in one document, to a
+         // government buyer. An answer carrying a figure needs a review date or it rots in place.
+         "  has_dated_fact INTEGER NOT NULL DEFAULT 0," +
+         "  review_by TEXT," +
+         // 🔴 NOT A USER. The ABY admin has ONE shared password and cannot tell Eric from Niels
+         // (F-405), so this is a PICKED owner, exactly like the /admin/today to-do list. Never
+         // build a "mine" here.
+         "  owner TEXT," +
+         "  updated_at TEXT" +
+         ")",
+    table: "rfp_answer" },
+  { sql: "CREATE INDEX IF NOT EXISTS rfp_answer_priority ON rfp_answer (priority, topic)",
+    index: "rfp_answer_priority" },
+  { sql: "CREATE INDEX IF NOT EXISTS rfp_answer_status ON rfp_answer (status)",
+    index: "rfp_answer_status" },
+
   { sql: "CREATE TABLE IF NOT EXISTS rfp_opportunity (" +
          "  id TEXT PRIMARY KEY," +
          "  entity_name TEXT NOT NULL," +

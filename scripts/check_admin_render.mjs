@@ -73,14 +73,14 @@ function build(text) {
     if (!s) throw new Error("could not find " + d.trim() + " at module scope");
     parts.push(s);
   }
-  for (const fn of ["adminHTML", "adminBrokersHTML"]) {
+  for (const fn of ["adminHTML", "adminBrokersHTML", "adminRfpHTML"]) {
     const s = slice("function " + fn + "(", text);
     if (!s) throw new Error("could not find " + fn);
     parts.push(s);
   }
   // The guide body is imported, not declared. Stubbed here because no rule below reads it.
   const code = "const ADMIN_GUIDE_HTML = '';\n" + parts.join("\n") +
-               "\n;({ log: adminHTML(), brokers: adminBrokersHTML() });";
+               "\n;({ log: adminHTML(), brokers: adminBrokersHTML(), rfp: adminRfpHTML() });";
   return (0, eval)(code);
 }
 
@@ -176,6 +176,57 @@ const RULES = [
     // and the sabotage-must-apply guard is what said so, on the first run.
     holds: (p) => /<div id="qAcaWrap" style="display:none;/.test(p.log),
   },
+  // ── THE RFP ANSWER LIBRARY (F-385) ──────────────────────────────────────────────────────
+  {
+    name: "the answer library is a VIEW of RFP Watch, not a tenth nav entry",
+    why: "Eric asked to build it 'into the page somewhere', and F-408 had just cut the nav from ten"
+       + " entries to nine for being too many. Watch finds an opportunity; the library answers one.",
+    holds: (p) => /id="libView"/.test(p.rfp)
+               && /id="watchView"/.test(p.rfp)
+               && /function setRfpView\(/.test(p.rfp)
+               && !/href="\/admin\/rfp-library"/.test(p.rfp),
+  },
+  {
+    name: "it opens on priority 1 and 2, not on all 367",
+    why: "Eric's own instruction: 'send Niels the filter set to priority 1 and 2 -- 61 questions,"
+       + " one sitting.' Opening on 367 is what makes somebody close the tab, and the 249 one-offs"
+       + " belong in the library without being homework.",
+    holds: (p) => /<option value="">Priority 1 and 2 \(start here\)<\/option>/.test(p.rfp),
+  },
+  {
+    name: "the 2025 answer is a suggestion, never pre-filled into the answer box",
+    why: "It is a year old, its own column header says 'please check', and it covers FSA and LSA"
+       + " only because that is all College Station asked. Pre-filling would turn 46 unchecked"
+       + " claims into 46 answers nobody wrote, and nothing would tell them apart again.",
+    holds: (p) => /class="seed"/.test(p.rfp)
+               && /Use this as a starting point/.test(p.rfp)
+               && /if \(ta\.value\.trim\(\)\)\{ flash\(id, 'There is already an answer here', true\); return; \}/.test(p.rfp),
+  },
+  {
+    name: "verified, not applicable and needs-a-document are all recordable",
+    why: "Eric asked for the verified box. 'Not applicable' is the one he did not ask for and the"
+       + " library needs: 249 of the 367 are one-offs, and a question deliberately set aside must"
+       + " not look identical to one nobody has reached.",
+    // ⛔ ANCHORED ON THE CHECKBOX IDS, NOT ON THE WORDS. "Not applicable" also appears in the
+    // FILTER dropdown, so a rule matching the phrase stayed green with the control deleted -- the
+    // sabotage said MISSED and was right. A rule about a control must name the control.
+    holds: (p) => /id="vf_/.test(p.rfp) && /Verified and complete/.test(p.rfp)
+               && /id="na_/.test(p.rfp) && /Not applicable<\/label>/.test(p.rfp)
+               && /id="nd_/.test(p.rfp) && /Needs a document/.test(p.rfp),
+  },
+  {
+    name: "an answer saves itself, and the screen believes the DATABASE",
+    why: "367 questions is not a form anybody presses Save on. And a page that updates its own copy"
+       + " from what it hoped it sent will agree with itself while the store holds something else.",
+    holds: (p) => /onblur="saveAnswer\(/.test(p.rfp)
+               && /for \(var k in res\.j\.row\) r\[k\] = res\.j\.row\[k\];/.test(p.rfp),
+  },
+  {
+    name: "a failed load says so instead of showing an empty library",
+    why: "Before the migration runs the table does not exist. 'No questions' would read as a"
+       + " finished job rather than a missing one -- the third time this admin has had to learn it.",
+    holds: (p) => /Could not load the library: /.test(p.rfp),
+  },
   {
     name: "no page ships the words 'not recorded'",
     why: "It printed under all 665 firms, because 0 of them had a recorded status. Eric asked what"
@@ -213,6 +264,19 @@ const SABOTAGES = [
                            '<button type="button" class="pp" data-aca="fullLt100">1094/1095-C full</button>') },
   { why: "the ACA question ships visible, asking about a product nobody picked",
     edit: (t) => t.replace('<div id="qAcaWrap" style="display:none;', '<div id="qAcaWrap" style="display:block;') },
+  { why: "the library loses its view container, so the switch shows nothing",
+    edit: (t) => t.replace('<div id="libView" style="display:none">', '<div id="gone" style="display:none">') },
+  { why: "the library opens on all 367 questions instead of the 61 that are the job",
+    edit: (t) => t.replace('<option value="">Priority 1 and 2 (start here)</option>',
+                           '<option value="all">Everything</option>') },
+  { why: "the 2025 answer starts overwriting whatever Niels has already typed",
+    edit: (t) => t.replace("if (ta.value.trim()){ flash(id, 'There is already an answer here', true); return; }", "") },
+  { why: "'Not applicable' goes, so a skipped question looks like an unread one",
+    edit: (t) => t.replace(/id="na_/g, 'id="gone_') },
+  { why: "the page starts trusting its own copy instead of the row the database returned",
+    edit: (t) => t.replace("for (var k in res.j.row) r[k] = res.j.row[k];", "") },
+  { why: "a failed library load renders as an empty library",
+    edit: (t) => t.replace(/Could not load the library: /g, "") },
   { why: "the 'not recorded' line comes back under every firm",
     edit: (t) => t.replace("     return '<span>' + esc(live) + '</span>';",
                            "     return '<span>' + esc(live) + '</span>' + '<div>not recorded</div>';") },
