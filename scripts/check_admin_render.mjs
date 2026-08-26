@@ -140,9 +140,21 @@ const RULES = [
     why: "Eric, 2026-08-26: 'Hard to tell where it starts and ends.' Open, it is an eleven-field"
        + " form sitting directly on top of a table of quotes. Shut, it is a one-line control in a"
        + " toolbar, and boxing THAT would read as an alert -- so the rule pins both halves.",
-    holds: (p) => /\.logq\[open\]\{[^}]*border:1px solid/.test(p.log)
-               && /\.logq\[open\]\{[^}]*background:#f4f8f5/.test(p.log)
-               && !/\n\.logq\{[^}]*border-radius/.test(p.log),
+    // ⭐ ASSERTS CONTRAST, NOT A COLOUR, because a named colour is exactly what went wrong: the
+    // first version was tinted #f4f8f5 on a #f0f4f0 page and was invisible. A rule pinning that
+    // hex would have passed on the broken version. So it reads the page's OWN body background out
+    // of the same stylesheet and requires the panel not to match it.
+    holds: (p) => {
+      const open = /\.logq\[open\]\{([^}]*)\}/.exec(p.log);
+      if (!open) return false;
+      const body = /body\{[^}]*background:(#[0-9a-f]{3,6})/.exec(p.log);
+      if (!body) return false;                       // could not read it: unchecked, never a pass
+      const panel = /background:(#[0-9a-f]{3,6})/.exec(open[1]);
+      if (!panel) return false;
+      return panel[1].toLowerCase() !== body[1].toLowerCase()
+          && /border:2px solid/.test(open[1])
+          && !/\n\.logq\{[^}]*border-radius/.test(p.log);
+    },
   },
   {
     name: "an ACA quote can record WHICH form set, and is not asked for a tier",
@@ -188,7 +200,9 @@ const SABOTAGES = [
   { why: "the A-Z bar's mount point is removed",
     edit: (t) => t.replace('<div class="azbar" id="azbar"></div>', "") },
   { why: "the open panel loses its border, so the form runs into the quote table again",
-    edit: (t) => t.replace("border:1px solid #cfe0d5;border-bottom-color:#cfe0d5;", "") },
+    edit: (t) => t.replace("border:2px solid #1a5c3a;", "") },
+  { why: "the open panel is tinted the same colour as the page behind it -- the real bug",
+    edit: (t) => t.replace(".logq[open]{background:#fff;", ".logq[open]{background:#f0f4f0;") },
   { why: "the shut panel gets boxed too, so a one-line control reads as an alert",
     edit: (t) => t.replace(".logq{background:#fff;border-bottom:1px solid #e5e5e5}",
                            ".logq{background:#fff;border-bottom:1px solid #e5e5e5;border-radius:10px}") },

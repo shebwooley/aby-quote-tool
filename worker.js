@@ -11732,9 +11732,20 @@ ${ADMIN_HEADER_CSS}
    directly above a table of quotes -- and with no edge, the last row of the form and the first row
    of the log ran into each other, which is what he was seeing. */
 .logq{background:#fff;border-bottom:1px solid #e5e5e5}
-.logq[open]{background:#f4f8f5;border:1px solid #cfe0d5;border-bottom-color:#cfe0d5;
-            border-radius:10px;margin:12px 24px;box-shadow:0 1px 3px rgba(26,92,58,.07)}
-.logq[open]>summary{border-bottom:1px solid #dfeae2;margin-bottom:6px}
+/* 🔴 THE FIRST ATTEMPT TINTED IT #f4f8f5 AND THIS PAGE'S BACKGROUND IS #f0f4f0 -- two pale greens
+   four hex digits apart, so the panel Eric asked to have STAND OUT was invisible against the page
+   it sits on. Eric: "the same color as the background behind it."
+   ⭐ THE MISTAKE WAS PICKING A TINT WITHOUT READING THE BACKGROUND IT LANDS ON. A colour is never
+   a property of the element; it is a property of the CONTRAST, and the page's own value was one
+   grep away.
+   ▶️ WHITE plus a real border does the work instead, and white is not a blend here either: the
+   toolbar and the table are already white cards floating on the green, so this reads as one more
+   card -- and the 2px brand-green edge and the deeper shadow are what say it is the OPEN one.
+   The summary keeps a green strip so the header reads as the panel's handle. */
+.logq[open]{background:#fff;border:2px solid #1a5c3a;border-radius:10px;margin:12px 24px;
+            box-shadow:0 3px 10px rgba(26,92,58,.16)}
+.logq[open]>summary{background:#e8f5ee;border-bottom:1px solid #cfe0d5;
+                    border-radius:8px 8px 0 0;margin-bottom:8px}
 .logq>summary{cursor:pointer;user-select:none;list-style:none;padding:10px 24px;
               font-size:.9rem;font-weight:600;color:#1a5c3a;display:flex;align-items:center;gap:8px}
 .logq>summary::-webkit-details-marker{display:none}
