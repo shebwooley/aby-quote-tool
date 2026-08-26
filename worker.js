@@ -2523,7 +2523,27 @@ async function handleCrmAgencies(request, env) {
   // \u26d4 THREE THINGS ARE NOT CALLABLE FIRMS: an acquired name, a spelling variant of another
   // firm, and a row whose NAME is two firms at once. All three are hidden and all three are
   // counted out loud, because a list that quietly drops rows cannot be told from one that lost them.
-  const where = ["COALESCE(a.relationship,'') NOT IN ('succeeded','alias')", "a.name NOT LIKE '%;%'"];
+  // ── WHO IS ON THE MARKETING LIST ────────────────────────────────────────────────────────
+  //
+  // ?disposition=  (blank)   the working list: nobody who has been dispositioned
+  //              = <value>   just that reason, so "show me everyone who told us no" is one click
+  //              = any       everything that has been dispositioned, whatever the reason
+  //              = all       genuinely everything -- EXCEPT the suppressed, see below
+  //
+  // 🔴 `do_not_contact` IS NEVER IN A RESULT, AND `all` DOES NOT MEAN ALL. Every other value here
+  // is a filter -- a view over rows that all exist. That one is an instruction from the person,
+  // and a filter you can widen until it reappears is not a suppression, it is a default. Eric
+  // asked for "unsubscribed (do not contact)" in the same breath as the others; it is stored the
+  // same way and enforced differently, on purpose.
+  // ⭐ The FIRM PANEL still shows it -- that is how somebody sees the record and why. What this
+  // rule governs is the LIST you work from.
+  const disposition = (u.get('disposition') || '').trim().toLowerCase();
+  const where = ["COALESCE(a.relationship,'') NOT IN ('succeeded','alias')", "a.name NOT LIKE '%;%'",
+                 "COALESCE(a.disposition,'') NOT IN ('" + SUPPRESSED.join("','") + "')"];
+  if (disposition === 'all') { /* everything that is not suppressed */ }
+  else if (disposition === 'any') where.push("COALESCE(a.disposition,'') <> ''");
+  else if (DISPOSITIONS.includes(disposition)) { where.push("COALESCE(a.disposition,'') = ?"); args.push(disposition); }
+  else where.push("COALESCE(a.disposition,'') = ''");
   const args = [];
   if (rep) { where.push("lower(COALESCE(a.assigned_rep,'')) = ?"); args.push(rep); }
   if (priority) { where.push("COALESCE(a.priority,'') = ?"); args.push(priority); }
@@ -2545,11 +2565,40 @@ async function handleCrmAgencies(request, env) {
     "     s AS (SELECT lower(trim(agency)) k, COUNT(*) sales FROM aby_sales " +
     "           WHERE trim(COALESCE(agency,'')) <> '' GROUP BY 1) " +
     'SELECT a.id, a.name, a.city, a.state, a.priority, a.assigned_rep, a.needs_review, ' +
+    '       a.disposition, a.disposition_note, a.disposition_at, ' +
     '       a.relationship, a.parent_id, a.relationship_note, pa.name AS parent_name, ' +
     // Carried so the firm panel can show that a name is settled, and the row can say so too.
     '       a.name_confirmed_at, ' +
-    '       COALESCE(q.quotes, 0) AS quotes, q.last_quote, ' +
-    '       COALESCE(s.sales, 0) AS sales, ' +
+    // ── A PARENT TOTALS ITS BRANCHES (Eric, 2026-08-26) ──────────────────────────────────
+    //
+    // "Why on Patriot Growth Insurance Services does it not show the total of the branches below
+    // it? It shows never quoted, but shouldn't the main company total everything below it
+    // (without double counting in the total)?"
+    //
+    // He is right, and it read worse than wrong: Patriot Growth showed NEVER QUOTED while its two
+    // divisions between them hold 350 quotes -- 332 on Benefits Texas and 18 on JME. The join
+    // matches a quote to an agency BY NAME, and no quote has ever carried the parent's name,
+    // so the parent could only ever have counted zero.
+    //
+    // ⭐ THE ANALYSIS VIEW ALREADY DID THIS AND THIS ONE DID NOT. It groups on
+    // COALESCE(pa.name, <the quote's own agency>), one hop, so a division's quotes land under its
+    // parent. Two views of one book disagreeing about who owns a quote is worse than either
+    // answer, so this follows the SAME rule rather than inventing a second.
+    //
+    // ⛔ ONE HOP, exactly like the analysis join, and for the same reason: the seeding script
+    // asserts no parent is itself a child, so a chain cannot form and this cannot truncate one.
+    //
+    // ⚠️ NO DOUBLE COUNTING, WHICH IS THE HALF ERIC NAMED. A branch still shows its OWN number and
+    // the parent shows the total -- and the branches render INDENTED UNDER the parent, so the
+    // relationship is on screen rather than implied. `own_quotes` is returned beside the rollup so
+    // a row can say both without either being recomputed in the page.
+    '       COALESCE(q.quotes, 0) AS own_quotes, ' +
+    '       COALESCE(q.quotes, 0) + COALESCE((SELECT SUM(cq.quotes) FROM agencies c ' +
+    '          JOIN q cq ON cq.k = lower(trim(c.name)) WHERE c.parent_id = a.id), 0) AS quotes, ' +
+    '       q.last_quote, ' +
+    '       COALESCE(s.sales, 0) AS own_sales, ' +
+    '       COALESCE(s.sales, 0) + COALESCE((SELECT SUM(cs.sales) FROM agencies c2 ' +
+    '          JOIN s cs ON cs.k = lower(trim(c2.name)) WHERE c2.parent_id = a.id), 0) AS sales, ' +
     // ⭐ BOTH KINDS OF PERSON ARE COUNTED. Somebody held by name and firm has no broker_directory
     // row by design, so counting only that table would have reported "0 agents" for a firm whose
     // whole team we had just imported -- the count quietly meaning "agents with an email".
@@ -2887,6 +2936,28 @@ async function handleCrmRename(request, env) {
                     confirmed: confirm, quotes, sales });
 }
 
+/**
+ * WHY A FIRM OR A PERSON IS OFF THE MARKETING LIST. Blank means they are on it.
+ *
+ * ⛔ `do_not_contact` IS NOT LIKE THE OTHERS AND THE CODE TREATS IT THAT WAY. The rest are
+ * judgments that can be revisited -- a firm that was out of business can reopen, a firm that said
+ * no can be asked again next year. That one is an instruction from the person themselves, and
+ * `SUPPRESSED` below is what stops any list including them, whatever filter is set.
+ */
+// ⚠️ TWO OF THESE ARE ABOUT A PERSON, NOT A FIRM, and the first draft had only firm-shaped
+// values. Eric, 2026-08-26: "part of that field should be no longer in business or deceased or
+// something." A firm goes out of business; a person dies or moves on, and their FIRM is unaffected.
+// Sharing one vocabulary is right -- the question ("why are they off the list?") is the same -- but
+// the values have to cover both subjects or the person-level reasons get recorded as firm-level ones.
+const DISPOSITIONS = ['out_of_business', 'no_group_products', 'not_interested', 'do_not_contact',
+                      'deceased', 'left_the_firm', 'wrong_record'];
+// ⛔ NEVER IN ANY LIST, WHATEVER FILTER IS SET.
+//  because the person asked.  for a reason that needs no argument -- and
+// it belongs here rather than among the ordinary reasons because "show me everything" must not be
+// able to put a dead person back into an outreach list. Both stay visible on the firm panel, which
+// is where the record is kept and where somebody looks to find out why.
+const SUPPRESSED = ['do_not_contact', 'deceased'];
+
 async function handleCrmAgencyField(request, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
   const id = String(body.id || '').trim();
@@ -2905,6 +2976,13 @@ async function handleCrmAgencyField(request, env) {
       const s = String(v || '').trim().toLowerCase();
       return (s === '' || s === 'eric' || s === 'niels' || s === 'open') ? s || null : undefined;
     },
+    disposition: (v) => {
+      const d = String(v || '').trim().toLowerCase();
+      // '' puts them back on the list, which has to stay possible: a firm marked out of business
+      // that turns out to be trading is a correction, not a new record.
+      return (d === '' || DISPOSITIONS.includes(d)) ? d || null : undefined;
+    },
+    disposition_note: (v) => String(v || '').trim().slice(0, 500) || null,
     city: (v) => String(v || '').trim().slice(0, 80) || null,
     state: (v) => {
       const s = String(v || '').trim().toUpperCase();
@@ -2921,7 +2999,19 @@ async function handleCrmAgencyField(request, env) {
   const value = allowed[field](body.value);
   if (value === undefined) return jsonResp({ error: 'That value is not one of the allowed ones.' }, 400);
 
-  const r = await env.DB.prepare('UPDATE agencies SET ' + field + ' = ? WHERE id = ?').bind(value, id).run();
+  // ⭐ SETTING A DISPOSITION STAMPS WHEN. "Not interested" in 2024 is a different fact from
+  // "not interested" last week, and without the date nobody can tell them apart -- which is how a
+  // list of nos slowly becomes a list nobody dares re-approach.
+  // ⛔ CLEARING IT CLEARS THE DATE TOO. A stamp left on a firm that is back on the list is a
+  // claim about a decision that has been withdrawn.
+  const stamp = (field === 'disposition');
+  const sql = stamp
+    ? 'UPDATE agencies SET disposition = ?, disposition_at = ? WHERE id = ?'
+    : 'UPDATE agencies SET ' + field + ' = ? WHERE id = ?';
+  const binds = stamp
+    ? [value, value ? new Date().toISOString() : null, id]
+    : [value, id];
+  const r = await env.DB.prepare(sql).bind(...binds).run();
   if (!r || !r.meta || !r.meta.changes) return jsonResp({ error: 'No such agency.' }, 404);
   return jsonResp({ ok: true, field, value, metro: field === 'city' ? metroFor(value, body.state) : undefined });
 }
@@ -4621,6 +4711,23 @@ ${abyAdminNav('/admin/brokers')}
           <option value="niels">Niels</option>
           <option value="open">Open</option>
         </select>
+        <!-- ⭐ THE STATE FILTER WAS ALREADY WIRED SERVER-SIDE AND HAD NO CONTROL. handleCrmAgencies
+             has accepted ?state= since it was written; nothing on any screen ever sent one.
+             Eric: "I do want to have a way to assign state to agencies and using that as a filter
+             ... I mainly want it for the ones that have never quoted with us." -->
+        <select id="mState" onchange="loadMkt()"><option value="">Any state</option></select>
+        <!-- ⛔ DEFAULTS TO THE WORKING LIST. A list that opens showing firms somebody has already
+             taken off it is the reason they were taken off it. -->
+        <select id="mDisp" onchange="loadMkt()">
+          <option value="">On the list</option>
+          <option value="any">Taken off the list</option>
+          <option value="out_of_business">&mdash; out of business</option>
+          <option value="no_group_products">&mdash; no group products</option>
+          <option value="not_interested">&mdash; told us no</option>
+          <option value="left_the_firm">&mdash; no longer at this firm</option>
+          <option value="wrong_record">&mdash; not a real firm</option>
+          <option value="all">Everything</option>
+        </select>
         <select id="mTag" onchange="loadMkt()"><option value="">Any tag</option></select>
         <input id="mFind" placeholder="Find a firm" oninput="paintMkt()"
                style="padding:5px 8px;border:1px solid #c8d2de;border-radius:5px;font-size:13px">
@@ -5662,6 +5769,11 @@ ${abyAdminNav('/admin/brokers')}
    // the shared rep variable meant a filter set on the analysis silently narrowed this list with
    // screen to explain it -- an effect whose cause was invisible.
    var qd = q('mQuoted').value, pr = q('mPriority').value, tg = q('mTag').value, mr = q('mRep').value;
+   var st = q('mState').value, dp = q('mDisp').value;
+   if (st) p.push('state=' + encodeURIComponent(st));
+   // ⛔ SENT EVEN WHEN BLANK IS THE DEFAULT... no: blank IS the default on the server too, so an
+   // absent parameter and an empty one mean the same thing. Only send what changes the answer.
+   if (dp) p.push('disposition=' + encodeURIComponent(dp));
    if (qd) p.push('quoted=' + encodeURIComponent(qd));
    if (pr) p.push('priority=' + encodeURIComponent(pr));
    if (tg) p.push('tag=' + encodeURIComponent(tg));
@@ -6198,6 +6310,34 @@ ${abyAdminNav('/admin/brokers')}
 
  // Painted from mktRows -- what the SERVER filters returned -- not from the letter-filtered set,
  // or choosing a letter would grey out every other letter and strand you on it.
+ // Built from the states actually present, so it can never offer one with nothing behind it --
+ // and it is rebuilt only once, or changing it would drop the choice you just made.
+ function paintStates(){
+   var sel = q('mState');
+   if (!sel || sel.options.length > 1) return;
+   var seen = {};
+   for (var i = 0; i < mktRows.length; i++){
+     var v = String(mktRows[i].state || '').toUpperCase();
+     if (v) seen[v] = (seen[v] || 0) + 1;
+   }
+   var keys = Object.keys(seen).sort();
+   // ⚠️ SAYS SO WHEN IT KNOWS NOTHING. 0 of 665 firms carry a state today (F-390), so an empty
+   // dropdown here is the ordinary case and must not read as a broken control.
+   if (!keys.length){
+     var o = document.createElement('option');
+     o.value = ''; o.disabled = true;
+     o.textContent = 'No states recorded yet';
+     sel.appendChild(o);
+     return;
+   }
+   for (var k = 0; k < keys.length; k++){
+     var op = document.createElement('option');
+     op.value = keys[k];
+     op.textContent = keys[k] + ' (' + seen[keys[k]] + ')';
+     sel.appendChild(op);
+   }
+ }
+
  function renderAZ(){
    var have = {};
    for (var i = 0; i < mktRows.length; i++) have[letterOf(mktRows[i].name)] = 1;
@@ -6249,6 +6389,7 @@ ${abyAdminNav('/admin/brokers')}
 
  function paintMkt(){
    renderAZ();
+   paintStates();
    var find = (q('mFind').value || '').trim().toLowerCase();
    var rows = mktRows;
    if (find) rows = rows.filter(function(x){ return String(x.name || '').toLowerCase().indexOf(find) !== -1; });
@@ -6434,6 +6575,7 @@ ${abyAdminNav('/admin/brokers')}
          + '<input id="fState" placeholder="TX" maxlength="2" size="3" value="' + esc(a.state || '') + '" style="padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
          + '<button onclick="saveWhere(' + "'" + id + "'" + ')">Save location</button>'
          + '<span class="muted">' + (a.metro ? esc(a.metro) : '') + '</span></div>'
+         + dispHTML(a)
          // \u2b50\u2b50 THE NAME IS EDITABLE HERE, AND UNTIL 2026-08-24 IT WAS NOT EDITABLE ANYWHERE.
          // A firm could be tagged, noted, aliased and marked acquired from this panel, but its name
          // could only be changed by somebody running SQL. So every correction Eric gave lived in a
@@ -6513,6 +6655,59 @@ ${abyAdminNav('/admin/brokers')}
    // ⚠️ AFTER the innerHTML, never before: the container it fills does not exist until this line
    // has run. Same shape as TRAPS #239 -- the first render is not a repaint.
    loadFirmPeople(id);
+ }
+
+ // ── OFF THE MARKETING LIST, STILL ON THE BOOKS ──────────────────────────────────────────────
+ // Eric, 2026-08-26. Deliberately NOT a value in the priority dropdown: priority ranks who you are
+ // working, this says whether to work them at all, and putting them together would mean setting
+ // one destroys the other.
+ var DISP_LABEL = {
+   '': 'On the marketing list',
+   out_of_business: 'Out of business',
+   no_group_products: 'Does not sell group products',
+   not_interested: 'Told us no',
+   do_not_contact: 'Do not contact',
+   deceased: 'Deceased',
+   left_the_firm: 'No longer at this firm',
+   wrong_record: 'Not a real firm'
+ };
+
+ function dispHTML(a){
+   var cur = a.disposition || '';
+   var opts = '';
+   for (var k in DISP_LABEL){
+     opts += '<option value="' + k + '"' + (cur === k ? ' selected' : '') + '>' + esc(DISP_LABEL[k]) + '</option>';
+   }
+   var when = a.disposition_at ? ' <span class="muted">since ' + esc(day(a.disposition_at)) + '</span>' : '';
+   return '<div style="margin:12px 0 0"><div class="sec">Marketing</div>'
+     + '<div class="mfilters">'
+     +   '<select id="fDisp">' + opts + '</select>'
+     +   '<input id="fDispNote" placeholder="Why? (optional)" value="' + esc(a.disposition_note || '') + '" style="flex:1;padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
+     +   '<button class="go" onclick="saveDisp(' + "'" + esc(a.id) + "'" + ')">Save</button>'
+     +   when
+     + '</div>'
+     // \u26d4 SAID OUT LOUD, because it is the one value that behaves differently from the others.
+     + '<p class="sub" style="margin:6px 0 0">Anything other than <em>On the marketing list</em> hides '
+     + 'this firm from the working list without deleting it. <strong>Do not contact</strong> also '
+     + 'removes it from every list, including <em>Everything</em>.</p>'
+     + '</div>';
+ }
+
+ async function saveDisp(id){
+   var v = q('fDisp').value, note = q('fDispNote').value;
+   // TWO WRITES, and the note goes first: if the second fails, a firm still on the list with a
+   // stray note is recoverable, while a firm removed with no reason recorded is not.
+   var a = await fetch('/api/admin/crm/agency', { method: 'POST', headers: {'Content-Type':'application/json'},
+     body: JSON.stringify({ id: id, field: 'disposition_note', value: note }) });
+   if (!a.ok){ var e1 = await a.json().catch(function(){return{}}); q('fMsg').textContent = e1.error || 'That did not save.'; return; }
+   var b = await fetch('/api/admin/crm/agency', { method: 'POST', headers: {'Content-Type':'application/json'},
+     body: JSON.stringify({ id: id, field: 'disposition', value: v }) });
+   if (!b.ok){ var e2 = await b.json().catch(function(){return{}}); q('fMsg').textContent = e2.error || 'That did not save.'; return; }
+   // \u2b50 THE LIST IS REFETCHED, not patched in memory: dispositioning a firm usually REMOVES it
+   // from the current view, and a row that stays on screen after you took it off the list is the
+   // clearest possible way to make somebody do it twice.
+   await loadMkt();
+   openFirm(id);
  }
 
  async function saveWhere(id){
@@ -12176,6 +12371,37 @@ const MIGRATIONS = [
   // the table is small today. It will not stay small.
   { sql: "CREATE INDEX IF NOT EXISTS aby_task_done ON aby_task (done_at)",
     index: "aby_task_done" },
+
+  // ── DISPOSITION: OFF THE MARKETING LIST, STILL ON THE BOOKS (Eric, 2026-08-26) ─────────────
+  //
+  // "There also needs to be a way to remove people/agencies from the marketing list while still
+  // keeping track of them. For instance, out of business, doesn't sell group products, not
+  // interested (they've actually told us no), unsubscribed (do not contact)."
+  //
+  // ⛔ ITS OWN COLUMN, NOT A VALUE IN `priority`. Eric asked whether it belonged with A/B/C and the
+  // answer is no, for three reasons in increasing order of importance:
+  //   ① They answer different questions. Priority RANKS people you are working; disposition says
+  //     whether to work them at all. Merged, "priority A but they said no in March" is unsayable.
+  //   ② Merging destroys information on the way in: setting the disposition would overwrite the A,
+  //     and setting it back to A would silently un-say that they told us no.
+  //   ③ 🔴 AND THE DECIDING ONE: `do_not_contact` IS AN OBLIGATION, NOT A JUDGMENT. In one dropdown
+  //     with A/B/C, anybody could un-suppress somebody who asked not to be contacted by changing an
+  //     unrelated ranking, and nothing would go red. That must not be reachable by accident.
+  //
+  // ⚠️ AND `relationship` IS NOT THE HOME EITHER, though it looks like one. It already carries the
+  // NAME-CLEANUP axis -- alias, succeeded, division -- on 113 of 665 rows. Reusing it would make
+  // "out of business" and "this is a misspelling of another firm" the same kind of fact.
+  //
+  // ⭐ THE NOTE AND THE DATE ARE PART OF IT. "Not interested" in 2024 is a different fact from
+  // "not interested" last week, and without the date nobody can tell them apart.
+  { sql: "ALTER TABLE agencies ADD COLUMN disposition TEXT", table: "agencies", column: "disposition" },
+  { sql: "ALTER TABLE agencies ADD COLUMN disposition_note TEXT", table: "agencies", column: "disposition_note" },
+  { sql: "ALTER TABLE agencies ADD COLUMN disposition_at TEXT", table: "agencies", column: "disposition_at" },
+  { sql: "ALTER TABLE people ADD COLUMN disposition TEXT", table: "people", column: "disposition" },
+  { sql: "ALTER TABLE people ADD COLUMN disposition_note TEXT", table: "people", column: "disposition_note" },
+  { sql: "ALTER TABLE people ADD COLUMN disposition_at TEXT", table: "people", column: "disposition_at" },
+  { sql: "CREATE INDEX IF NOT EXISTS agencies_disposition ON agencies (disposition)",
+    index: "agencies_disposition" },
 
   // ── TO-DOS GROW A TIME, A KIND, AN ORDER AND A COMPLETION RECORD (Eric, 2026-08-26) ────────
   //
