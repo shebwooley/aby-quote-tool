@@ -73,15 +73,22 @@ function build(text) {
     if (!s) throw new Error("could not find " + d.trim() + " at module scope");
     parts.push(s);
   }
-  for (const fn of ["adminHTML", "adminBrokersHTML", "adminRfpHTML"]) {
+  for (const fn of ["adminHTML", "adminBrokersHTML", "adminRfpHTML", "adminTodayHTML"]) {
     const s = slice("function " + fn + "(", text);
     if (!s) throw new Error("could not find " + fn);
     parts.push(s);
   }
   // The guide body is imported, not declared. Stubbed here because no rule below reads it.
   const code = "const ADMIN_GUIDE_HTML = '';\n" + parts.join("\n") +
-               "\n;({ log: adminHTML(), brokers: adminBrokersHTML(), rfp: adminRfpHTML() });";
-  return (0, eval)(code);
+               "\n;({ log: adminHTML(), brokers: adminBrokersHTML(), rfp: adminRfpHTML(), today: adminTodayHTML() });";
+  const pages = (0, eval)(code);
+  // ⛔ THE SOURCE RIDES ALONG, and it has to be THIS text rather than a fresh read of the file.
+  // A rule about server-side code cannot be answered by a rendered page -- but a rule that
+  // re-opens worker.js from disk cannot be SABOTAGED either, because the sabotage only ever edits
+  // this string. That combination is a rule which passes, looks checked, and can never fail.
+  // Found by a sabotage reporting MISSED, which is the only thing that could have found it.
+  pages.worker = text;
+  return pages;
 }
 
 // ── The rules. Each asserts something about the EMITTED HTML. ─────────────────────────────────
@@ -227,6 +234,82 @@ const RULES = [
        + " finished job rather than a missing one -- the third time this admin has had to learn it.",
     holds: (p) => /Could not load the library: /.test(p.rfp),
   },
+  // ── TO-DOS: EDIT, TIME, KIND, ORDER, AND THE COMPLETED RECORD (Eric, 2026-08-26) ─────────
+  {
+    name: "a to-do can be edited from the page",
+    why: "The update endpoint has accepted title, date, owner and note since the table existed and"
+       + " NOTHING ever called it. Correct, deployed, unreachable -- F-382's shape again.",
+    holds: (p) => /data-edit="/.test(p.today) && /action:'update'/.test(p.today),
+  },
+  {
+    name: "a to-do can be a meeting or a call, and the kind is asked rather than guessed",
+    why: "It is going on a calendar. Reading 'call Blumberg' as a call would be a guess printed as"
+       + " a fact, and wrong on 'call sheet' and on a call somebody else is making.",
+    holds: (p) => /id="tKind"/.test(p.today)
+               && /<option value="meeting">Meeting<\/option>/.test(p.today)
+               && /<option value="call">Call<\/option>/.test(p.today),
+  },
+  {
+    name: "a to-do can carry a time",
+    why: "Eric: 'pick a time too so that they can appear in order if they're meetings.'",
+    holds: (p) => /id="tTime"/.test(p.today) && /dueTime:document\.getElementById\('tTime'\)\.value/.test(p.today),
+  },
+  {
+    name: "completed to-dos have somewhere to be seen",
+    why: "The record was ALWAYS being kept -- done_at is set and nothing is deleted -- but every"
+       + " read filtered it out, so a finished item left the only screen that lists them."
+       + " Measured before the fix: 4 to-dos, 1 done and invisible.",
+    holds: (p) => /id="lensDone"/.test(p.today) && /function renderDone\(\)/.test(p.today),
+  },
+  {
+    name: "a completed to-do can record WHAT happened",
+    why: "Eric asked for 'a record of what was completed', not a timestamp. For a call, the"
+       + " outcome is the entire reason anybody looks back at it.",
+    holds: (p) => /data-donenote="/.test(p.today) && /What happened\?/.test(p.today),
+  },
+  {
+    name: "untimed to-dos can be reordered, and timed ones cannot",
+    why: "Two meetings at 9:00 and 14:00 already have an order. A hand-set number that disagreed"
+       + " with the clock would be a second source of truth about the same thing.",
+    holds: (p) => /data-mv="up"/.test(p.today) && /if\(!r\.dueTime\)\{/.test(p.today),
+  },
+  {
+    name: "a to-do can be filed against the quote it is about",
+    why: "Eric: 'generate the to-do within the actual opportunity / quote'. entity_type has existed"
+       + " since the table did and nothing had ever written one -- 0 of 4 to-dos carried an entity.",
+    holds: (p) => /attach=quote&attachId=/.test(p.log)
+               && /entityType:ATTACH\.type/.test(p.today)
+               && /id="attachBar"/.test(p.today),
+  },
+  {
+    name: "the attachment is named on screen and can be cleared",
+    why: "A hidden attachment is how a to-do lands on a record nobody meant to touch -- and it is"
+       + " cleared after one use so the next unrelated to-do does not inherit it.",
+    holds: (p) => /will be filed against/.test(p.today) && /function clearAttach\(\)/.test(p.today),
+  },
+  {
+    name: "a pending quote is not described as sold",
+    why: "Eric, 2026-08-26: 'this was just a quote from today that's still pending - it's not a"
+       + " sale yet. So why are you making it sound like it's sold?' The query that selects these"
+       + " rows filters status = 'P', so the one thing they all share is that nobody bought them.",
+    // ⛔ READS worker.js, NOT THE RENDERED PAGE. The first version tested p.today for a string
+    // that lives in the SERVER handler building the row, never in the page function -- so it
+    // passed against a worker that still said it, and would have passed for ever.
+    // ⭐ THE SABOTAGE IS WHAT SAID SO: it reported BROKEN, meaning the edit matched nothing,
+    // which is the assertion that a sabotage must actually apply. Without that, this rule would
+    // have read as a green check on a defect Eric had already reported.
+    holds: (p) => {
+      // ⛔ COMMENTS STRIPPED FIRST. The retired phrase now survives in the note that records
+      // the fix, and a negative rule matching prose is defeated by the very comment explaining
+      // it -- the SECOND time this exact confusion has come up today, in a second checker.
+      // ⚠️ CODE POINT, NOT AN ESCAPE. Writing this repair through a shell turned the newline
+      // escape into a REAL line break inside the string literal and broke the file -- the same
+      // trap check_worker_pages.mjs records in its own header. A code point cannot be eaten.
+      const NL = String.fromCharCode(10);
+      const src = p.worker.split(NL).filter((l) => !/^\s*\/\//.test(l)).join(NL);
+      return !/Coverage starts on quote/.test(src) && /Still pending: quote /.test(src);
+    },
+  },
   {
     name: "no page ships the words 'not recorded'",
     why: "It printed under all 665 firms, because 0 of them had a recorded status. Eric asked what"
@@ -277,6 +360,24 @@ const SABOTAGES = [
     edit: (t) => t.replace("for (var k in res.j.row) r[k] = res.j.row[k];", "") },
   { why: "a failed library load renders as an empty library",
     edit: (t) => t.replace(/Could not load the library: /g, "") },
+  { why: "the edit control is removed, so editing goes back to being unreachable",
+    edit: (t) => t.replace(/data-edit="/g, 'data-gone="') },
+  { why: "the meeting/call choice disappears",
+    edit: (t) => t.replace('<option value="meeting">Meeting</option>', "") },
+  { why: "the time field goes, so meetings cannot be ordered by the clock",
+    edit: (t) => t.replace(/id="tTime"/g, 'id="tGone"') },
+  { why: "the Done lens is removed and completed work is invisible again",
+    edit: (t) => t.replace(/id="lensDone"/g, 'id="lensGone"') },
+  { why: "the outcome box goes, leaving a timestamp instead of a record",
+    edit: (t) => t.replace(/data-donenote="/g, 'data-gone2="') },
+  { why: "reordering starts applying to timed rows too",
+    edit: (t) => t.replace("if(!r.dueTime){", "if(true){") },
+  { why: "the quote log loses its Add-a-to-do link",
+    edit: (t) => t.replace(/attach=quote&attachId=/g, "nothing=") },
+  { why: "the attachment stops being named on screen",
+    edit: (t) => t.replace(/will be filed against/g, "") },
+  { why: "the pending-quote row goes back to claiming coverage has started",
+    edit: (t) => t.replace("'Still pending: quote '", "'Coverage starts on quote '") },
   { why: "the 'not recorded' line comes back under every firm",
     edit: (t) => t.replace("     return '<span>' + esc(live) + '</span>';",
                            "     return '<span>' + esc(live) + '</span>' + '<div>not recorded</div>';") },

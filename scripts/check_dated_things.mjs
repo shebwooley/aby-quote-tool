@@ -99,6 +99,14 @@ async function loadModule(mutate) {
     extract(page, "ownerLabel", "function"),
     extract(page, "kindLabel", "function"),
     extract(page, "kindCount", "function"),
+    // 🆕 2026-08-26. rowHTML gained a time, a meeting/call chip and an inline edit panel, so it
+    // now depends on these three. The checker failed "TKIND is not defined" on SEVEN rules at
+    // once -- which is this list doing its job: a rendering function's dependencies are part of
+    // its contract, and adding one without adding it here makes the checker fail for its own
+    // reasons rather than the product's.
+    "const TKIND=" + /var TKIND=(\{[\s\S]*?\});/.exec(page)[1] + ";",
+    extract(page, "hhmm", "function"),
+    extract(page, "editHTML", "function"),
     extract(page, "rowHTML", "function"),
     extract(page, "sect", "function"),
     extract(page, "renderDue", "function"),
@@ -559,7 +567,15 @@ function rules(M) {
           { key: "todo:late", kind: "todo", id: "late", title: "A late thing", entity: "",
             owner: "eric", note: "", dueOn: "2026-08-01", days: -25 },
         ]);
-        return (html.match(/A late thing/g) || []).length === 1;
+        // ⛔ COUNTS THE ROW, NOT THE WORDS. This matched the TITLE until 2026-08-26, when rowHTML
+        // gained an inline edit panel that carries the title again in a hidden input -- so the
+        // string appeared twice while the row still appeared once, and the rule went red against
+        // correct output.
+        // ⭐ TIGHTENED TO THE CLAIM, NOT RELAXED TO PASS. What this rule has always meant is
+        // "the row is not emitted in two SECTIONS", and data-row is that row, once per render.
+        // A rule that matches a phrase instead of a claim reports the wrong thing confidently.
+        return (html.match(/data-row="late"/g) || []).length === 1
+            && html.indexOf("A late thing") !== -1;
       } },
 
     { name: "an undated row has a home in BOTH lenses",

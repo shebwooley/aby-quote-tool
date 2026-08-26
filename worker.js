@@ -10116,8 +10116,16 @@ async function abyDatedThings(env, opts) {
   // ① The to-dos. The only source somebody TYPES, and the reason this screen exists.
   try {
     const r = await env.DB.prepare(
-      "SELECT id, title, due_on, owner, entity_type, entity_id, entity_label, note, done_at " +
-      "FROM aby_task WHERE done_at IS NULL ORDER BY COALESCE(due_on,'9999') ASC"
+      "SELECT id, title, due_on, due_time, kind, sort_order, owner, entity_type, entity_id, " +
+      "       entity_label, note, done_at, done_note, created_at " +
+      "FROM aby_task WHERE done_at IS NULL " +
+      // ⭐ DATE, THEN TIME, THEN THE HAND-SET ORDER, THEN AGE. A 9am meeting sorts above a 2pm one
+      // without anybody arranging anything -- which is what Eric asked for -- and the manual order
+      // only decides the rows a clock cannot. An untimed to-do sorts AFTER the timed ones on its
+      // day, because a thing with an appointment has to happen at that moment and a thing without
+      // one can move.
+      "ORDER BY COALESCE(due_on,'9999') ASC, COALESCE(due_time,'99:99') ASC, " +
+      "COALESCE(sort_order, 0) ASC, created_at ASC"
     ).all();
     for (const t of (r.results || [])) {
       const due = isoDay(t.due_on);
@@ -10127,9 +10135,14 @@ async function abyDatedThings(env, opts) {
         id: t.id,
         title: String(t.title || ''),
         entity: String(t.entity_label || ''),
+        entityType: String(t.entity_type || ''),
+        entityId: String(t.entity_id || ''),
         owner: String(t.owner || ''),
         note: String(t.note || ''),
         dueOn: due,
+        dueTime: String(t.due_time || ''),
+        taskKind: String(t.kind || 'todo'),
+        sortOrder: t.sort_order == null ? null : Number(t.sort_order),
         days: due ? daysBetween(today, due) : null,
       });
       counts.todo++;
@@ -10139,6 +10152,41 @@ async function abyDatedThings(env, opts) {
     // a slightly shorter list, which nobody can tell from a quiet week -- the exact failure this
     // whole screen exists to prevent.
     problems.push({ source: 'todo', error: String((e && e.message) || e) });
+  }
+
+  // ①b WHAT WAS COMPLETED -- returned SEPARATELY, never mixed into the due list.
+  //
+  // 🔴 THE RECORD WAS ALWAYS BEING KEPT AND WAS NEVER ONCE SHOWN. Marking a to-do done sets
+  // `done_at`; nothing has ever deleted one. But every read of this table filtered
+  // `WHERE done_at IS NULL`, so a finished item disappeared from the only screen that lists them
+  // and the record became unreachable. Measured 2026-08-26: 4 to-dos, 1 done and invisible.
+  // Eric: "mark them as done but actually have a record of what was completed."
+  //
+  // ⛔ NOT MERGED INTO `out`. This page answers "what is outstanding"; finished work in that list
+  // would be answering a different question in the same column.
+  // ⚠️ CAPPED AND RECENT-FIRST. The record is for looking back at the last few weeks, not for
+  // paging through a year, and an uncapped list here would grow without anybody choosing it.
+  const doneRows = [];
+  try {
+    const r = await env.DB.prepare(
+      "SELECT id, title, due_on, due_time, kind, owner, entity_label, note, done_at, done_note " +
+      "FROM aby_task WHERE done_at IS NOT NULL ORDER BY done_at DESC LIMIT 60"
+    ).all();
+    for (const t of (r.results || [])) {
+      doneRows.push({
+        id: t.id,
+        title: String(t.title || ''),
+        entity: String(t.entity_label || ''),
+        owner: String(t.owner || ''),
+        taskKind: String(t.kind || 'todo'),
+        dueOn: isoDay(t.due_on),
+        dueTime: String(t.due_time || ''),
+        doneAt: String(t.done_at || ''),
+        doneNote: String(t.done_note || ''),
+      });
+    }
+  } catch (e) {
+    problems.push({ source: 'done', error: String((e && e.message) || e) });
   }
 
   // ② Quotes with a real effective date still ahead of them, still Pending. The employer's
@@ -10158,7 +10206,17 @@ async function abyDatedThings(env, opts) {
         key: 'quote:' + q.quote_number,
         kind: 'quote',
         id: String(q.quote_number || ''),
-        title: 'Coverage starts on quote ' + String(q.quote_number || ''),
+        // 🔴 THIS SAID "Coverage starts on quote X" AND EVERY ROW HERE IS A *PENDING* QUOTE.
+        // Eric, 2026-08-26: "this was just a quote from today that's still pending - it's not a
+        // sale yet. So why are you making it sound like it's sold?"
+        // ⛔ A DEFAULT RENDERED AS A FINDING. The query above filters COALESCE(status,'P') = 'P',
+        // so the ONE thing every row on this line has in common is that NOBODY HAS BOUGHT IT. The
+        // sentence asserted the opposite of the filter that selected it.
+        // ⭐ The comment above this block had it right all along: the employer's coverage is
+        // MEANT to start that day, "so it is the date the chase has to beat". That is a deadline
+        // for ABY, not an event in the world, and the title now says so.
+        // ⚠️ The date is deliberately not repeated in the words -- it is already the WHEN column.
+        title: 'Still pending: quote ' + String(q.quote_number || '') + ' asks for coverage from this date',
         entity: String(q.client_name || ''),
         owner: '',
         note: String(q.broker_agency || q.broker_name || ''),
@@ -10299,7 +10357,9 @@ async function abyDatedThings(env, opts) {
     return a.key < b.key ? -1 : 1;
   });
 
-  return { today, rows: out, counts, problems };
+  // ⭐ `done` RIDES ALONGSIDE `rows`, NEVER INSIDE IT. This page answers what is outstanding;
+  // finished work belongs in its own section, on its own tab, counted separately.
+  return { today, rows: out, done: doneRows, counts, problems };
 }
 
 async function handleAbyDated(request, env) {
@@ -10327,6 +10387,59 @@ function abyOwner(v) {
  * the agency record, so saving one task rewrote the lot and two people editing at once lost each
  * other's work. Two people share this admin; one row per to-do is what stops that repeating.
  */
+/**
+ * The four fields a to-do gained on 2026-08-26, validated in ONE place.
+ *
+ * ⛔ SHARED BY `add` AND `update` ON PURPOSE. Two copies of a validation rule is how a value the
+ * form refuses on creation gets in through an edit -- and this admin has already been bitten by
+ * one fix landing on one copy of a pattern.
+ *
+ * Returns { sets, vals } for splicing into an UPDATE, or { error } to refuse.
+ */
+function taskExtraSets(body) {
+  const sets = [], vals = [];
+
+  if (body.dueTime !== undefined) {
+    const raw = String(body.dueTime || '').trim();
+    // ⚠️ 24-HOUR HH:MM, WHICH IS WHAT <input type="time"> SENDS. Accepting "2pm" would mean
+    // parsing it, and a time that parses wrongly on a calendar is worse than one that is refused.
+    if (raw && !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(raw)) {
+      return { error: 'That time is not HH:MM on a 24-hour clock.' };
+    }
+    sets.push('due_time = ?'); vals.push(raw || null);
+  }
+
+  if (body.kind !== undefined) {
+    const k = String(body.kind || '').trim().toLowerCase();
+    if (k && !['todo', 'meeting', 'call'].includes(k)) {
+      return { error: 'A to-do is a todo, a meeting or a call.' };
+    }
+    sets.push('kind = ?'); vals.push(k || 'todo');
+  }
+
+  if (body.sortOrder !== undefined) {
+    const n = Number(body.sortOrder);
+    if (!Number.isFinite(n)) return { error: 'That order is not a number.' };
+    sets.push('sort_order = ?'); vals.push(Math.round(n));
+  }
+
+  // The entity a to-do hangs off -- a quote, an RFP opportunity, an agency.
+  // 🔴 THESE COLUMNS HAVE EXISTED SINCE THE TABLE WAS CREATED AND NOTHING HAS EVER WRITTEN ONE.
+  // Measured 2026-08-26: 0 of 4 to-dos carry an entity. Eric asked for exactly this -- "generate
+  // the to-do within the actual opportunity / quote" -- and the model was already waiting for it.
+  if (body.entityType !== undefined) {
+    const t = String(body.entityType || '').trim().toLowerCase();
+    if (t && !['quote', 'rfp', 'agency', 'person', 'client'].includes(t)) {
+      return { error: 'Unknown kind of thing to attach to.' };
+    }
+    sets.push('entity_type = ?'); vals.push(t || null);
+    sets.push('entity_id = ?'); vals.push(String(body.entityId || '').slice(0, 80) || null);
+    sets.push('entity_label = ?'); vals.push(String(body.entityLabel || '').slice(0, 200));
+  }
+
+  return { sets, vals };
+}
+
 async function handleAbyTask(request, env) {
   let body;
   try { body = await request.json(); }
@@ -10353,6 +10466,16 @@ async function handleAbyTask(request, env) {
       ).bind(id, title, due, owner,
              String(body.entityType || '') || null, String(body.entityId || '') || null,
              String(body.entityLabel || ''), String(body.note || ''), now, String(body.createdBy || '')).run();
+      // ⭐ WRITTEN AS A SECOND STATEMENT, not folded into the INSERT above. That INSERT names its
+      // columns positionally and is read by other code; widening it to carry four optional fields
+      // would put four NULLs on every row that does not use them and make the column list harder
+      // to check than the thing it inserts.
+      const extra = taskExtraSets(body);
+      if (extra.error) return jsonResp({ error: extra.error }, 400);
+      if (extra.sets.length) {
+        await env.DB.prepare("UPDATE aby_task SET " + extra.sets.join(', ') + " WHERE id = ?")
+          .bind(...extra.vals, id).run();
+      }
     } catch (e) {
       return jsonResp({ error: 'Could not save it: ' + String((e && e.message) || e) }, 500);
     }
@@ -10364,8 +10487,31 @@ async function handleAbyTask(request, env) {
 
   if (action === 'done' || action === 'undone') {
     try {
-      await env.DB.prepare("UPDATE aby_task SET done_at = ? WHERE id = ?")
-        .bind(action === 'done' ? now : null, id).run();
+      // ⭐ THE NOTE IS WHAT MAKES THIS A RECORD RATHER THAN A TIMESTAMP. Eric asked to "mark them
+      // as done but actually have a record of what was completed" -- and for a call or a meeting
+      // the outcome is the whole reason anybody looks back at it.
+      // ⛔ UNDOING CLEARS IT. A note saying what happened, sitting on a to-do that is open again,
+      // is a claim about a thing that has been un-claimed.
+      await env.DB.prepare("UPDATE aby_task SET done_at = ?, done_note = ? WHERE id = ?")
+        .bind(action === 'done' ? now : null,
+              action === 'done' ? String(body.doneNote || '').slice(0, 2000) : null, id).run();
+    } catch (e) {
+      return jsonResp({ error: String((e && e.message) || e) }, 500);
+    }
+    return jsonResp({ ok: true });
+  }
+
+  // Record the outcome on something already marked done, without reopening it.
+  if (action === 'donenote') {
+    try {
+      const r = await env.DB.prepare(
+        "UPDATE aby_task SET done_note = ? WHERE id = ? AND done_at IS NOT NULL")
+        .bind(String(body.doneNote || '').slice(0, 2000), id).run();
+      // ⛔ A WRITE THAT MATCHED NOTHING IS NOT A SUCCESS. Without this, adding an outcome to a
+      // to-do that is not actually done reports "saved" and stores nothing.
+      if (!r.meta || r.meta.changes === 0) {
+        return jsonResp({ error: 'That to-do is not marked done.' }, 404);
+      }
     } catch (e) {
       return jsonResp({ error: String((e && e.message) || e) }, 500);
     }
@@ -10380,6 +10526,10 @@ async function handleAbyTask(request, env) {
 
   if (action === 'update') {
     const sets = [], vals = [];
+    // The four new fields, validated the same way on `add` and `update` so the two cannot drift.
+    const extra = taskExtraSets(body);
+    if (extra.error) return jsonResp({ error: extra.error }, 400);
+    sets.push(...extra.sets); vals.push(...extra.vals);
     if (body.title !== undefined) {
       const t = String(body.title || '').trim();
       if (!t) return jsonResp({ error: 'A to-do needs some words.' }, 400);
@@ -10462,6 +10612,28 @@ ${ADMIN_HEADER_CSS}
  .row .what{flex:1;min-width:0}
  .row .who{flex:0 0 auto;color:#5b6b7f;font-size:13px;text-align:right;max-width:34%}
  .row .act{flex:0 0 auto;display:flex;gap:8px;align-items:center}
+ /* ADDED 2026-08-26 with edit, times, kinds, ordering and the completed record. */
+ /* The time sits under the day and is quieter than it, because the day is what you scan. */
+ .when .attime{font-size:12px;color:#1a5c3a;font-weight:600;margin-top:2px}
+ .t-mk{background:#efe9dd;color:#6b5a2a}
+ .row .act .mv{text-decoration:none;color:#8a97a8;font-size:11px;line-height:1}
+ .row .act .mv:hover{color:#1a5c3a}
+ .row .act .ed{font-size:12.5px;color:#1a5c3a;text-decoration:none}
+ .row .act .ed:hover{text-decoration:underline}
+ /* The edit panel is a sibling of its row, not a child, so opening one cannot reflow the list. */
+ .edit{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:10px 14px 12px 14px;
+       background:#f7f9fc;border-bottom:1px solid #eef2f6}
+ .edit input[type=text]{flex:1;min-width:180px}
+ .edit input,.edit select{padding:6px 9px;border:1px solid #c8d2de;border-radius:6px;font-size:13px}
+ .done-row{background:#fbfcfd}
+ .done-row .what{color:#5b6b7f}
+ .outcome{display:flex;gap:7px;margin-top:6px}
+ .outcome input{flex:1;padding:5px 9px;border:1px solid #dde4ec;border-radius:6px;font-size:12.5px}
+ /* Names what a new to-do will be filed against. A hidden attachment is how a to-do lands on a
+    record nobody meant to touch. */
+ .attach{margin:0 0 14px;padding:9px 13px;background:#e8f4ec;border:1px solid #b8d9c4;
+         border-radius:8px;font-size:13px;color:#1a5c3a}
+ .attach a{margin-left:10px;color:#1a5c3a}
  .tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11.5px;font-weight:600;margin-left:8px}
  .t-todo{background:#e6eefb;color:#1c4587} .t-quote{background:#e8f4ec;color:#1a5c3a}
  .t-followup{background:#fdf1e0;color:#8a5a12} .t-rfp{background:#f0e8fb;color:#4b2d80}
@@ -10492,8 +10664,18 @@ ${abyAdminNav('/admin/today')}
       A to-do with no date is fine &mdash; it gets its own list rather than a made-up day.</p>
     <div class="addrow">
       <input type="text" id="tTitle" placeholder="e.g. Send Brown &amp; Brown the revised COBRA rates">
+      <!-- ⭐ KIND IS ASKED, NEVER INFERRED FROM THE WORDS. Reading "call Blumberg" as a call would
+           be a guess printed on a calendar as a fact, and it is wrong on "call sheet", "recall
+           notice", and every to-do about a call somebody else is making. -->
+      <select id="tKind">
+        <option value="todo">To-do</option>
+        <option value="meeting">Meeting</option>
+        <option value="call">Call</option>
+      </select>
       <select id="tOwner"><option value="">Nobody in particular</option><option value="eric">Eric</option><option value="niels">Niels</option></select>
       <input type="date" id="tDue">
+      <!-- Optional. A to-do has a day; a meeting has a moment, and that moment is what orders it. -->
+      <input type="time" id="tTime" title="Time, for a meeting or a call">
       <button class="go" id="tAdd">Add</button>
     </div>
     <div class="msg" id="tMsg"></div>
@@ -10503,11 +10685,13 @@ ${abyAdminNav('/admin/today')}
     <span class="lbl">View</span>
     <button class="chip on" id="lensDue" data-lens="due">What&rsquo;s due</button>
     <button class="chip" id="lensMonth" data-lens="month">By month</button>
+    <button class="chip" id="lensDone" data-lens="done">Done</button>
     <span class="lbl" style="margin-left:14px">Owner</span>
     <select id="fOwner"><option value="">Everyone</option><option value="eric">Eric</option><option value="niels">Niels</option><option value="none">Unassigned</option></select>
   </div>
   <div class="chips" id="srcChips"><span class="lbl">Show</span></div>
 
+  <div id="attachBar" class="attach" style="display:none"></div>
   <div id="body"><p class="muted">Loading...</p></div>
 </main>
 <script>
@@ -10521,6 +10705,37 @@ ${abyAdminNav('/admin/today')}
           {k:'rfp',label:'RFP deadlines',one:'RFP deadline'},
           {k:'commitment',label:'Signed',one:'signed authorization'}];
  var LENS='due', OWNER='', OFF={}, DATA=null;
+
+ // ── A TO-DO ABOUT A PARTICULAR THING (Eric, 2026-08-26) ─────────────────────────────────────
+ // "Unless we can generate the to-do within the actual opportunity / quote and have it show up on
+ // the calendar for a particular day/time."
+ //
+ // THE COLUMNS HAVE EXISTED SINCE THE TABLE DID AND NOTHING HAD EVER WRITTEN ONE. entity_type,
+ // entity_id and entity_label were there from the start; measured 2026-08-26, 0 of 4 to-dos
+ // carried an entity. The model was already waiting for this.
+ //
+ // Carried in the URL rather than in storage, so the link from a quote is the whole instruction
+ // and can be sent, bookmarked or opened twice without a hidden state deciding what it means.
+ var ATTACH={type:'',id:'',label:''};
+ (function(){
+   var q=new URLSearchParams(location.search||'');
+   var t=(q.get('attach')||'').trim().toLowerCase();
+   if(!t) return;
+   ATTACH={type:t,id:(q.get('attachId')||'').trim(),label:(q.get('attachLabel')||'').trim()};
+ })();
+
+ function showAttach(){
+   var bar=document.getElementById('attachBar');
+   if(!bar) return;
+   if(!ATTACH.type){ bar.style.display='none'; return; }
+   bar.style.display='';
+   // NAMES WHAT IT WILL BE FILED AGAINST, and offers a way out. A hidden attachment is how a
+   // to-do ends up on a record nobody meant to touch.
+   bar.innerHTML='This to-do will be filed against <strong>'+esc(ATTACH.label||ATTACH.id)+'</strong>'
+     +' <a href="#" id="attachClear">use no attachment</a>';
+   document.getElementById('attachClear').onclick=function(e){ e.preventDefault(); clearAttach(); };
+ }
+ function clearAttach(){ ATTACH={type:'',id:'',label:''}; showAttach(); }
  // The server's idea of today, carried on the payload so the page and the list agree about
  // which day it is. Read as a FACT by the fold guard below.
  var TODAY_STR='';
@@ -10547,22 +10762,97 @@ ${abyAdminNav('/admin/today')}
  }
  function ownerLabel(o){ return o==='eric'?'Eric':(o==='niels'?'Niels':'unassigned'); }
 
+ // What a to-do IS -- a plain to-do, a meeting or a call. Only ever what somebody chose.
+ var TKIND={meeting:{label:'Meeting',mark:'\\u25c9'},call:{label:'Call',mark:'\\u260e'}};
+
  function rowHTML(r){
    var od = (r.days!==null && r.days<0);
-   var h='<div class="row'+(od?' od':'')+'">';
-   h+='<div class="when">'+(r.dueOn?esc(dayLabel(r.dueOn)):'<span class="muted">no date</span>')+'</div>';
+   var h='<div class="row'+(od?' od':'')+'" data-row="'+esc(r.id||'')+'">';
+   // ⭐ THE TIME SITS UNDER THE DAY, not inside the title. It belongs to WHEN, and putting it in
+   // the text would make it unsortable by eye down a column of days.
+   h+='<div class="when">'+(r.dueOn?esc(dayLabel(r.dueOn)):'<span class="muted">no date</span>')
+     +(r.dueTime?'<div class="attime">'+esc(hhmm(r.dueTime))+'</div>':'')+'</div>';
    h+='<div class="what">'+esc(r.title)+'<span class="tag t-'+esc(r.kind)+'">'+esc(kindLabel(r.kind))+'</span>';
+   var tk=TKIND[r.taskKind];
+   if(tk) h+='<span class="tag t-mk">'+tk.mark+' '+esc(tk.label)+'</span>';
    if(r.kind==='todo') h+='<div class="own">'+esc(ownerLabel(r.owner))+(r.note?' \\u00b7 '+esc(r.note):'')+'</div>';
    else if(r.note) h+='<div class="own">'+esc(r.note)+'</div>';
    h+='</div>';
    h+='<div class="who">'+esc(r.entity||'')+'</div>';
    h+='<div class="act">';
    if(r.kind==='todo'){
+     // ⭐ MOVE UP AND DOWN ONLY WHERE THERE IS NO TIME. Two meetings at 9:00 and 14:00 already
+     // have an order, and a hand-set number that disagreed with the clock would be a second
+     // source of truth about the same thing. These decide the rows a clock cannot.
+     if(!r.dueTime){
+       h+='<a href="#" class="mv" data-mv="up" data-id="'+esc(r.id)+'" title="Move up">\\u25b2</a>';
+       h+='<a href="#" class="mv" data-mv="down" data-id="'+esc(r.id)+'" title="Move down">\\u25bc</a>';
+     }
+     h+='<a href="#" class="ed" data-edit="'+esc(r.id)+'">Edit</a>';
      h+='<input class="tick" type="checkbox" data-done="'+esc(r.id)+'" title="Mark it done">';
      h+='<a href="#" class="del" data-del="'+esc(r.id)+'">Delete</a>';
    }
    h+='</div></div>';
+   // The edit panel ships with the row and starts hidden, so opening one is not a fetch.
+   if(r.kind==='todo') h+=editHTML(r);
    return h;
+ }
+
+ // 12-hour, because this is a calendar a person reads. The STORED value stays 24-hour HH:MM.
+ function hhmm(t){
+   var p=String(t||'').split(':'); if(p.length!==2) return t||'';
+   var H=Number(p[0]); if(!Number.isFinite(H)) return t;
+   var ap=H<12?'am':'pm', h=H%12; if(h===0) h=12;
+   return h+':'+p[1]+ap;
+ }
+
+ // ⭐ EDITING WAS ALREADY BUILT AND HAD NO DOOR. The update action has accepted title, due date,
+ // owner and note since the table existed; nothing on any screen ever called it. Same shape as
+ // F-382 -- a feature that is correct, deployed and unreachable.
+ function editHTML(r){
+   var i=esc(r.id);
+   return '<div class="edit" id="ed_'+i+'" style="display:none">'
+     +'<input type="text" id="e_t_'+i+'" value="'+esc(r.title)+'" placeholder="What needs doing">'
+     +'<select id="e_k_'+i+'">'
+       +'<option value="todo"'+(r.taskKind==='todo'?' selected':'')+'>To-do</option>'
+       +'<option value="meeting"'+(r.taskKind==='meeting'?' selected':'')+'>Meeting</option>'
+       +'<option value="call"'+(r.taskKind==='call'?' selected':'')+'>Call</option>'
+     +'</select>'
+     +'<select id="e_o_'+i+'">'
+       +'<option value=""'+(!r.owner?' selected':'')+'>Nobody in particular</option>'
+       +'<option value="eric"'+(r.owner==='eric'?' selected':'')+'>Eric</option>'
+       +'<option value="niels"'+(r.owner==='niels'?' selected':'')+'>Niels</option>'
+     +'</select>'
+     +'<input type="date" id="e_d_'+i+'" value="'+esc(r.dueOn||'')+'">'
+     +'<input type="time" id="e_m_'+i+'" value="'+esc(r.dueTime||'')+'">'
+     +'<input type="text" id="e_n_'+i+'" value="'+esc(r.note||'')+'" placeholder="Note (optional)">'
+     +'<button class="go" data-save="'+i+'">Save</button>'
+     +'<a href="#" class="del" data-cancel="'+i+'">Cancel</a>'
+     +'</div>';
+ }
+
+ // ── WHAT WAS COMPLETED ──────────────────────────────────────────────────────────────────────
+ // 🔴 THE RECORD WAS ALWAYS THERE AND WAS NEVER SHOWN. Marking a to-do done has always set
+ // done_at and never deleted anything -- but every read filtered on done_at IS NULL, so a
+ // finished item left the only screen that lists them. Eric asked for exactly this.
+ function doneHTML(r){
+   var i=esc(r.id);
+   var tk=TKIND[r.taskKind];
+   return '<div class="row done-row">'
+     +'<div class="when">'+esc(dayLabel(String(r.doneAt||'').slice(0,10)))+'</div>'
+     +'<div class="what">'+esc(r.title)
+       +(tk?'<span class="tag t-mk">'+tk.mark+' '+esc(tk.label)+'</span>':'')
+       +'<div class="own">'+esc(ownerLabel(r.owner))
+         +(r.dueOn?' \\u00b7 was due '+esc(dayLabel(r.dueOn)):'')+'</div>'
+       // The OUTCOME, and it is editable after the fact: what happened on a call is often known
+       // a minute after the box was ticked.
+       +'<div class="outcome"><input type="text" id="dn_'+i+'" value="'+esc(r.doneNote||'')
+         +'" placeholder="What happened? (optional)">'
+         +'<button class="go" data-donenote="'+i+'">Save</button></div>'
+     +'</div>'
+     +'<div class="who">'+esc(r.entity||'')+'</div>'
+     +'<div class="act"><a href="#" class="ed" data-undone="'+i+'">Reopen</a></div>'
+     +'</div>';
  }
  function kindLabel(k){
    for(var i=0;i<SRC.length;i++) if(SRC[i].k===k) return SRC[i].label;
@@ -10691,8 +10981,28 @@ ${abyAdminNav('/admin/today')}
 
  function render(){
    var rows=visible();
-   document.getElementById('body').innerHTML = LENS==='due'?renderDue(rows):renderMonth(rows);
+   var html;
+   if(LENS==='done') html=renderDone();
+   else if(LENS==='month') html=renderMonth(rows);
+   else html=renderDue(rows);
+   document.getElementById('body').innerHTML = html;
    wire();
+ }
+
+ // WHAT WAS COMPLETED. Its own lens, never mixed into the due list: this page answers what is
+ // outstanding, and finished work in that column answers a different question.
+ function renderDone(){
+   var d=(DATA && DATA.done) || [];
+   // OWNER FILTERS THIS TOO, so switching to Eric does not silently show Niels's finished work.
+   if(OWNER) d=d.filter(function(r){ return (r.owner||'')===OWNER; });
+   if(!d.length){
+     return '<p class="muted">Nothing has been ticked off yet'
+       + (OWNER?' by '+esc(ownerLabel(OWNER)):'')
+       + '. When a to-do is marked done it stays here, with what happened.</p>';
+   }
+   var h='<div class="sec"><h3>Completed <span class="n">'+d.length+'</span></h3><div class="rows">';
+   for(var i=0;i<d.length;i++) h+=doneHTML(d[i]);
+   return h+'</div></div>';
  }
 
  function wire(){
@@ -10701,6 +11011,45 @@ ${abyAdminNav('/admin/today')}
    });
    Array.prototype.forEach.call(document.querySelectorAll('[data-del]'),function(a){
      a.onclick=function(e){ e.preventDefault(); task({action:'delete',id:a.getAttribute('data-del')}); };
+   });
+   // EDIT: the panel is already in the page, so opening one is not a fetch.
+   Array.prototype.forEach.call(document.querySelectorAll('[data-edit]'),function(a){
+     a.onclick=function(e){ e.preventDefault();
+       var p=document.getElementById('ed_'+a.getAttribute('data-edit'));
+       if(p) p.style.display = (p.style.display==='none') ? 'flex' : 'none';
+     };
+   });
+   Array.prototype.forEach.call(document.querySelectorAll('[data-cancel]'),function(a){
+     a.onclick=function(e){ e.preventDefault();
+       var p=document.getElementById('ed_'+a.getAttribute('data-cancel'));
+       if(p) p.style.display='none';
+     };
+   });
+   Array.prototype.forEach.call(document.querySelectorAll('[data-save]'),function(b){
+     b.onclick=function(){
+       var i=b.getAttribute('data-save');
+       task({action:'update',id:i,
+             title:document.getElementById('e_t_'+i).value,
+             kind:document.getElementById('e_k_'+i).value,
+             owner:document.getElementById('e_o_'+i).value,
+             dueOn:document.getElementById('e_d_'+i).value,
+             dueTime:document.getElementById('e_m_'+i).value,
+             note:document.getElementById('e_n_'+i).value});
+     };
+   });
+   // MOVE. Only rendered on rows with no time; see the note in rowHTML.
+   Array.prototype.forEach.call(document.querySelectorAll('[data-mv]'),function(a){
+     a.onclick=function(e){ e.preventDefault(); move(a.getAttribute('data-id'), a.getAttribute('data-mv')); };
+   });
+   // DONE list: record an outcome, or reopen.
+   Array.prototype.forEach.call(document.querySelectorAll('[data-donenote]'),function(b){
+     b.onclick=function(){
+       var i=b.getAttribute('data-donenote');
+       task({action:'donenote',id:i,doneNote:document.getElementById('dn_'+i).value});
+     };
+   });
+   Array.prototype.forEach.call(document.querySelectorAll('[data-undone]'),function(a){
+     a.onclick=function(e){ e.preventDefault(); task({action:'undone',id:a.getAttribute('data-undone')}); };
    });
    Array.prototype.forEach.call(document.querySelectorAll('[data-mon]'),function(hd){
      hd.onclick=function(){
@@ -10712,6 +11061,36 @@ ${abyAdminNav('/admin/today')}
        render();
      };
    });
+ }
+
+ /**
+  * Move an untimed to-do up or down among the untimed to-dos of the SAME DAY.
+  *
+  * SWAPS TWO NEIGHBOURS RATHER THAN RENUMBERING THE LIST. Rewriting every row's order on every
+  * click is more writes, and it invents an order for rows nobody has ever arranged -- which then
+  * looks deliberate to the next reader.
+  * NEIGHBOURS ARE FOUND ON THE SAME DAY ONLY. Moving a row past a date boundary would silently
+  * change WHEN it is due, which is a different edit from the one the arrow promises.
+  */
+ function move(id, dir){
+   if(!DATA || !DATA.rows) return;
+   var me=null;
+   for(var i=0;i<DATA.rows.length;i++) if(DATA.rows[i].kind==='todo' && DATA.rows[i].id===id) me=DATA.rows[i];
+   if(!me) return;
+   var peers=DATA.rows.filter(function(r){
+     return r.kind==='todo' && !r.dueTime && (r.dueOn||'')===(me.dueOn||'');
+   });
+   var at=peers.indexOf(me);
+   var to=at+(dir==='up'?-1:1);
+   if(at<0 || to<0 || to>=peers.length) return;      // already at the end: nothing to swap with
+   var other=peers[to];
+   // ORDER IS ASSIGNED FROM THE CURRENT POSITIONS, so a list that has never been arranged gets a
+   // sensible sequence the first time somebody touches it rather than a pair of zeros.
+   var mine = (me.sortOrder==null) ? at : me.sortOrder;
+   var theirs = (other.sortOrder==null) ? to : other.sortOrder;
+   if(mine===theirs){ mine=at; theirs=to; }
+   task({action:'update',id:me.id,sortOrder:theirs});
+   task({action:'update',id:other.id,sortOrder:mine});
  }
 
  async function task(payload){
@@ -10729,19 +11108,32 @@ ${abyAdminNav('/admin/today')}
    if(!t){ msg(document.getElementById('tMsg'),'Type the to-do first.',false); return; }
    fetch('/api/admin/task',{method:'POST',headers:{'Content-Type':'application/json'},
      body:JSON.stringify({action:'add',title:t,owner:document.getElementById('tOwner').value,
-                          dueOn:document.getElementById('tDue').value})})
+                          dueOn:document.getElementById('tDue').value,
+                          dueTime:document.getElementById('tTime').value,
+                          kind:document.getElementById('tKind').value,
+                          // ⭐ A to-do created from a quote or an opportunity arrives with the
+                          // thing it is about already attached (?attach= on this page's URL).
+                          entityType:ATTACH.type, entityId:ATTACH.id, entityLabel:ATTACH.label})})
    .then(function(r){return r.json().then(function(d){return{ok:r.ok,d:d}})})
    .then(function(x){
      msg(document.getElementById('tMsg'), x.ok?'Added.':(x.d.error||'Could not save it.'), x.ok);
-     if(x.ok){ document.getElementById('tTitle').value=''; document.getElementById('tDue').value=''; load(); }
+     if(x.ok){ document.getElementById('tTitle').value=''; document.getElementById('tDue').value='';
+               document.getElementById('tTime').value='';
+               // ⛔ THE ATTACHMENT IS CLEARED AFTER ONE USE. Left set, the next unrelated to-do
+               // somebody types would silently be filed against a quote they were not thinking
+               // about, and nothing on screen would say so.
+               clearAttach();
+               load(); }
    });
  };
  document.getElementById('lensDue').onclick=function(){ setLens('due') };
  document.getElementById('lensMonth').onclick=function(){ setLens('month') };
+ document.getElementById('lensDone').onclick=function(){ setLens('done') };
  function setLens(l){
    LENS=l;
    document.getElementById('lensDue').className='chip'+(l==='due'?' on':'');
    document.getElementById('lensMonth').className='chip'+(l==='month'?' on':'');
+   document.getElementById('lensDone').className='chip'+(l==='done'?' on':'');
    // The URL carries the lens, so a link to the month view can be bookmarked and shared.
    try{ history.replaceState(null,'', l==='month'?'/admin/today?view=calendar':'/admin/today'); }catch(e){}
    render();
@@ -10761,7 +11153,7 @@ ${abyAdminNav('/admin/today')}
      w.textContent='Some of this list could not be read, so it is INCOMPLETE: '+
        DATA.problems.map(function(p){return p.source+' ('+p.error+')'}).join('; ');
    }
-   renderChips(); render();
+   renderChips(); showAttach(); render();
  }
  if(location.search.indexOf('view=calendar')!==-1) setLens('month');
  load();
@@ -11784,6 +12176,37 @@ const MIGRATIONS = [
   // the table is small today. It will not stay small.
   { sql: "CREATE INDEX IF NOT EXISTS aby_task_done ON aby_task (done_at)",
     index: "aby_task_done" },
+
+  // ── TO-DOS GROW A TIME, A KIND, AN ORDER AND A COMPLETION RECORD (Eric, 2026-08-26) ────────
+  //
+  // "Is there a way to edit To-Dos, to mark them as done but actually have a record of what was
+  // completed, and to rearrange them or pick a time too so that they can appear in order if
+  // they're meetings? Or actually add a meeting/call to-do since it's going on a calendar."
+  //
+  // ⭐ A TIME, NOT A DATETIME, and the two are not the same decision. `due_on` is already a date
+  // and every query, index and month-lens grouping reads it. Folding a time into it would rewrite
+  // all of them to get a field that is empty on most rows. A separate nullable time sorts within
+  // the day and leaves the date alone.
+  { sql: "ALTER TABLE aby_task ADD COLUMN due_time TEXT", table: "aby_task", column: "due_time" },
+
+  // todo | meeting | call. ⚠️ DEFAULTS TO todo AND IS NEVER INFERRED FROM THE WORDS. Reading
+  // "call Blumberg" as a call would be a guess printed on a calendar as a fact, and it would be
+  // wrong on "call sheet", "recall notice" and every to-do about a call somebody else is making.
+  { sql: "ALTER TABLE aby_task ADD COLUMN kind TEXT", table: "aby_task", column: "kind" },
+
+  // Manual order WITHIN a day, for the items a time cannot order.
+  // ⭐ TIME WINS WHERE THERE IS ONE. Two meetings at 9:00 and 14:00 have an order already, and a
+  // hand-set number that disagreed with the clock would be a second source of truth about the
+  // same thing. This only decides the rows a time cannot.
+  { sql: "ALTER TABLE aby_task ADD COLUMN sort_order INTEGER", table: "aby_task", column: "sort_order" },
+
+  // 🔴 WHAT WAS COMPLETED, WHICH IS THE HALF THAT WAS MISSING. `done_at` has always been stored --
+  // marking a to-do done has never deleted anything -- but every read of this table filters
+  // `WHERE done_at IS NULL`, so a finished item vanished from the only screen that shows them.
+  // Measured 2026-08-26: 4 to-dos, 1 of them done and invisible.
+  // ⛔ The record is the point, so it must be able to say more than a timestamp: a call that
+  // happened has an outcome, and that outcome is the reason anybody looks back at it.
+  { sql: "ALTER TABLE aby_task ADD COLUMN done_note TEXT", table: "aby_task", column: "done_note" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column
@@ -13513,6 +13936,15 @@ function detailHTML(q, products) {
       (reproducible
         ? '<button onclick="event.stopPropagation();shareQuote(this.dataset.id,this)" data-id="' + q.id + '" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#1a5c3a;border-radius:6px;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4;cursor:pointer">Copy share link</button>'
         : '') +
+      // ⭐ A TO-DO ABOUT THIS QUOTE, filed against it. Eric, 2026-08-26: "generate the to-do
+      // within the actual opportunity / quote and have it show up on the calendar for a
+      // particular day/time."
+      // ⛔ IT NAVIGATES RATHER THAN POSTING. Typing the to-do here would mean a second add
+      // form, in a second place, with its own copy of every field -- and the one on Today already
+      // asks for the kind, the day and the time. This carries the attachment TO that form.
+      '<a href="/admin/today?attach=quote&attachId=' + encodeURIComponent(q.quote_number || q.id) +
+        '&attachLabel=' + encodeURIComponent((q.client_name || '') + ' · ' + (q.quote_number || '')) +
+        '" onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#555;border-radius:6px;text-decoration:none;font-size:.85rem;font-weight:600;border:1px solid #ddd">Add a to-do</a>' +
       moveButtons +
       // 🔴 DELETE IS NO LONGER HERE. Eric, 2026-08-18: "Yes delete should move it out of the quote
       // panel." It sat as a peer of View, Re-run and Move to Sold -- four routine buttons and one
