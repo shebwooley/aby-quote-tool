@@ -75,6 +75,7 @@ async function loadModule(mutate) {
   const server = [
     extract(src, "isoDay", "function"),
     extract(src, "daysBetween", "function"),
+    extract(src, "dayName", "function"),
     extract(src, "todayIso", "function"),
     extract(src, "addDays", "function"),
     extract(src, "FOLLOWUP_AFTER_DAYS", "const"),
@@ -384,22 +385,12 @@ function rules(M) {
         const ken = rows.find((r) => r.kind === "followup" && r.id === "ken@blumberg.com");
         // Ken's quotes are 36 and 34 days old. Newest plus fourteen is twenty days ago; the oldest
         // anchor would say twenty-two.
-        return !!ken && ken.days === -20 && ken.note.indexOf("newest") === 0;
+        // Asserted on the DATE, not the wording. The note now reads "run between X and Y"
+        // because Eric asked for the source to stop being mentioned -- and a rule pinned to
+        // a phrase goes red for a copy change while the arithmetic it cares about is fine.
+        return !!ken && ken.days === -20 && /^run /.test(ken.note);
       } },
 
-    { name: "a follow-up says how many of its quotes came from the spreadsheet",
-      why: "Pending on an imported row means either 'still open' or 'nobody wrote the outcome down', and 122 of the 130 in the live window are imported -- a row that hides that has somebody ringing a broker about a quote settled in June",
-      async holds() {
-        const { rows, followupSource } = await run();
-        const ken = rows.find((r) => r.kind === "followup" && r.id === "ken@blumberg.com");
-        // Jane's two in-window quotes were run through the tool, Ken's two came from the
-        // spreadsheet. A fixture where every row is the same kind cannot tell a report of the
-        // SPLIT from a report of the total.
-        const jane = rows.find((r) => r.kind === "followup" && r.id === "jane@acme.com");
-        return !!ken && ken.imported === 2 && ken.note.indexOf("quote spreadsheet") !== -1 &&
-               !!jane && jane.imported === 0 && jane.note.indexOf("spreadsheet") === -1 &&
-               !!followupSource && followupSource.imported === 2 && followupSource.total > 2;
-      } },
 
     { name: "a quote older than the window is not a follow-up any more",
       why: "without the bound this is 5,977 rows -- every row of a fifteen-year back catalogue is 'P'",
@@ -506,11 +497,69 @@ function rules(M) {
     { name: "rows past 90 days are counted and named, never silently cut",
       why: "a list that stops without saying so reads as a complete list",
       async holds() {
+        // A DERIVED row, not a to-do. Your own to-dos are all shown however far out, because you
+        // typed them and there are few of them -- so a to-do can no longer exercise this.
         const html = M.renderDue([
-          { key: "f", kind: "todo", id: "f", title: "Far away", entity: "", owner: "", note: "",
+          { key: "f", kind: "quote", id: "f", title: "Far away", entity: "", owner: "", note: "",
             dueOn: "2027-06-01", days: 280 },
         ]);
         return html.indexOf("further than 90 days out") !== -1 && html.indexOf("1 more") !== -1;
+      } },
+
+    // ⛔ THE RULE THAT USED TO SIT HERE IS RETIRED, 2026-08-26, AND REPLACED BY ITS OPPOSITE.
+    // It required every follow-up row to say how many of its quotes came from the quote
+    // spreadsheet. ERIC: "I absolutely do not want it to say newest 2026-07-09, all from the quote
+    // spreadsheet. The quote spreadsheet was not something that existed previously, I just gave
+    // Claude access to all of the quotes and it put the spreadsheet together. So source should not
+    // be mentioned." ⭐ And the ambiguity it hedged is simply answered -- "Yes, pending means still
+    // open." A caveat naming an artefact a Claude session assembled, about a question the owner has
+    // settled, is noise wearing the clothes of rigour.
+    { name: "a follow-up never mentions where the quote came from",
+      why: "the quote spreadsheet is something a Claude session assembled, not a system anybody at ABY has heard of -- naming it on screen explains the tool's own history to somebody who wants a phone number",
+      async holds() {
+        const { rows } = await run();
+        const f = rows.filter((r) => r.kind === "followup");
+        return f.length > 0 && f.every((r) => !/spreadsheet|import|source/i.test(r.note + " " + r.title));
+      } },
+
+    { name: "a follow-up names the agency and never says chase",
+      why: "Eric: the stupid chase word -- you could just say follow up on 7 quotes from a particular agency",
+      async holds() {
+        const { rows } = await run();
+        const ken = rows.find((r) => r.kind === "followup" && r.id === "ken@blumberg.com");
+        return !!ken && !/chase/i.test(ken.title) &&
+               ken.title.indexOf("Follow up on 2 quotes") === 0 &&
+               ken.title.indexOf("Blumberg Benefits") !== -1;
+      } },
+
+    { name: "your own to-dos render BEFORE every derived row",
+      why: "Eric: why don't the tasks that we add show up, they just disappear -- measured, a to-do due tomorrow sat below FORTY-EIGHT follow-up rows. The add box is at the top of the screen; what you type into it cannot come out at the bottom",
+      async holds() {
+        const rows = [];
+        for (let i = 0; i < 40; i++) {
+          rows.push({ key: "f" + i, kind: "followup", id: "f" + i, title: "Follow up on 3 quotes",
+                      entity: "Agency " + i, owner: "", note: "", dueOn: "2026-07-10", days: -40 });
+        }
+        rows.push({ key: "todo:mine", kind: "todo", id: "mine", title: "A thing I typed in",
+                    entity: "", owner: "eric", note: "", dueOn: "2026-08-27", days: 1 });
+        const html = M.renderDue(rows);
+        const at = html.indexOf("A thing I typed in");
+        const first = html.indexOf("Follow up on 3 quotes");
+        // ⚠️ COMPARE POSITIONS, DO NOT COUNT ROWS BEFORE IT. Counting was wrong twice: `class="row`
+        // also matches the section wrapper `class="rows"`, and even tightened it counts the to-do's
+        // OWN wrapper, which necessarily precedes its title. The question is simply whether
+        // anything derived is rendered above it.
+        return at !== -1 && first !== -1 && at < first;
+      } },
+
+    { name: "a to-do appears ONCE, not in its own block and again under Overdue",
+      why: "a row in two sections is a tick that looks like it did not work",
+      async holds() {
+        const html = M.renderDue([
+          { key: "todo:late", kind: "todo", id: "late", title: "A late thing", entity: "",
+            owner: "eric", note: "", dueOn: "2026-08-01", days: -25 },
+        ]);
+        return (html.match(/A late thing/g) || []).length === 1;
       } },
 
     { name: "an undated row has a home in BOTH lenses",
@@ -597,8 +646,18 @@ const SABOTAGE = [
    (s) => s.replace('"GROUP BY k ORDER BY n DESC"', '"ORDER BY n DESC"')],
   ["a broker quoted yesterday is not chased YET -- the row is future-dated, not overdue",
    (s) => s.replace("const FOLLOWUP_AFTER_DAYS = 14;", "const FOLLOWUP_AFTER_DAYS = 0;")],
-  ["a follow-up says how many of its quotes came from the spreadsheet",
-   (s) => s.replace("\"SUM(CASE WHEN COALESCE(source_tag,'') LIKE 'import-%' THEN 1 ELSE 0 END) AS imported, \" +", "")],
+  ["a follow-up never mentions where the quote came from",
+   (s) => s.replace("        note: note,", "        note: note + ', all from the quote spreadsheet',")],
+  // ⚠️ SABOTAGE THE BRANCH THE RULE ACTUALLY EXERCISES. The first version broke the n === 1 arm
+  // while the rule checks Ken, who stands for two quotes -- so the sabotage changed a line no
+  // assertion reached and reported itself green. A sabotage has to land on the path under test.
+  ["a follow-up names the agency and never says chase",
+   (s) => s.replace("                       : ('Follow up on ' + n + ' quotes' + where),",
+                    "                       : ('Chase ' + n + ' quotes that have had no answer'),")],
+  ["your own to-dos render BEFORE every derived row",
+   (s) => s.replace("   h+=sect('Your to-dos',mine,mine.some(function(r){return r.days!==null&&r.days<0}));", "")],
+  ["a to-do appears ONCE, not in its own block and again under Overdue",
+   (s) => s.replace("   rest.forEach(function(r){", "   rows.forEach(function(r){")],
   ["the chase is dated off the NEWEST quote to that broker, not the oldest",
    (s) => s.replace("\"COUNT(*) AS n, MAX(created_at) AS newest, MIN(created_at) AS oldest, \" +",
                     "\"COUNT(*) AS n, MIN(created_at) AS newest, MIN(created_at) AS oldest, \" +")],

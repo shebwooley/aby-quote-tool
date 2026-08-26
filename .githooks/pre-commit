@@ -27,10 +27,18 @@ if git diff --cached --name-only | grep -q '^worker\.js$'; then
   # A backtick in a comment inside ABY_INTERNAL_JS passed `node --check` AND passed the page
   # checker (which did not cover that literal at the time) and was then refused by esbuild, inside
   # wrangler, at deploy. Only the real bundler agrees with production, so ask it. ~5 seconds.
-  if ! npx wrangler deploy --dry-run > /dev/null 2>&1; then
+  # PINNED, AFTER THIS HOOK BLOCKED A HEALTHY COMMIT ON 2026-08-26. A bare `npx wrangler` resolves
+  # to whatever is newest when the hook runs; 4.126.0 shipped, npx tried to install it, and the
+  # install failed renaming its own cache (EBUSY). The hook then refused EVERY commit while
+  # reporting that the worker would not build -- which sends you looking at your code.
+  # A GATE WHOSE TOOL IS UNPINNED CAN FAIL FOR REASONS THAT HAVE NOTHING TO DO WITH WHAT IT GATES,
+  # and it says so in the words of the thing it gates. Override with ABY_WRANGLER to test a version.
+  WRANGLER="${ABY_WRANGLER:-wrangler@4.125.0}"
+  if ! npx "$WRANGLER" deploy --dry-run > /dev/null 2>&1; then
     echo ""
     echo "wrangler could not BUILD this worker, so it could not deploy either. Commit refused."
-    echo "See the real error with:  npx wrangler deploy --dry-run"
+    echo "See the real error with:  npx $WRANGLER deploy --dry-run"
+    echo "If that command is CLEAN, the hook's own toolchain is the problem, not your code."
     exit 1
   fi
 

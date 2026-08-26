@@ -9813,6 +9813,15 @@ function daysBetween(from, to) {
   return Math.round((tb - ta) / 86400000);
 }
 
+/** "2026-08-19" as "Aug 19" -- the same shape the page prints in its date column, so a note beside
+ *  a row does not read in a different language from the row. */
+function dayName(iso) {
+  const d = isoDay(iso);
+  if (!d) return '';
+  const M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return M[Number(d.slice(5, 7)) - 1] + ' ' + Number(d.slice(8, 10));
+}
+
 /** Today as YYYY-MM-DD, in UTC, so the server and every reader agree on which day it is. */
 function todayIso() { return new Date().toISOString().slice(0, 10); }
 
@@ -9845,9 +9854,6 @@ async function abyDatedThings(env, opts) {
   const out = [];
   const counts = { todo: 0, quote: 0, followup: 0, rfp: 0, commitment: 0 };
   const problems = [];
-  // Reported alongside the rows so the page can say what it is looking at. See the long note above
-  // the follow-up query: on the live book 122 of the 130 pending quotes in the window are imported.
-  let importedQuotes = 0, windowQuotes = 0;
 
   // ① The to-dos. The only source somebody TYPES, and the reason this screen exists.
   try {
@@ -9919,7 +9925,6 @@ async function abyDatedThings(env, opts) {
     const r = await env.DB.prepare(
       "SELECT LOWER(COALESCE(NULLIF(broker_email,''), NULLIF(broker_agency,''), '?')) AS k, " +
       "COUNT(*) AS n, MAX(created_at) AS newest, MIN(created_at) AS oldest, " +
-      "SUM(CASE WHEN COALESCE(source_tag,'') LIKE 'import-%' THEN 1 ELSE 0 END) AS imported, " +
       "MAX(COALESCE(NULLIF(broker_name,''), broker_agency)) AS who, " +
       "MAX(broker_agency) AS agency " +
       "FROM quotes WHERE COALESCE(status,'P') = 'P' AND created_at >= ? " +
@@ -9930,32 +9935,30 @@ async function abyDatedThings(env, opts) {
       const oldest = isoDay(g.oldest);
       const due = newest ? addDays(newest, FOLLOWUP_AFTER_DAYS) : null;
       const n = Number(g.n || 0);
-      const imported = Number(g.imported || 0);
-      // Both ends, because they answer different questions: the newest is why it is due now, the
-      // oldest is how long this has been going on. And the imported count, because it is the
-      // difference between "they have not answered" and "nobody wrote down whether they did".
-      const bits = [];
-      if (newest) bits.push('newest ' + newest);
-      if (oldest && oldest !== newest) bits.push('oldest ' + oldest);
-      if (imported) bits.push(imported === n ? 'all from the quote spreadsheet'
-                                             : imported + ' from the quote spreadsheet');
+      const agency = String(g.agency || '').trim();
+      // WHERE the quotes went, in the title, because that is the unit of the phone call. Eric:
+      // "you could just say follow up on 7 quotes from a particular agency."
+      const where = agency ? (' from ' + agency) : '';
+      // WHEN they went out. One date if they all went the same day, otherwise both ends -- the
+      // newest is why it is due now, the oldest is how long it has been going on.
+      // ⛔ NOTHING ABOUT WHERE THE ROW CAME FROM. See the note above this function.
+      const note = !newest ? ''
+        : (oldest && oldest !== newest) ? ('run between ' + dayName(oldest) + ' and ' + dayName(newest))
+        : ('run ' + dayName(newest));
       out.push({
         key: 'followup:' + String(g.k || ''),
         kind: 'followup',
         id: String(g.k || ''),
-        title: n === 1 ? 'Chase 1 quote that has had no answer'
-                       : 'Chase ' + n + ' quotes that have had no answer',
-        entity: String(g.who || g.agency || g.k || ''),
+        title: n === 1 ? ('Follow up on 1 quote' + where)
+                       : ('Follow up on ' + n + ' quotes' + where),
+        entity: String(g.who || agency || g.k || ''),
         owner: '',
-        note: bits.join(', '),
+        note: note,
         dueOn: due,
         days: due ? daysBetween(today, due) : null,
         count: n,
-        imported: imported,
       });
       counts.followup++;
-      importedQuotes += imported;
-      windowQuotes += n;
     }
   } catch (e) {
     problems.push({ source: 'followup', error: String((e && e.message) || e) });
@@ -10038,8 +10041,7 @@ async function abyDatedThings(env, opts) {
     return a.key < b.key ? -1 : 1;
   });
 
-  return { today, rows: out, counts, problems,
-           followupSource: { imported: importedQuotes, total: windowQuotes } };
+  return { today, rows: out, counts, problems };
 }
 
 async function handleAbyDated(request, env) {
@@ -10247,7 +10249,6 @@ ${abyAdminNav('/admin/today')}
     <select id="fOwner"><option value="">Everyone</option><option value="eric">Eric</option><option value="niels">Niels</option><option value="none">Unassigned</option></select>
   </div>
   <div class="chips" id="srcChips"><span class="lbl">Show</span></div>
-  <p class="sub" id="fuNote" style="display:none;margin:-8px 2px 16px"></p>
 
   <div id="body"><p class="muted">Loading...</p></div>
 </main>
@@ -10325,8 +10326,23 @@ ${abyAdminNav('/admin/today')}
  // Overdue, this week, the next 90 days, then everything with no date at all. Anything further
  // out is COUNTED AND NAMED rather than silently cut, so the list never stops without saying so.
  function renderDue(rows){
+   // YOUR OWN TO-DOS FIRST, IN THEIR OWN BLOCK, AND THIS IS NOT A PREFERENCE.
+   // Eric: "Why don't the tasks that we add show up on the list for today? They just disappear."
+   // They did not disappear. Rendering this page over a production-shaped list put a to-do due
+   // tomorrow BELOW FORTY-EIGHT follow-up rows. The add box is at the top of the screen; what you
+   // type into it cannot come out at the bottom.
+   // ⛔ They appear here and NOWHERE ELSE below -- a row in two sections is a tick that looks like
+   // it did not work.
+   var mine=[], rest=[];
+   rows.forEach(function(r){ (r.kind==='todo'?mine:rest).push(r) });
+   mine.sort(function(a,b){
+     if(a.dueOn&&b.dueOn) return a.dueOn<b.dueOn?-1:1;
+     if(a.dueOn) return -1;
+     if(b.dueOn) return 1;
+     return 0;
+   });
    var od=[],wk=[],soon=[],far=[],un=[];
-   rows.forEach(function(r){
+   rest.forEach(function(r){
      if(r.days===null){un.push(r);return}
      if(r.days<0) od.push(r);
      else if(r.days<=7) wk.push(r);
@@ -10334,13 +10350,16 @@ ${abyAdminNav('/admin/today')}
      else far.push(r);
    });
    var h='';
+   // NOT tinted as a whole even when one is late -- a late row already shows its own date in
+   // red, and washing the entire block pink makes five things you are on top of look urgent.
+   h+=sect('Your to-dos',mine);
    h+=sect('Overdue',od,true);
    h+=sect('This week',wk);
    h+=sect('Next 90 days',soon);
    h+=sect('No date yet',un);
    if(far.length) h+='<p class="muted" style="margin:4px 2px 18px">'+far.length+
      (far.length===1?' more thing is':' more things are')+' further than 90 days out.</p>';
-   if(!od.length&&!wk.length&&!soon.length&&!un.length&&!far.length)
+   if(!mine.length&&!od.length&&!wk.length&&!soon.length&&!un.length&&!far.length)
      h+='<div class="card"><p class="muted" style="margin:0">Nothing is due. Add a to-do above.</p></div>';
    return h;
  }
@@ -10395,19 +10414,6 @@ ${abyAdminNav('/admin/today')}
  }
  var OPEN={};
 
- // WHERE THE FOLLOW-UPS COME FROM, SAID OUT LOUD. Most quotes in the window arrived from the
- // quote spreadsheet, and Pending on one of those means either "still open" or "nobody wrote down
- // the outcome". The screen must not present that as though it knew which.
- function renderSourceNote(){
-   var el=document.getElementById('fuNote');
-   var f=DATA&&DATA.followupSource;
-   if(!f||!f.imported||OFF.followup){ el.style.display='none'; return; }
-   el.style.display='block';
-   el.textContent='Follow-ups: '+f.imported+' of the '+f.total+' quotes behind these rows came in '+
-     'from the quote spreadsheet rather than through the tool, where Pending can mean nobody '+
-     'recorded an outcome. Check before you ring.';
- }
-
  function renderChips(){
    var el=document.getElementById('srcChips');
    var html='<span class="lbl">Show</span>';
@@ -10428,7 +10434,6 @@ ${abyAdminNav('/admin/today')}
  function render(){
    var rows=visible();
    document.getElementById('body').innerHTML = LENS==='due'?renderDue(rows):renderMonth(rows);
-   renderSourceNote();
    wire();
  }
 
