@@ -1659,10 +1659,16 @@ async function handleAdminAddQuote(request, env) {
   // ⚠️ `name` carries the SHORT LABEL the quote log renders, not the bare id. It used to store the
   // id, so anything reading the name rather than looking the id up printed "cobra" in a column of
   // "COBRA". The id is still the identity; the name is display, and both are now right.
+  // ⛔ VALIDATED AGAINST THE LABEL MAP, never taken on trust: an unknown package id would render
+  // as its own raw text in the middle of a product column.
+  const acaForms = String(body.acaForms || '').trim();
+  if (acaForms && !['derivedB', 'derivedC'].includes(acaForms)) {
+    return jsonResp({ error: 'Not an ACA form set.' }, 400);
+  }
   const products = JSON.stringify(ids.map((id) => ({
     id: 'product-' + id,
     name: (PRODUCT_SHORT[id] && PRODUCT_SHORT[id].def) || id,
-    inputs: {},
+    inputs: (id === 'aca' && acaForms) ? { package: acaForms } : {},
   })));
 
   const value = Number(body.firstYearValue);
@@ -11570,12 +11576,19 @@ const PRODUCT_SHORT = {
                         smallB: '1094/1095-B',
                         fullLt100: '1094/1095-C', fullMid: '1094/1095-C', fullHigh: '1094/1095-C', fullXL: '1094/1095-C',
                         selfLt100: '1094/1095-C', selfMid: '1094/1095-C', selfHigh: '1094/1095-C', selfXL: '1094/1095-C',
-                        // DERIVED, NOT RECORDED. The imported quotes stored no package, so which form
-                        // set they were was read back off the ORIGINAL PROPOSAL PDF and written in on
-                        // 2026-08-21 (Eric: "Yes go with 1"). The ids say derived on purpose: every
-                        // other value here is something a person chose in the tool, and a reader has
-                        // to be able to tell those apart. Each row also carries inputs.derivedFrom
-                        // naming the proposal it was read from.
+                        // FORM SET KNOWN, SERVICE TIER NOT RECORDED. Every other C entry here names a
+                        // tier (full or self, and a form-count band); these two say only which set of
+                        // forms it is, which is sometimes all anybody knows.
+                        // TWO LEGITIMATE SOURCES, and the second was added 2026-08-26:
+                        //   1. Read back off the ORIGINAL PROPOSAL PDF for the imported quotes, which
+                        //      stored no package at all (Eric: "Yes go with 1"). Those rows carry
+                        //      inputs.derivedFrom naming the proposal it was read from.
+                        //   2. STATED when a quote is logged by hand. Eric's own first hand-logged
+                        //      quote was "1094/1095-C" with no tier, and the form had no way to say
+                        //      so -- it went in as a bare "ACA Reporting".
+                        // ⛔ THE ALTERNATIVE WAS WORSE: offering the eight tiered options on that
+                        // form would make somebody pick one, and a guessed tier is indistinguishable
+                        // from a recorded one the moment it is stored.
                         // NO BACKTICKS IN THIS BLOCK -- it is inside the adminHTML template literal.
                         // Written with them on the first attempt, for the third time in one day; the
                         // deploy refused it. Run check_worker_pages.mjs after ANY worker.js edit.
@@ -11712,7 +11725,16 @@ ${ADMIN_HEADER_CSS}
    belongs beside the other 6,170 of them.
    It starts SHUT, which is Eric's own suggestion: "maybe when you click log a quote it should
    expand to reveal everything." The log is what this page is for; logging one is occasional. */
+/* Eric, 2026-08-26: "give that log a quote section a border and colored background when it's
+   expanded? Hard to tell where it starts and ends."
+   ⭐ THE STYLE IS ON [open] ONLY, deliberately. Shut, this is a one-line control in a toolbar and
+   a boxed, tinted one-liner would read as an alert. Open, it is a form with eleven fields sitting
+   directly above a table of quotes -- and with no edge, the last row of the form and the first row
+   of the log ran into each other, which is what he was seeing. */
 .logq{background:#fff;border-bottom:1px solid #e5e5e5}
+.logq[open]{background:#f4f8f5;border:1px solid #cfe0d5;border-bottom-color:#cfe0d5;
+            border-radius:10px;margin:12px 24px;box-shadow:0 1px 3px rgba(26,92,58,.07)}
+.logq[open]>summary{border-bottom:1px solid #dfeae2;margin-bottom:6px}
 .logq>summary{cursor:pointer;user-select:none;list-style:none;padding:10px 24px;
               font-size:.9rem;font-weight:600;color:#1a5c3a;display:flex;align-items:center;gap:8px}
 .logq>summary::-webkit-details-marker{display:none}
@@ -11992,6 +12014,21 @@ ${abyAdminNav('/admin')}
           var lbl = (e && e.def) || id;
           return '<button type="button" class="pp" data-pid="' + id + '">' + lbl + '</button>';
         }).join('')}</div>
+        <!-- ACA IS THE ONE PRODUCT WHOSE LABEL IS THE FORM SET, so it is the one that needs a
+             follow-up question. Eric's own first hand-logged quote was an ACA one and this form
+             had no way to record which set, so it went in as a bare "ACA Reporting".
+             ⛔ NOT ASKING THE SERVICE TIER. Full versus self and the form-count band are a real
+             distinction we genuinely do not know from an emailed quote, and a dropdown defaulting
+             to one of them would write a guess that reads exactly like a recorded fact.
+             It appears only when ACA is picked -- a question about a product nobody selected is
+             noise, and answering it would attach a package to nothing. -->
+        <div id="qAcaWrap" style="display:none;margin-top:8px">
+          <span class="muted" style="font-size:.75rem;text-transform:uppercase;letter-spacing:.03em">Which ACA forms</span>
+          <div class="pills" style="margin-top:4px">
+            <button type="button" class="pp" data-aca="derivedB">1094/1095-B</button>
+            <button type="button" class="pp" data-aca="derivedC">1094/1095-C</button>
+          </div>
+        </div>
       </label>
     </div>
     <div class="row">
@@ -13238,11 +13275,30 @@ load();
 (function () {
   var pills = document.getElementById('qPills');
   if (!pills) return;
+  var acaWrap = document.getElementById('qAcaWrap');
   pills.addEventListener('click', function (ev) {
     var b = ev.target.closest ? ev.target.closest('.pp') : null;
     if (!b || !pills.contains(b)) return;
     b.classList.toggle('on');
+    syncAca();
   });
+  // The form-set buttons are a CHOICE OF ONE, so picking either clears the other -- unlike the
+  // product pills, which are a set. Pressing the active one clears it back to unknown, because
+  // "I do not know which" has to stay reachable after a misclick.
+  acaWrap.addEventListener('click', function (ev) {
+    var b = ev.target.closest ? ev.target.closest('.pp') : null;
+    if (!b || !acaWrap.contains(b)) return;
+    var was = b.classList.contains('on');
+    Array.prototype.forEach.call(acaWrap.querySelectorAll('.pp'), function (x) { x.classList.remove('on'); });
+    if (!was) b.classList.add('on');
+  });
+  function syncAca() {
+    var on = !!pills.querySelector('.pp.on[data-pid="aca"]');
+    acaWrap.style.display = on ? '' : 'none';
+    // ⛔ CLEARED WHEN ACA IS SWITCHED OFF. Left set, it would be re-applied silently if ACA were
+    // switched back on later in a different quote, which is a value nobody chose.
+    if (!on) Array.prototype.forEach.call(acaWrap.querySelectorAll('.pp'), function (x) { x.classList.remove('on'); });
+  }
 
   function chosenProducts() {
     return Array.prototype.map.call(pills.querySelectorAll('.pp.on'), function (b) {
@@ -13281,6 +13337,8 @@ load();
           agentName: document.getElementById('qAgent').value.trim(),
           agentEmail: document.getElementById('qAgentEmail').value.trim(),
           products: products,
+          acaForms: (acaWrap.querySelector('.pp.on') || {}).getAttribute
+            ? acaWrap.querySelector('.pp.on').getAttribute('data-aca') : '',
           rep: document.getElementById('qRep').value,
           status: document.getElementById('qStatus').value,
           commissionIncluded: document.getElementById('qComm').checked,
@@ -13306,6 +13364,7 @@ load();
     Array.prototype.forEach.call(pills.querySelectorAll('.pp.on'), function (b) {
       b.classList.remove('on');
     });
+    syncAca();
     // ⭐ THE LIST RELOADS, which is the whole reason this belongs on THIS page. On the old screen
     // you logged a quote and then had to go somewhere else to see whether it had landed.
     // ⚠️ It reloads with the CURRENT search, not with a cleared one -- clearing the box would look

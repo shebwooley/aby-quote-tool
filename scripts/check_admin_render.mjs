@@ -136,6 +136,35 @@ const RULES = [
     holds: (p) => /<div class="azbar" id="azbar"><\/div>/.test(p.brokers),
   },
   {
+    name: "the open panel is visually bounded, and the shut one is not",
+    why: "Eric, 2026-08-26: 'Hard to tell where it starts and ends.' Open, it is an eleven-field"
+       + " form sitting directly on top of a table of quotes. Shut, it is a one-line control in a"
+       + " toolbar, and boxing THAT would read as an alert -- so the rule pins both halves.",
+    holds: (p) => /\.logq\[open\]\{[^}]*border:1px solid/.test(p.log)
+               && /\.logq\[open\]\{[^}]*background:#f4f8f5/.test(p.log)
+               && !/\n\.logq\{[^}]*border-radius/.test(p.log),
+  },
+  {
+    name: "an ACA quote can record WHICH form set, and is not asked for a tier",
+    why: "ACA is the one product whose label IS the form set, and the form could not record it --"
+       + " Eric's own first hand-logged quote went in as a bare 'ACA Reporting'. The tier (full vs"
+       + " self, and the band) is deliberately NOT offered: a dropdown defaulting to one writes a"
+       + " guess that reads exactly like a recorded fact.",
+    holds: (p) => /data-aca="derivedB"/.test(p.log)
+               && /data-aca="derivedC"/.test(p.log)
+               && !/data-aca="fullLt100"/.test(p.log)
+               && !/data-aca="selfLt100"/.test(p.log),
+  },
+  {
+    name: "the ACA question is hidden until ACA is picked",
+    why: "A question about a product nobody selected is noise, and answering it would attach a"
+       + " package to nothing.",
+    // The emitted attribute is `display:none;margin-top:8px`, so anchoring on a closing quote
+    // right after `none` matched nothing. The rule failed for its own reasons, not the page's --
+    // and the sabotage-must-apply guard is what said so, on the first run.
+    holds: (p) => /<div id="qAcaWrap" style="display:none;/.test(p.log),
+  },
+  {
     name: "no page ships the words 'not recorded'",
     why: "It printed under all 665 firms, because 0 of them had a recorded status. Eric asked what"
        + " it was for, which is the question a label identical on every row always provokes.",
@@ -158,6 +187,18 @@ const SABOTAGES = [
     edit: (t) => t.replace("  { href: '/admin/rates',      label: 'Rates' },", "") },
   { why: "the A-Z bar's mount point is removed",
     edit: (t) => t.replace('<div class="azbar" id="azbar"></div>', "") },
+  { why: "the open panel loses its border, so the form runs into the quote table again",
+    edit: (t) => t.replace("border:1px solid #cfe0d5;border-bottom-color:#cfe0d5;", "") },
+  { why: "the shut panel gets boxed too, so a one-line control reads as an alert",
+    edit: (t) => t.replace(".logq{background:#fff;border-bottom:1px solid #e5e5e5}",
+                           ".logq{background:#fff;border-bottom:1px solid #e5e5e5;border-radius:10px}") },
+  { why: "the ACA form-set choice is dropped, so the label cannot say B or C",
+    edit: (t) => t.replace('data-aca="derivedC"', 'data-nothing="x"') },
+  { why: "the form starts asking for a service tier nobody knows",
+    edit: (t) => t.replace('<button type="button" class="pp" data-aca="derivedB">1094/1095-B</button>',
+                           '<button type="button" class="pp" data-aca="fullLt100">1094/1095-C full</button>') },
+  { why: "the ACA question ships visible, asking about a product nobody picked",
+    edit: (t) => t.replace('<div id="qAcaWrap" style="display:none;', '<div id="qAcaWrap" style="display:block;') },
   { why: "the 'not recorded' line comes back under every firm",
     edit: (t) => t.replace("     return '<span>' + esc(live) + '</span>';",
                            "     return '<span>' + esc(live) + '</span>' + '<div>not recorded</div>';") },
