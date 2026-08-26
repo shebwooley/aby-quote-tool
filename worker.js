@@ -12403,6 +12403,25 @@ const MIGRATIONS = [
   { sql: "CREATE INDEX IF NOT EXISTS agencies_disposition ON agencies (disposition)",
     index: "agencies_disposition" },
 
+  // ── WHERE WE FIRST MET THEM (Eric, 2026-08-26) ───────────────────────
+  //
+  // "Can you put ABY Brokers as the source for everything we already have... I want them to be
+  // distinct from all the stuff we are about to import, especially when there is overlap between
+  // my CCE list and the existing ABY brokers."
+  //
+  // ⭐⭐ SOURCE IS WHERE WE FIRST MET THEM AND IT IS SET ONCE. It is not "which lists is this
+  // person on" -- that is what TAGS are for, and the import already tags a whole batch with the
+  // event it came from. The overlap Eric names is exactly why the two have to be different
+  // things: somebody who is an ABY broker AND on the CE list is TWO facts, and a single field
+  // that the second import overwrote would quietly destroy the first one.
+  // ▶️ So the CE import will ADOPT an existing ABY broker, leave source alone, and add its tag.
+  // The person then reads: source = ABY broker, tagged = that CE class. Both true.
+  //
+  // ⚠️  and  already HAD a source column and 0 of 288 rows used it.
+  //  had none.
+  { sql: "ALTER TABLE agencies ADD COLUMN source TEXT", table: "agencies", column: "source" },
+  { sql: "CREATE INDEX IF NOT EXISTS people_source ON people (source)", index: "people_source" },
+
   // ── TO-DOS GROW A TIME, A KIND, AN ORDER AND A COMPLETION RECORD (Eric, 2026-08-26) ────────
   //
   // "Is there a way to edit To-Dos, to mark them as done but actually have a record of what was
