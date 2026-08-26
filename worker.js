@@ -4699,7 +4699,7 @@ ${abyAdminNav('/admin/brokers')}
             name, firm, email, phone, in any order. <strong>An email is not required:</strong> a
             person is identified by their email when there is one, and otherwise by their name and
             firm together, so a phone-only contact can go in now and gain an address later.
-            <strong>Anybody we already know is recognised and tagged, not duplicated</strong>
+            <strong>Anybody we already know is recognized and tagged, not duplicated</strong>
             &mdash; including when the address arrives for somebody already on the list by name.</p>
           <textarea id="importBox" oninput="previewList()" rows="5"
             placeholder="Jane Smith&#9;Acme Benefits&#9;jane@acme.com&#9;(214) 555-0134"
@@ -5409,7 +5409,7 @@ ${abyAdminNav('/admin/brokers')}
        (divs.length
          ? li('<b>' + divs.length + ' names</b> are <b>divisions or branch offices</b> of a bigger'
               + ' firm. They roll up into the parent above, and they stay on the fallen-off list'
-              + ' on their own merits because somebody can still ring them.')
+              + ' on their own merits because somebody can still call them.')
          : '')
      ].filter(function(s){ return s; }).join('');
 
@@ -7048,7 +7048,7 @@ ${abyAdminNav('/admin/clients')}
           : esc(r.agency||'')
             + (r.attribution==='contested'
                 ? ' <span class="pill unk" title="'+r.firmCount+' agencies quoted this'
-                  + ' employer, so who brought them is a judgement. Two brokers competing on one'
+                  + ' employer, so who brought them is a judgment. Two brokers competing on one'
                   + ' account is a real case in this book and nothing here picks a winner.">'
                   + r.firmCount+' agencies</span>'
                 : (r.attribution==='quote'
@@ -9198,7 +9198,7 @@ function rfpParsePaste(text) {
     return hit ? hit.field : null;
   });
   if (map.every((m) => m === null)) {
-    return { rows: [], refused: [{ line: lines[0], why: 'no column heading recognised' }], header: rawHeader };
+    return { rows: [], refused: [{ line: lines[0], why: 'no column heading recognized' }], header: rawHeader };
   }
 
   const rows = [], refused = [];
@@ -12105,7 +12105,7 @@ ${abyAdminNav('/admin')}
     <option value="broker">Broker (either)</option>
   </select>
   <!-- Only visible on the Historic tab. Eric asked for the year drop-down to live there, and it
-       is populated from the DATA rather than a hardcoded range, so the back-catalogue's real span
+       is populated from the DATA rather than a hardcoded range, so the back catalog's real span
        (2008 onward) shows up without anybody remembering to widen a list. -->
   <select id="histYear" style="display:none;padding:.4rem .5rem;border:1px solid #ddd;border-radius:6px;font-size:.85rem">
     <option value="">All years</option>
