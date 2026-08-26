@@ -69,8 +69,11 @@ ABYQuote.pricing = {
         full:     { setupFee: 550,  renewalFee: 550,       description: 'POP plan doc + annual NDT for POP, FSA, LFSA, DCAP & HSA' }
       },
       additionalFees: [
-        { label: 'Additional NDT (after first set per year)', amount: 250, unit: 'per additional test', description: 'Each nondiscrimination test set beyond the first one included per year.' },
-        { label: 'Prior year NDT', amount: 300, unit: 'per plan year', description: 'Nondiscrimination testing for a prior plan year, typically requested to catch up or correct a year that was not tested.' },
+        // needsTesting: this line only makes sense when the quoted package INCLUDES nondiscrimination
+        // testing. On a POP document-only quote ($99, no testing) both are suppressed -- Eric,
+        // 2026-08-26: "these two additional services should be removed since testing isn't included."
+        { label: 'Additional NDT (after first set per year)', amount: 250, unit: 'per additional test', needsTesting: true, description: 'Each nondiscrimination test set beyond the first one included per year.' },
+        { label: 'Prior year NDT', amount: 300, unit: 'per plan year', needsTesting: true, description: 'Nondiscrimination testing for a prior plan year, typically requested to catch up or correct a year that was not tested.' },
         { label: 'Data manipulation / reformatting', amount: 5, unit: 'per participant', description: 'Reformatting or cleaning up census/participant data that is not provided in ABY\'s standard format.' }
       ]
     },
@@ -364,8 +367,11 @@ ABYQuote.pricing = {
         full:     { setupFee: 500,  renewalFee: 500,       description: 'POP plan doc + annual NDT for POP, FSA, LFSA, DCAP & HSA' }
       },
       additionalFees: [
-        { label: 'Additional NDT (after first set per year)', amount: 250, unit: 'per additional test', description: 'Each nondiscrimination test set beyond the first one included per year.' },
-        { label: 'Prior year NDT', amount: 300, unit: 'per plan year', description: 'Nondiscrimination testing for a prior plan year, typically requested to catch up or correct a year that was not tested.' },
+        // needsTesting: this line only makes sense when the quoted package INCLUDES nondiscrimination
+        // testing. On a POP document-only quote ($99, no testing) both are suppressed -- Eric,
+        // 2026-08-26: "these two additional services should be removed since testing isn't included."
+        { label: 'Additional NDT (after first set per year)', amount: 250, unit: 'per additional test', needsTesting: true, description: 'Each nondiscrimination test set beyond the first one included per year.' },
+        { label: 'Prior year NDT', amount: 300, unit: 'per plan year', needsTesting: true, description: 'Nondiscrimination testing for a prior plan year, typically requested to catch up or correct a year that was not tested.' },
         { label: 'Data manipulation / reformatting', amount: 5, unit: 'per participant', description: 'Reformatting or cleaning up census/participant data that is not provided in ABY\'s standard format.' }
       ]
     },

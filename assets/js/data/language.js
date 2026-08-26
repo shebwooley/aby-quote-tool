@@ -111,7 +111,15 @@ ABYQuote.language = {
         'If a Section 125 plan fails nondiscrimination testing, affected benefits may become taxable to HCEs or key employees, and the employer may be exposed to additional IRS scrutiny or penalties. For this reason, ongoing plan administration and annual testing are critical components of maintaining a compliant POP.',
         'ABY administers Section 125 Premium Only Plans by preparing required plan documents, performing annual nondiscrimination testing based on employer-provided data, and providing corrective action guidance when testing results indicate potential issues, helping employers maintain compliance while preserving the intended tax advantages of the plan.',
         'For employers who purchase Flexible Spending Account (FSA) administration or certain ERISA compliance services, the required POP documentation and nondiscrimination testing are included as part of those services. In these cases, a separate standalone POP purchase is not required.'
-      ]
+      ],
+      // Shown in BOLD at the foot of this section, and ONLY when the quote is the $99
+      // document-only package. Eric's wording, 2026-08-26, kept verbatim.
+      //
+      // WHY IT MATTERS ENOUGH TO BE CONDITIONAL: everything above this line describes testing ABY
+      // performs -- three named tests, what failing one costs -- and on a document-only quote none
+      // of it is being bought. Without this sentence the section reads as a description of what
+      // the employer is purchasing.
+      docsOnlyNotice: 'If you are purchasing the POP document only, annual non-discrimination testing is not included and it is the employer\'s responsibility to ensure that the plan does not discriminate in favor of Highly Compensated Employees.'
     },
 
     fsa: {

@@ -161,7 +161,25 @@ ABYQuote.renderer = (function () {
     ].join('\n');
   }
 
-  function renderLearnMore(productId, skipFirst) {
+  /**
+   * IS THIS QUOTE THE $99 POP DOCUMENT-ONLY PACKAGE, AND NOTHING ELSE?
+   *
+   * EVERY package quoted for POP has to be docsOnly, not merely one of them. A broker showing
+   * document-only ALONGSIDE a testing package is quoting a CHOICE -- and on that quote the two NDT
+   * fees are real prices for the option that includes testing. Suppressing them there would strip
+   * accurate pricing off a live option, which is a worse error than the one this fixes.
+   *
+   * Eric's words were "if the company is being quoted the $99 POP document only", and an employer
+   * being shown two packages is not being quoted the document only.
+   */
+  function isDocsOnlyPop(group) {
+    if (!group || group.productId !== 'pop') return false;
+    var rs = group.results || [];
+    if (!rs.length) return false;
+    return rs.every(function (r) { return r.packageId === 'docsOnly'; });
+  }
+
+  function renderLearnMore(productId, skipFirst, docsOnly) {
     var lang = L.products[productId];
     if (!lang) return '';
     var body = [];
@@ -169,6 +187,11 @@ ABYQuote.renderer = (function () {
     if (lang.bulletHeading) body.push('<p>' + esc(lang.bulletHeading) + '</p>');
     if (lang.bullets) body.push('<ul>' + lang.bullets.map(function (b) { return '<li>' + esc(b) + '</li>'; }).join('') + '</ul>');
     (lang.closing || []).forEach(function (p) { body.push('<p>' + esc(p) + '</p>'); });
+    // LAST, AND BOLD. It qualifies everything above it, so it cannot come first -- and a reader
+    // who stops early has read the description without the exception.
+    if (docsOnly && lang.docsOnlyNotice) {
+      body.push('<p><strong>' + esc(lang.docsOnlyNotice) + '</strong></p>');
+    }
     if (body.length === 0) return '';
     var shortName = (findProduct(productId) || {}).shortName || (lang.heading || '');
     return [
@@ -291,8 +314,10 @@ ABYQuote.renderer = (function () {
     ].join('\n');
   }
 
-  function renderFeeSchedule(result, meta) {
+  function renderFeeSchedule(result, meta, docsOnly) {
     var fees = result.additionalFees || [];
+    // ⛔ FILTERED ON THE FEE'S OWN FLAG, never on its label. See the note beside them in pricing.js.
+    if (docsOnly) fees = fees.filter(function (f) { return !f.needsTesting; });
     if (fees.length === 0) return '';
     var items = fees.map(function (f) {
       var amt = (f.amount === 0) ? 'Included' : u.money(f.amount);
@@ -332,15 +357,18 @@ ABYQuote.renderer = (function () {
       ? '<p class="muted" style="font-size:12.5px;margin-top:12px;">' + notes.map(esc).join(' ') + '</p>'
       : '';
     var intro = (lang.paragraphs && lang.paragraphs[0]) ? '<p>' + esc(lang.paragraphs[0]) + '</p>' : '';
+    // Computed ONCE and passed to both, so the notice and the suppressed fees can never disagree
+    // about which quote this is.
+    var docsOnly = isDocsOnlyPop(group);
     return [
       '<section>',
       '  <div class="section-card">',
       '    <div class="section-head hero-head"><h2>' + esc(lang.heading || meta.name) + '</h2></div>',
       '    <div class="section-body">',
       intro,
-      renderLearnMore(group.productId, true),
+      renderLearnMore(group.productId, true, docsOnly),
       pricing,
-      renderFeeSchedule(first, meta),
+      renderFeeSchedule(first, meta, docsOnly),
       notesHtml,
       '    </div>',
       '  </div>',
