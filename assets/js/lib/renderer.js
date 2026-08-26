@@ -314,6 +314,36 @@ ABYQuote.renderer = (function () {
     ].join('\n');
   }
 
+  /**
+   * What this quote is charging for the extras, as its own small table.
+   *
+   * ⛔ SEPARATE FROM THE FEE SCHEDULE, and that separation is the point. The fee schedule is a
+   * RATE CARD -- what a thing would cost if you asked for it. These are lines this employer is
+   * actually being charged, with a quantity. Merging them would leave a reader unable to tell a
+   * price they are paying from a price they are being shown.
+   */
+  function renderExtraCharges(result) {
+    var lines = result.extraLines || [];
+    if (!lines.length) return '';
+    var rows = lines.map(function (l) {
+      return '<div class="fee-item"><div class="fee-static">' +
+        '<span class="fee-name">' + esc(l.qty + ' x ' + l.label) + '</span>' +
+        '<span class="fee-amount">' + u.money(l.amount) +
+          ' <span class="fee-unit">' + esc(u.money(l.rate) + ' ' + l.unit) + '</span></span>' +
+        '</div></div>';
+    }).join('\n');
+    return [
+      '<div class="fees-wrap">',
+      '  <div class="fees-title">Included in this quote, by quantity</div>',
+      rows,
+      '  <div class="fee-item"><div class="fee-static">',
+      '    <span class="fee-name"><strong>Additional services total</strong></span>',
+      '    <span class="fee-amount"><strong>' + u.money(result.extrasTotal) + '</strong></span>',
+      '  </div></div>',
+      '</div>'
+    ].join('\n');
+  }
+
   function renderFeeSchedule(result, meta, docsOnly) {
     var fees = result.additionalFees || [];
     // ⛔ FILTERED ON THE FEE'S OWN FLAG, never on its label. See the note beside them in pricing.js.
@@ -368,6 +398,7 @@ ABYQuote.renderer = (function () {
       intro,
       renderLearnMore(group.productId, true, docsOnly),
       pricing,
+      renderExtraCharges(first),
       renderFeeSchedule(first, meta, docsOnly),
       notesHtml,
       '    </div>',
@@ -590,8 +621,36 @@ ABYQuote.renderer = (function () {
             '<div class="emp-count-out" aria-live="polite"></div>' +
           '</div>';
       }
+      // ── QUANTITIES THE EMPLOYER CAN CHANGE (Eric, 2026-08-26) ────────────────────────────
+      //
+      // "I think it needs to show up on the last page of the proposal where the employer can
+      // change that number if needed." His own manual proposal does exactly this: a list of
+      // "#  ______  $750.00 per additional EIN with 10 or more W2s" lines above the signature.
+      //
+      // ⭐ THE BROKER'S ANSWER IS THE STARTING VALUE, NOT A CEILING. The broker types what they
+      // were told; the employer is the one who actually knows how many EINs they have, and this
+      // is the page where they say so.
+      // ⛔ SAME RULE AS THE PARTICIPANT COUNT ABOVE: THE QUOTE BODY DOES NOT MOVE. What ABY
+      // quoted stays what ABY quoted. This is the employer ASSERTING a number, next to their
+      // signature, which is why it lives here and nowhere else.
+      var extraRows = '';
+      var firstResult = g.results[0];
+      if (firstResult && firstResult.extraLines && firstResult.extraLines.length) {
+        extraRows = '<div class="elected-extras">' +
+          firstResult.extraLines.map(function (l) {
+            return '<div class="elected-row" data-extra="' + esc(l.id) + '"' +
+                     ' data-rate="' + esc(String(l.rate)) + '">' +
+              '<input type="number" min="0" step="1" class="elected-qty" value="' + esc(String(l.qty)) + '">' +
+              '<span class="elected-label">' + esc(l.electedLabel) + '</span>' +
+              '<span class="elected-amount">' + u.money(l.amount) + '</span>' +
+            '</div>';
+          }).join('') +
+          '<div class="elected-total">Additional services total: ' +
+            '<strong class="elected-total-amount">' + u.money(firstResult.extrasTotal) + '</strong></div>' +
+        '</div>';
+      }
       return '<div class="opt-row"><input type="checkbox" class="opt-check" data-label="' + esc(name) + '" checked>' +
-        '<div class="opt-main"><div class="opt-title">' + esc(name) + '</div>' + desc + tier + countBox + '</div></div>';
+        '<div class="opt-main"><div class="opt-title">' + esc(name) + '</div>' + desc + tier + countBox + extraRows + '</div></div>';
     }).join('\n');
 
     function field(label, fname, val, full, type) {

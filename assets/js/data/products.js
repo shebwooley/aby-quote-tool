@@ -85,6 +85,54 @@ ABYQuote.products = [
     shortName: 'ACA Reporting',
     inputType: 'package-with-count',
     countLabel: 'forms',
+
+    // ── EXTRA QUESTIONS ON THIS PRODUCT (Eric, 2026-08-26) ──────────────────────────────────
+    //
+    // "I had to run a manual quote earlier on 1094/1095-C forms because the quoting tool is not
+    // set up right to handle it. Basically, this group has multiple EINs."
+    //
+    // ⭐⭐ THE RULE WAS ALREADY IN THE TOOL AND WAS ONLY PROSE. pricing.js has carried the note
+    // "Multi-EIN employers must take Full Service: Self Service is not available where a second
+    // EIN is involved" for as long as the ACA product has existed -- as a sentence in a footnote
+    // that a broker had to read and then act on. Nothing stopped anybody quoting Self Service to
+    // a multi-EIN group, which is why this quote had to be built by hand.
+    // A rule with no enforcement is a preference.
+    //
+    // ⛔ THE COUNTS ARE ASKED AS TWO SEPARATE QUESTIONS, NOT ONE PLUS A RATE. The price splits at
+    // ten W-2s and the two bands are $375 and $750, so "how many additional EINs" alone cannot be
+    // priced -- and a single question with a rate picked afterwards is how somebody prices nine
+    // small EINs at the large rate.
+    // ⚠️ W-2s, NOT FTEs, and that is Eric's own document's wording. Niels described the same split
+    // as "1 to 9 FTE / 10+ FTE" on 2026-08-26; a W-2 count and an FTE count are different numbers
+    // for the same group. FLAGGED TO ERIC, unanswered, and left as W-2 because that is what both
+    // the tool and the proposal he sends already say. Do not quietly switch it.
+    extras: [
+      { id: 'einLarge', label: 'Additional EINs with 10 or more W-2s', type: 'number',
+        fee: 750, feeUnit: 'per additional EIN', electedLabel: '$750.00 per additional EIN with 10 or more W-2s' },
+      { id: 'einSmall', label: 'Additional EINs with fewer than 10 W-2s', type: 'number',
+        fee: 375, feeUnit: 'per additional EIN', electedLabel: '$375.00 per additional EIN with fewer than 10 W-2s' },
+      // ⭐ THE BOUNDARY IS EXCLUSIVE ON ONE SIDE AND INCLUSIVE ON THE OTHER, ON PURPOSE. Eric's
+      // manual proposal says "10 or more" AND "10 or fewer" on the same page, so an EIN with
+      // exactly ten W-2s qualifies for both $375 and $750. Page 4 of that document says "2-9"
+      // instead, which disagrees with page 3 and drops 0 and 1. This is the only version of the
+      // three that partitions the range. Reported to Eric 2026-08-26.
+      { id: 'priorYears', label: 'Also filing for a prior year (late filing)', type: 'checkbox' },
+      { id: 'stateFirst', label: 'EINs needing state filing (first state)', type: 'number',
+        fee: 500, feeUnit: 'per EIN', electedLabel: '$500.00 for the first state (per EIN)' },
+      { id: 'stateMore', label: 'Additional states, across those EINs', type: 'number',
+        fee: 350, feeUnit: 'per EIN, per state', electedLabel: '$350.00 for each additional state (per EIN)' }
+    ],
+
+    // ── WHEN SELF SERVICE IS NOT ON OFFER ───────────────────────────────────────────────────
+    // Eric: "If a group has multiple EINs or if they are filing late (past years), then
+    // self-service is not an option and should not be included on the quote."
+    // ⛔ NOT GREYED OUT AND NOT FOOTNOTED -- ABSENT. A disabled option still tells the employer a
+    // cheaper thing exists that they are being refused, which is a conversation ABY does not want
+    // to have on a proposal.
+    excludeWhenAnyOf: ['einLarge', 'einSmall', 'priorYears'],
+    excludedPackages: ['selfLt100', 'selfMid', 'selfHigh', 'selfXL'],
+    excludedReason: 'Self Service is not available to an employer with more than one EIN, or when a prior year is being filed late.',
+
     packages: [
       { id: 'smallB',    name: 'Small Group / Self/Level/Balance Funded: 1094/1095-B (per-form)', requiresCount: true },
       { id: 'fullLt100', name: 'ALE Full Service: up to 100 forms',       requiresCount: false },

@@ -154,8 +154,106 @@
       }
       pkgEl.addEventListener('change', updateCountVisibility);
       updateCountVisibility();
+      if (product.extras) wrap.appendChild(buildExtras(product, pkgEl, updateCountVisibility));
     }
     return wrap;
+  }
+
+  /**
+   * The extra questions a product declares (ACA: EIN counts, late filing, state filing).
+   *
+   * ⭐ GENERIC, DRIVEN FROM products.js. Nothing about EINs is written here -- the labels, the
+   * fees and the exclusion rule are all data, so a second product needing its own questions gets
+   * them without touching this function.
+   */
+  function buildExtras(product, pkgEl, afterChange) {
+    var box = document.createElement('div');
+    box.className = 'product-extras';
+    box.dataset.productExtras = product.id;
+
+    var note = document.createElement('p');
+    note.className = 'extras-note';
+    note.dataset.extrasNote = product.id;
+    note.style.display = 'none';
+    note.textContent = product.excludedReason || '';
+    box.appendChild(note);
+
+    product.extras.forEach(function (x) {
+      var label = document.createElement('label');
+      label.className = (x.type === 'checkbox') ? 'extra-check' : 'extra-num';
+      var input = document.createElement('input');
+      if (x.type === 'checkbox') {
+        input.type = 'checkbox';
+      } else {
+        input.type = 'number';
+        input.min = '0';
+        input.placeholder = '0';
+      }
+      input.dataset.productInput = product.id + ':extra:' + x.id;
+      var span = document.createElement('span');
+      span.textContent = x.label;
+      // A checkbox reads left to right; a number field reads label-then-box like every other
+      // field on this form. Putting them in the same order would make one of the two look broken.
+      if (x.type === 'checkbox') { label.appendChild(input); label.appendChild(span); }
+      else { label.appendChild(span); label.appendChild(input); }
+      input.addEventListener('change', function () { applyExclusions(product, pkgEl, afterChange); });
+      box.appendChild(label);
+    });
+    return box;
+  }
+
+  /**
+   * Take the excluded packages OFF the dropdown when an excluding answer is given, and put them
+   * back when it is withdrawn.
+   *
+   * 🔴 REMOVED, NOT DISABLED. Eric: multi-EIN or late filing means self-service "should not be
+   * included on the quote". A greyed-out option still tells the employer that a cheaper thing
+   * exists which they are being refused -- a conversation ABY does not want to have on a proposal.
+   *
+   * ⚠️ THE BROWSER IS NOT THE GUARD. The engine refuses the same combination independently, because
+   * this function cannot run for a quote arriving through the admin re-run link.
+   */
+  function applyExclusions(product, pkgEl, afterChange) {
+    if (!product.excludeWhenAnyOf || !product.excludedPackages) return;
+    var hit = product.excludeWhenAnyOf.some(function (id) {
+      var el = formEl.querySelector('[data-product-input="' + product.id + ':extra:' + id + '"]');
+      if (!el) return false;
+      return (el.type === 'checkbox') ? el.checked : (Number(el.value) > 0);
+    });
+
+    var note = formEl.querySelector('[data-extras-note="' + product.id + '"]');
+    if (note) note.style.display = hit ? '' : 'none';
+
+    var excluded = product.excludedPackages;
+    var have = {};
+    Array.prototype.forEach.call(pkgEl.options, function (o) { have[o.value] = o; });
+
+    if (hit) {
+      // ⛔ IF THE BROKER HAD ALREADY PICKED ONE, MOVE THEM SOMEWHERE REAL AND SAY SO IMPLICITLY BY
+      // CHANGING THE VISIBLE SELECTION. Removing the selected option silently leaves the <select>
+      // showing whatever happens to be first, which is a different package than they chose.
+      var wasExcluded = excluded.indexOf(pkgEl.value) !== -1;
+      excluded.forEach(function (id) { if (have[id]) pkgEl.removeChild(have[id]); });
+      if (wasExcluded) {
+        var swap = { selfLt100: 'fullLt100', selfMid: 'fullMid', selfHigh: 'fullHigh', selfXL: 'fullXL' };
+        var want = swap[pkgEl.value] || null;
+        pkgEl.value = (want && pkgEl.querySelector('option[value="' + want + '"]')) ? want
+                    : (pkgEl.options[0] ? pkgEl.options[0].value : '');
+      }
+    } else {
+      // Restore them in the product's own order, so the list never comes back shuffled.
+      var wanted = product.packages.map(function (p) { return p.id; });
+      var current = pkgEl.value;
+      pkgEl.innerHTML = '';
+      product.packages.forEach(function (pkg) {
+        var opt = document.createElement('option');
+        opt.value = pkg.id;
+        opt.textContent = pkg.name;
+        pkgEl.appendChild(opt);
+      });
+      if (wanted.indexOf(current) !== -1) pkgEl.value = current;
+    }
+    if (afterChange) afterChange();
   }
 
   function buildCountInput(product) {
@@ -417,6 +515,18 @@
         var ci2 = formEl.querySelector('[data-product-input="' + productId + ':count"]');
         selection.packageId = ps2 ? ps2.value : null;
         selection.count = ci2 && ci2.value !== '' ? Number(ci2.value) : null;
+      }
+      // ⭐ ZERO IS NOT RECORDED. An extras object full of zeros would put "0 additional EINs" on
+      // the elected page of every ACA quote, which is a line about a thing that is not happening.
+      if (product.extras) {
+        var extras = {};
+        product.extras.forEach(function (x) {
+          var el = formEl.querySelector('[data-product-input="' + productId + ':extra:' + x.id + '"]');
+          if (!el) return;
+          if (x.type === 'checkbox') { if (el.checked) extras[x.id] = true; }
+          else { var n = Number(el.value); if (el.value !== '' && n > 0) extras[x.id] = n; }
+        });
+        if (Object.keys(extras).length) selection.extras = extras;
       }
       data.selections.push(selection);
     });
@@ -956,6 +1066,44 @@
       });
       input.addEventListener('change', update);
     });
+
+    // ── THE ELECTED-EXTRA QUANTITIES (additional EINs, state filing) ──────────────────────────
+    //
+    // Eric, 2026-08-26: it "needs to show up on the last page of the proposal where the employer
+    // can change that number if needed."
+    //
+    // ⭐ ARITHMETIC ONLY, AND ON PURPOSE. Each line is quantity x a flat rate, so the answer is
+    // multiplication -- unlike the participant count above, which has bands, minimums and a
+    // priced range it can fall out of. Reaching for that machinery here would import a set of
+    // failure modes these lines do not have.
+    var rows = document.querySelectorAll('.elected-row');
+    if (!rows.length) return;
+    Array.prototype.forEach.call(rows, function (row) {
+      var qty = row.querySelector('.elected-qty');
+      var amt = row.querySelector('.elected-amount');
+      if (!qty || !amt) return;
+      qty.addEventListener('input', function () {
+        var n = Number(qty.value);
+        // ⛔ A BLANK OR NEGATIVE BOX SHOWS NOTHING RATHER THAN $0 OR NaN. Mid-typing an employer
+        // has an empty field for a moment, and printing "$0" at them reads as a price.
+        if (!Number.isFinite(n) || n < 0) { amt.textContent = ''; retotal(); return; }
+        amt.textContent = money(n * Number(row.dataset.rate || 0));
+        retotal();
+      });
+    });
+
+    function retotal() {
+      var wraps = document.querySelectorAll('.elected-extras');
+      Array.prototype.forEach.call(wraps, function (w) {
+        var sum = 0;
+        Array.prototype.forEach.call(w.querySelectorAll('.elected-row'), function (r) {
+          var n = Number(r.querySelector('.elected-qty').value);
+          if (Number.isFinite(n) && n > 0) sum += n * Number(r.dataset.rate || 0);
+        });
+        var out = w.querySelector('.elected-total-amount');
+        if (out) out.textContent = money(sum);
+      });
+    }
   }
 
   function prePopulateFromRerun() {

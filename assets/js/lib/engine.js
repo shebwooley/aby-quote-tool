@@ -179,6 +179,67 @@ ABYQuote.engine = (function () {
     return result;
   }
 
+  /**
+   * The extra answers a product declares (ACA: additional EINs, late filing, state filing).
+   *
+   * TWO JOBS, AND THE SECOND ONE IS THE GUARD.
+   *   1. PRICE them: each extra with a `fee` and a positive count becomes a line on the quote.
+   *   2. REFUSE a package the answers exclude. The form already removes those options, but the
+   *      form is not the only caller -- a quote arriving through the admin re-run link is built
+   *      from stored inputs and never touches that code. A rule enforced only in the browser is
+   *      enforced only where somebody is looking.
+   *
+   * ⛔ IT REFUSES LOUDLY RATHER THAN SUBSTITUTING. Quietly upgrading Self Service to Full Service
+   * would change the price of a quote by thousands without saying so, and the broker would send
+   * it. The result carries a blocking error instead, so the quote cannot be produced at all.
+   */
+  function applyExtras(result, selection) {
+    var product = null;
+    var list = (window.ABYQuote && window.ABYQuote.products) || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id === selection.productId) { product = list[i]; break; }
+    }
+    if (!product || !product.extras) return;
+
+    var given = selection.extras || {};
+
+    var excluded = (product.excludeWhenAnyOf || []).some(function (id) {
+      var v = given[id];
+      return v === true || (typeof v === 'number' && v > 0);
+    });
+    if (excluded && (product.excludedPackages || []).indexOf(result.packageId) !== -1) {
+      result.blocked = product.excludedReason ||
+        'That package is not available with the answers given.';
+      result.warnings.push(result.blocked);
+      return;
+    }
+
+    // ⭐ THE LINES ARE BUILT FROM THE PRODUCT'S OWN DECLARATION, so the label on the quote, the
+    // label on the elected page and the fee are one definition rather than three.
+    var lines = [];
+    product.extras.forEach(function (x) {
+      if (!x.fee) return;                     // a checkbox that only gates: nothing to charge
+      var qty = Number(given[x.id] || 0);
+      if (!(qty > 0)) return;
+      lines.push({
+        id: x.id,
+        label: x.label,
+        electedLabel: x.electedLabel || x.label,
+        qty: qty,
+        rate: x.fee,
+        unit: x.feeUnit || '',
+        amount: x.fee * qty
+      });
+    });
+    if (lines.length) {
+      result.extraLines = lines;
+      result.extrasTotal = lines.reduce(function (a, l) { return a + l.amount; }, 0);
+    }
+    // A gating answer with no fee still has to reach the quote, or the reason Self Service is
+    // missing is invisible to the person reading it.
+    if (given.priorYears) result.priorYears = true;
+  }
+
   function calculatePackageWithCount(productId, rates, packageId, count) {
     var pkg = rates.packages[packageId];
     if (!pkg) return null;
@@ -255,6 +316,8 @@ ABYQuote.engine = (function () {
       default:
         return null;
     }
+
+    if (result) applyExtras(result, selection);
 
     if (result && rateLookup.usedFallback) {
       result.warnings.unshift(

@@ -236,7 +236,9 @@ ABYQuote.pricing = {
         // carrying no commission differential at all. It now carries one: +$200 on every Full
         // Service band, and +$50/$125/$100/$100 on Self Service.
         // DO NOT re-derive these from the proposals; they are his numbers, not the documents'.
-        smallB_base: 475, smallB_perForm: 2.50,
+        // 🔴 PER-FORM SET BY NIELS AND APPROVED BY ERIC, 2026-08-26: "$475 + $2 per form filed
+        // = commission 4%". It was $2.50. The BASE was already right.
+        smallB_base: 475, smallB_perForm: 2.00,
         fullLt100: 3500, fullMid: 3900, fullHigh: 4300, fullXL: 4750,
         selfLt100: 1250, selfMid: 1675, selfHigh: 1950, selfXL: 2300
       }),
@@ -532,13 +534,17 @@ ABYQuote.pricing = {
         // change from what this file used to hold and it is flagged rather than assumed.
         // The two values with NO no-commission source are marked below.
         //
-        // 🔴 SMALL-GROUP B: ERIC RULED IT DIRECTLY, 2026-08-18 -- "$450 / $2.50 for no
-        // commission." The BASE keeps its $25 discount against the commissioned $475; the
-        // PER-FORM rate MATCHES commissioned at $2.50. It had been $1.00 -- a figure with no
-        // source document behind it, inherited from before this week and chosen by nobody.
-        // ⛔ Do not re-derive either number from the proposals: no no-commission B-form
-        // proposal was ever supplied, which is precisely why this had to come from him.
-        smallB_base: 450, smallB_perForm: 2.50,
+        // 🔴🔴 SUPERSEDED 2026-08-26. IT IS $1.00, AND THE $2.50 BELOW IS THE OLD ANSWER.
+        // Niels corrected it -- "$450 + $1 per form filed = no commission" -- and Eric chose it
+        // explicitly when the conflict was put to him: "For the 1094/1095-B, let's go with what
+        // Niels just said."
+        // ⭐⭐ THE CONFLICT IS RECORDED RATHER THAN TIDIED AWAY, because the note it replaces was
+        // emphatic and a later session would otherwise "restore" it: on 2026-08-18 Eric himself
+        // ruled $2.50, over a $1.00 that the file said had no source document behind it. The
+        // $1.00 turns out to have been right all along -- it had a source, and the source was
+        // Niels. ⛔ A figure with no VISIBLE provenance is not the same as a figure with none.
+        // ⚠️ THE BASE NEVER MOVED: $450, a $25 discount against the commissioned $475.
+        smallB_base: 450, smallB_perForm: 1.00,
         fullLt100: 3300, fullMid: 3700, fullHigh: 4100, fullXL: 4550,   // fullXL: no no-comm source, matched to commissioned
         selfLt100: 1200, selfMid: 1550, selfHigh: 1850, selfXL: 2200    // selfXL: same
       }),
