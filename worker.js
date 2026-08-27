@@ -75,6 +75,7 @@ export default {
     if (path === '/api/admin/crm/person'  && method === 'GET')  return withAuth(request, env, () => handleCrmPerson(request, env));
     if (path === '/api/admin/crm/link'    && method === 'POST') return withAuth(request, env, () => handleCrmLinkPerson(request, env));
     if (path === '/api/admin/crm/person-field' && method === 'POST') return withAuth(request, env, () => handleCrmPersonField(request, env));
+    if (path === '/api/admin/crm/persons'     && method === 'GET')  return withAuth(request, env, () => handleCrmPersonSearch(request, env));
     if (path === '/api/admin/crm/suggest' && method === 'GET')  return withAuth(request, env, () => handleCrmSuggestPeople(request, env));
     if (path === '/api/admin/rfp/library'     && method === 'GET')  return withAuth(request, env, () => handleRfpLibrary(request, env));
     if (path === '/api/admin/rfp/answer'      && method === 'POST') return withAuth(request, env, () => handleRfpAnswerSave(request, env));
@@ -3120,6 +3121,82 @@ async function handleCrmAgencyField(request, env) {
 
 
 /**
+ * FIND A PERSON. The CRM is organised by FIRM, and that is the right default -- but it means the
+ * one thing somebody actually remembers about a person they met cannot be searched.
+ *
+ * Eric, 2026-08-27, asking it as a user, which is how these get found: "These are organized by
+ * firm but is there a way to search for an agent? For instance, I met an agent in Tulsa named
+ * Megan but I don't know her agency name."
+ *
+ * AND THE SECOND HALF IS BIGGER THAN THE FIRST: a view grouped by firm has NO ROW AT ALL for a
+ * person with no firm. The CE import made that population large, and Eric named it the same
+ * evening: "we need it on marketing too since there are a bunch of agents without agencies that
+ * are now prospects."
+ *
+ * SUPPRESSED IS ENFORCED HERE AND CANNOT BE WIDENED BACK, exactly as it is on the firm list, and
+ * now at the level it belongs to. do_not_contact is an instruction from the person and deceased
+ * needs no argument; a filter you can widen until they reappear is not a suppression, it is a
+ * default. The FIRM PANEL still shows them -- that is where the record is kept and where somebody
+ * looks to find out why. This is the list you WORK from.
+ *
+ * A CAP THAT SAYS SO. The agency list silently truncated at 2,000 the moment the CE import took it
+ * past that, and a list that stops without mentioning it reads as a complete answer.
+ */
+const PERSON_SEARCH_CAP = 300;
+
+async function handleCrmPersonSearch(request, env) {
+  const u = new URL(request.url).searchParams;
+  const term = String(u.get('q') || '').trim().toLowerCase();
+  const noFirm = u.get('no_firm') === '1';
+  if (!term && !noFirm) {
+    // Refusing beats returning the first 300 of five thousand people: a list nobody asked a
+    // question of looks like an answer to whatever question they had in mind.
+    return jsonResp({ people: [], matched: 0, needsQuery: true });
+  }
+
+  const where = ["COALESCE(p.disposition,'') NOT IN ('" + SUPPRESSED.join("','") + "')"];
+  const args = [];
+  if (noFirm) where.push('p.agency_id IS NULL');
+  if (term) {
+    // Name OR email, because a broker remembers one or the other and never knows which we hold.
+    where.push('(lower(p.name) LIKE ? OR EXISTS (SELECT 1 FROM broker_directory d3 ' +
+               '  WHERE d3.person_id = p.id AND lower(trim(d3.email)) LIKE ?))');
+    args.push('%' + term + '%', '%' + term + '%');
+  }
+
+  try {
+    const r = await env.DB.prepare(
+      'SELECT p.id AS person_id, p.name AS name, ' +
+      "       COALESCE(p.city,'') AS city, COALESCE(p.phone,'') AS phone, " +
+      "       COALESCE(p.source,'') AS source, COALESCE(p.disposition,'') AS disposition, " +
+      "       COALESCE(p.disposition_note,'') AS disposition_note, p.disposition_at AS disposition_at, " +
+      "       p.agency_id AS agency_id, COALESCE(a.name,'') AS agency_name, " +
+      "       COALESCE(a.state,'') AS agency_state, " +
+      '       (SELECT MIN(d.email) FROM broker_directory d WHERE d.person_id = p.id) AS email, ' +
+      '       (SELECT COALESCE(SUM(d2.quote_count),0) FROM broker_directory d2 WHERE d2.person_id = p.id) AS quotes ' +
+      'FROM people p LEFT JOIN agencies a ON a.id = p.agency_id ' +
+      'WHERE ' + where.join(' AND ') + ' ' +
+      'ORDER BY quotes DESC, p.name COLLATE NOCASE ' +
+      'LIMIT ?'
+    ).bind(...args, PERSON_SEARCH_CAP + 1).all();
+
+    const rows = r.results || [];
+    const capped = rows.length > PERSON_SEARCH_CAP;
+    return jsonResp({
+      people: capped ? rows.slice(0, PERSON_SEARCH_CAP) : rows,
+      matched: capped ? PERSON_SEARCH_CAP : rows.length,
+      capped, cap: PERSON_SEARCH_CAP,
+      dispositions: DISPOSITIONS, sources: PERSON_SOURCES, sourceLabels: SOURCE_LABEL,
+    });
+  } catch (err) {
+    // AN ERROR IS NOT AN EMPTY RESULT. Three screens in this admin have rendered a failed query as
+    // a cheerful empty state, and "no such person" is the single most misleading thing this one
+    // could say when the truth is that the query fell over.
+    return jsonResp({ people: [], error: String((err && err.message) || err) }, 500);
+  }
+}
+
+/**
  * ONE FIELD ON ONE PERSON. The mirror of handleCrmAgencyField, and deliberately its twin.
  *
  * WHY IT HAD TO EXIST, 2026-08-27: people.disposition, people.disposition_note and
@@ -4955,6 +5032,31 @@ ${abyAdminNav('/admin/brokers')}
             <span class="muted" id="nqCount" style="margin-left:auto;font-size:13px"></span>
           </div>
           <div id="nqBox"><p class="muted">Pick a product.</p></div>
+        </div>
+      </details>
+      <!-- FIND A PERSON. Eric, 2026-08-27: "These are organized by firm but is there a way to
+           search for an agent? For instance, I met an agent in Tulsa named Megan but I don't know
+           her agency name." A firm-grouped list cannot answer that, and it has NO ROW AT ALL for
+           somebody with no firm -- a population the CE import made large. Same details/shut-by-
+           default shape as Tidy up and Never quoted, and loaded only when opened. -->
+      <details style="margin:0 0 10px" ontoggle="if(this.open)loadPeopleSearch()">
+        <summary style="cursor:pointer;font-size:13.5px;color:#1a5c3a;font-weight:600">
+          Find a person &mdash; by name or email, including the ones with no firm</summary>
+        <div style="margin-top:10px">
+          <p class="sub" style="margin:0 0 8px">Everything else on this page is organized by firm.
+            <strong>This is the one place to look somebody up when you remember the person and not
+            the agency</strong> &mdash; and the only place a person with no firm on file appears at
+            all. Anybody marked <em>do not contact</em> or <em>deceased</em> is never in these
+            results; their record is still on their firm's panel, which is where the reason is
+            kept.</p>
+          <div class="mfilters">
+            <input id="psQ" placeholder="Name or email" oninput="peopleSearchSoon()"
+                   style="min-width:240px;padding:5px 8px;border:1px solid #c8d2de;border-radius:5px;font-size:13px">
+            <label class="muted" style="font-size:13px">
+              <input id="psNoFirm" type="checkbox" onchange="loadPeopleSearch()"> no firm on file</label>
+            <span class="muted" id="psCount" style="margin-left:auto;font-size:13px"></span>
+          </div>
+          <div id="psBox"><p class="muted">Type a name, or tick <em>no firm on file</em>.</p></div>
         </div>
       </details>
       <details style="margin:0 0 14px">
@@ -7019,6 +7121,7 @@ ${abyAdminNav('/admin/brokers')}
    var box = document.getElementById('firmPeople');
    if (!box) return;
    firmPeopleId = id;   // so a saved disposition can refetch the list it changed the shape of
+   personListMode = 'firm';
    var r = await fetch('/api/admin/crm/people?agency_id=' + encodeURIComponent(id));
    var d = await r.json().catch(function(){ return {}; });
    if (d.error){ box.innerHTML = '<p class="muted">Could not load these: ' + esc(d.error) + '</p>'; return; }
@@ -7087,6 +7190,9 @@ ${abyAdminNav('/admin/brokers')}
  // they'll need to be ABY Brokers as the source, but I won't know that right away." Source is set
  // ONCE at first contact, so correcting it by hand is the only way it can ever change.
  var firmDisp = [], firmSrc = [], firmSrcLabel = {}, firmPeopleId = '';
+ // 'firm' or 'search' -- see savePerson. Two lists render the same controls, and a save
+ // from one must not refetch the other.
+ var personListMode = 'firm', psTimer = null, psSeq = 0;
 
  function personInput(pid, field, value, width, placeholder){
    return '<input value="' + esc(value || '') + '"'
@@ -7123,7 +7229,95 @@ ${abyAdminNav('/admin/brokers')}
        '<p class="muted" style="color:#a11">That did not save: ' + esc(d.error || 'unknown error') + '</p>');
      return;
    }
-   if (field === 'disposition') loadFirmPeople(firmPeopleId);
+   // Which list is on screen decides what gets refetched. Setting a disposition lays out a
+   // note row underneath and clearing one takes it away, so the table's SHAPE changes.
+   if (field === 'disposition'){
+     if (personListMode === 'search') loadPeopleSearch();
+     else loadFirmPeople(firmPeopleId);
+   }
+ }
+
+ // ── FIND A PERSON ─────────────────────────────────────────────────────────
+ //
+ // ⭐ THE ROWS REUSE personInput / personSelect / savePerson RATHER THAN GROWING A SECOND SET.
+ // Two tables that both edit a person, each with its own copy of the controls, is how the two
+ // quietly stop agreeing about what a disposition is -- and this admin has that scar already.
+ function peopleSearchSoon(){
+   if (psTimer) clearTimeout(psTimer);
+   psTimer = setTimeout(loadPeopleSearch, 250);
+ }
+
+ async function loadPeopleSearch(){
+   var box = document.getElementById('psBox');
+   if (!box) return;
+   personListMode = 'search';
+   var term = (document.getElementById('psQ').value || '').trim();
+   var noFirm = document.getElementById('psNoFirm').checked;
+   if (!term && !noFirm){
+     box.innerHTML = '<p class="muted">Type a name, or tick <em>no firm on file</em>.</p>';
+     document.getElementById('psCount').textContent = '';
+     return;
+   }
+   var p = [];
+   if (term) p.push('q=' + encodeURIComponent(term));
+   if (noFirm) p.push('no_firm=1');
+   var mine = ++psSeq;
+   box.innerHTML = '<p class="muted">Looking...</p>';
+   var r = await fetch('/api/admin/crm/persons?' + p.join('&'));
+   var d = await r.json().catch(function(){ return {}; });
+   // A response a later keystroke has superseded is dropped, errors included.
+   if (mine !== psSeq) return;
+   // 🔴 AN ERROR IS NOT AN EMPTY RESULT, and "nobody by that name" is the most misleading thing
+   // this box could say when the truth is that the query fell over.
+   if (d.error){
+     box.innerHTML = '<p style="color:#a12622">Could not search: ' + esc(d.error) + '</p>';
+     document.getElementById('psCount').textContent = '';
+     return;
+   }
+   firmDisp = d.dispositions || [];
+   firmSrc = d.sources || [];
+   firmSrcLabel = d.sourceLabels || {};
+   var rows = d.people || [];
+   document.getElementById('psCount').textContent =
+     rows.length + (d.capped ? ' shown of more' : (rows.length === 1 ? ' person' : ' people'));
+   if (!rows.length){
+     box.innerHTML = '<p class="muted">Nobody matches that. '
+       + 'Anybody marked do not contact or deceased is never in these results.</p>';
+     return;
+   }
+   var h = '<table class="grid"><thead><tr><th>NAME</th><th>FIRM</th><th>EMAIL</th><th>PHONE</th>'
+         + '<th>CITY</th><th>SOURCE</th><th>STATUS</th><th style="text-align:right">QUOTES</th>'
+         + '</tr></thead><tbody>';
+   for (var i = 0; i < rows.length; i++){
+     var x = rows[i], pid = x.person_id;
+     // ⭐ THE FIRM IS A LINK TO THE PANEL, so a search lands where the rest of the CRM lives
+     // rather than being a dead end. "No firm on file" is a STATE we accept, not a blank cell --
+     // it is the thing somebody would go and find out, and it is why this list exists.
+     var firm = x.agency_id
+       ? '<a href="?firm=' + encodeURIComponent(x.agency_id) + '">' + esc(x.agency_name || '(unnamed)') + '</a>'
+         + (x.agency_state ? ' <span class="muted">' + esc(x.agency_state) + '</span>' : '')
+       : '<span class="muted">no firm on file</span>';
+     h += '<tr><td>' + (esc(x.name || '') || '&mdash;') + '</td>'
+        + '<td>' + firm + '</td>'
+        + '<td>' + (x.email ? esc(x.email) : '<span class="muted">no email yet</span>') + '</td>'
+        + '<td>' + personInput(pid, 'phone', x.phone, '90px') + '</td>'
+        + '<td>' + personInput(pid, 'city', x.city, '90px') + '</td>'
+        + '<td>' + personSelect(pid, 'source', firmSrc, x.source, null, firmSrcLabel) + '</td>'
+        + '<td>' + personSelect(pid, 'disposition', firmDisp, x.disposition, 'Active', null) + '</td>'
+        + '<td style="text-align:right">' + (Number(x.quotes) || 0) + '</td></tr>';
+     if (x.disposition){
+       var since = x.disposition_at ? ' <span class="muted">since ' + esc(day(x.disposition_at)) + '</span>' : '';
+       h += '<tr><td></td><td colspan="7" style="padding-top:0">'
+          + personInput(pid, 'disposition_note', x.disposition_note, '100%', 'Why? (optional)')
+          + since + '</td></tr>';
+     }
+   }
+   h += '</tbody></table>';
+   // ⛔ A CAPPED LIST SAYS SO. The agency list truncated at 2,000 the moment the CE import passed
+   // it and said nothing, which reads as a complete answer.
+   if (d.capped) h += '<p class="muted" style="font-size:12.5px">Only the first ' + d.cap
+                    + ' are shown &mdash; there are more. Narrow the search.</p>';
+   box.innerHTML = h;
  }
 
  // ── ADD A PERSON, WITHOUT PRETENDING IT WAS AN EVENT ──────────────────────────────────────

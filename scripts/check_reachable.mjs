@@ -221,6 +221,37 @@ const RULES = [
     },
   },
   {
+    name: "a person can be looked up by name, and the ones with no firm are reachable at all",
+    why: "Eric, 2026-08-27, asking it as a user: 'These are organized by firm but is there a way"
+       + " to search for an agent? For instance, I met an agent in Tulsa named Megan but I don't"
+       + " know her agency name.' A firm-grouped view cannot answer that -- and it has NO ROW AT"
+       + " ALL for a person with no firm, a population the CE import made large. He named that"
+       + " half too: 'we need it on marketing too since there are a bunch of agents without"
+       + " agencies that are now prospects.'",
+    // ⚠️ THE FETCH IS THE REACHABILITY HALF. A search box that exists and asks nobody anything
+    // is the same finished-looking dead control as a form nothing renders.
+    holds: (f) => /id="psQ"/.test(f.worker)
+      && /id="psNoFirm"/.test(f.worker)
+      && /function loadPeopleSearch\(/.test(f.worker)
+      && /fetch\('\/api\/admin\/crm\/persons\?'/.test(f.worker)
+      && /ontoggle="if\(this\.open\)loadPeopleSearch\(\)"/.test(f.worker),
+  },
+  {
+    name: "the people search cannot list somebody who asked not to be contacted",
+    why: "SUPPRESSED is an instruction from the person, not a filter -- a list you can widen until"
+       + " they reappear is a default, not a suppression. The firm list has enforced this since it"
+       + " was written; this is the first list that works from PEOPLE, so it is the first place the"
+       + " rule could be forgotten at the level it actually belongs to.",
+    holds: (f) => {
+      // Sliced by index rather than matched to a closing brace: the handler is about sixty
+      // lines and a fixed window covers it, where a lazy match to the first newline-brace would
+      // stop at the first nested block and quietly check a fraction of the function.
+      const at = f.worker.indexOf('async function handleCrmPersonSearch');
+      const block = at === -1 ? '' : f.worker.slice(at, at + 4000);
+      return /SUPPRESSED\.join/.test(block);
+    },
+  },
+  {
     name: "the person dropdown is built from the server's vocabulary, not a copy in the page",
     why: "DISPOSITIONS gained 'retired' on Eric's word. A hand-written list in the page would go"
        + " on offering yesterday's options while the endpoint accepted today's, and the two would"
@@ -708,6 +739,19 @@ const SABOTAGES = [
     why: "the person's disposition control is removed while the endpoint still accepts it",
     apply: (f) => ({ ...f, worker: f.worker.replace(
       /personSelect\(pid, 'disposition', firmDisp/g, "personSelect(pid, 'nothing', firmDisp") }),
+  },
+  {
+    // The search box survives and only the question goes. A control that asks nobody anything
+    // looks finished in every screenshot.
+    why: "the person search stops asking the server anything",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /fetch\('\/api\/admin\/crm\/persons\?'/g, "fetch('/api/admin/crm/nothing?'") }),
+  },
+  {
+    why: "the people search drops its do-not-contact suppression",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /const where = \["COALESCE\(p\.disposition,''\) NOT IN \('" \+ SUPPRESSED\.join\("','"\) \+ "'\)"\];/g,
+      "const where = ['1=1'];") }),
   },
   {
     // The subtler half: the page stops asking the server what the options are and keeps its own
