@@ -1117,8 +1117,14 @@
     // that lets the SERVER decide what a given reader may see. The encoded blob cannot, because
     // whoever holds the link holds the whole payload.
     var state = null;
+    // ⭐⭐ WHICH BRANCH THE STATE CAME FROM IS A SECURITY FACT, NOT BOOKKEEPING. __ABY_SHARED is
+    // written into the page by the SERVER for a valid share token; the rerun parameter is a URL
+    // anyone can construct and send to anyone. A field that is safe from the first is not
+    // necessarily safe from the second, so the source is RECORDED rather than inferred later.
+    var fromServer = false;
     if (window.__ABY_SHARED && typeof window.__ABY_SHARED === 'object') {
       state = window.__ABY_SHARED;
+      fromServer = true;
     } else {
       if (!rerunParam) return;
       try { state = JSON.parse(decodeURIComponent(rerunParam)); } catch (e) { return; }
@@ -1149,6 +1155,26 @@
     // unknown host is not an error to report to a broker, it is a logo we decline to show.
     if (isAllowedLogoUrl(state.brokerLogoUrl)) {
       carriedBrokerLogoUrl = String(state.brokerLogoUrl);
+    }
+
+    // ── THE FIRM'S OWN LOGO ON A SHARED QUOTE (F-428) ──────────────────────────────────────
+    //
+    // 🔴 Eric uploaded a logo for MMA - DFW and it never appeared when he clicked the share
+    // link. One of the four reasons was that the shared payload carried no logo at all. The
+    // server now resolves the firm -- by the quote's agency_id, or failing that by the firm's
+    // NAME, because only 2 of the 6 shared quotes carry an id and his was not one of them.
+    //
+    // ⛔ SERVER BRANCH ONLY, AND THAT IS THE WHOLE POINT OF THE SEPARATE FIELD. brokerLogoUrl
+    // above is guarded by a HOST allow-list because it arrives in a rerun link anyone can craft.
+    // Adding a relative path to that allow-list would have opened the crafted-link path too.
+    // This field is only ever written by the server, so it is only ever read from the server.
+    //
+    // ⚠️ THE SHAPE IS CHECKED AS WELL AS THE SOURCE. Belt and braces: a same-origin path to this
+    // one endpoint and a uuid, so even a future change that let this field through from
+    // elsewhere could not point an <img> at an arbitrary URL.
+    if (fromServer && typeof state.agencyLogoPath === 'string'
+        && /^\/api\/agency-logo\/[0-9a-fA-F-]{36}$/.test(state.agencyLogoPath)) {
+      carriedBrokerLogoUrl = state.agencyLogoPath;
     }
 
     // Basic text fields

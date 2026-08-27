@@ -302,6 +302,26 @@ const RULES = [
     holds: (f) => /src="\/api\/agency-logo\/' \+ encodeURIComponent\(id\)/.test(f.worker),
   },
   {
+    name: "a shared quote carries the firm's logo, resolved by id OR by name",
+    why: "The shared payload carried no logo field at all -- one of four reasons Eric's MMA - DFW"
+       + " logo never appeared on the link. Resolving by agency_id ALONE would still have failed"
+       + " on his: 5,900 of 6,172 quotes carry an id, but only 2 of the 6 ever SHARED do, and his"
+       + " is one of the four that do not. The name fallback is what makes it work.",
+    holds: (f) => /shared\.agencyLogoPath = '\/api\/agency-logo\/'/.test(f.worker)
+      && /lower\(trim\(name\)\) = \? AND COALESCE\(logo_data_url,''\) <> ''/.test(f.worker)
+      && /agencyLogoPath/.test(f.app),
+  },
+  {
+    name: "the server-supplied logo path is never honoured from a crafted rerun link",
+    why: "brokerLogoUrl is guarded by a HOST allow-list because it arrives in a rerun parameter"
+       + " anyone can construct -- without it a crafted link would put an arbitrary image, and a"
+       + " tracking pixel, on a document carrying ABY's fees and a signature page. The new path"
+       + " field must therefore be read ONLY on the server branch, and its shape checked too.",
+    holds: (f) => /var fromServer = false;/.test(f.app)
+      && /fromServer = true;/.test(f.app)
+      && /if \(fromServer && typeof state\.agencyLogoPath === 'string'/.test(f.app),
+  },
+  {
     name: "two records of one human can be found and merged from a screen",
     why: "F-423. The firm duplicate finder looks for duplicate FIRMS and structurally cannot see"
        + " two rows for one person inside a single correct firm -- 60 groups, 121 records, always"
@@ -894,6 +914,21 @@ const SABOTAGES = [
     why: "the person search stops asking the server anything",
     apply: (f) => ({ ...f, worker: f.worker.replace(
       /fetch\('\/api\/admin\/crm\/persons\?'/g, "fetch('/api/admin/crm/nothing?'") }),
+  },
+  {
+    // The name fallback goes, so resolution works only for quotes carrying an agency_id -- which
+    // is 2 of the 6 ever shared, and not Eric's.
+    why: "the shared quote resolves its logo by agency_id only, losing the name fallback",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /lower\(trim\(name\)\) = \? AND COALESCE\(logo_data_url,''\) <> ''/g,
+      "id = ? AND COALESCE(logo_data_url,'') <> ''") }),
+  },
+  {
+    // The server-only guard goes, so a crafted rerun link could set the image source.
+    why: "the logo path is honoured from a crafted rerun link, not just from the server",
+    apply: (f) => ({ ...f, app: f.app.replace(
+      /if \(fromServer && typeof state\.agencyLogoPath === 'string'/g,
+      "if (typeof state.agencyLogoPath === 'string'") }),
   },
   {
     // The endpoint survives; only the control goes. Staff are back to having no way to set a logo,

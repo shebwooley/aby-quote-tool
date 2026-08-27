@@ -992,7 +992,7 @@ async function serveSharedQuote(token, env, request) {
   const url = new URL(request.url);
   const q = await env.DB.prepare(
     'SELECT quote_number, client_name, effective_date, broker_name, broker_agency, broker_phone, ' +
-    '       broker_email, commission_included, rep_name, products, resolved_pricing ' +
+    '       broker_email, commission_included, rep_name, products, resolved_pricing, agency_id ' +
     'FROM quotes WHERE share_token = ?'
   ).bind(token).first();
 
@@ -1031,6 +1031,44 @@ async function serveSharedQuote(token, env, request) {
       // Unparseable stored pricing falls back to re-running the engine, which is the behaviour
       // that existed before this. It must never take the page down.
     }
+  }
+
+  // ── THE BROKER'S LOGO ON THE SHARED QUOTE (F-428) ────────────────────────────────────────
+  //
+  // 🔴 THE SHARED PAYLOAD CARRIED NO LOGO AT ALL, which is one of the four reasons Eric's
+  // MMA - DFW logo never appeared when he clicked the link. The other three are recorded on
+  // handleCrmAgencyLogo.
+  //
+  // ⭐⭐ TWO KEYS, AND THE SECOND IS NOT A FALLBACK NOBODY NEEDS: 5,900 of 6,172 quotes carry an
+  // agency_id -- but only 2 of the 6 quotes that have ever been SHARED do, and Eric's own
+  // MMA - DFW one is among the four that do not. Resolving by id alone would have failed on
+  // exactly the quote that prompted this. So: the id when it is there, otherwise the firm's NAME,
+  // which matches an agency row for 5,905 of them.
+  //
+  // ⛔ A PATH, NOT A URL, AND DELIBERATELY A DIFFERENT FIELD FROM brokerLogoUrl. That one arrives
+  // in a rerun parameter, which anyone can craft, and is guarded by a host allow-list. This one is
+  // set by the SERVER and is only honoured on the server branch -- widening the allow-list instead
+  // would have opened the crafted-link path too, which is the threat that list exists for.
+  try {
+    let logoId = String(q.agency_id || '').trim();
+    if (logoId) {
+      const byId = await env.DB.prepare(
+        "SELECT id FROM agencies WHERE id = ? AND COALESCE(logo_data_url,'') <> ''"
+      ).bind(logoId).first();
+      logoId = (byId && byId.id) || '';
+    }
+    if (!logoId && String(q.broker_agency || '').trim()) {
+      const byName = await env.DB.prepare(
+        "SELECT id FROM agencies WHERE lower(trim(name)) = ? AND COALESCE(logo_data_url,'') <> '' " +
+        'ORDER BY id LIMIT 1'
+      ).bind(String(q.broker_agency).trim().toLowerCase()).first();
+      logoId = (byName && byName.id) || '';
+    }
+    // ⚠️ ONLY WHEN THERE ACTUALLY IS ONE. Emitting the path unconditionally would put a broken
+    // image on every shared quote for the 2,364 firms that have no logo.
+    if (logoId) shared.agencyLogoPath = '/api/agency-logo/' + logoId;
+  } catch (e) {
+    // A logo is decoration. It must never be the reason a client cannot open their quote.
   }
 
   const res = await env.ASSETS.fetch(new Request(new URL('/', url), request));
