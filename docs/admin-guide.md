@@ -209,6 +209,30 @@ Where a broker came from — the partner firm and the individual rep who sent th
 - ⚠️ **Attribution is permanent, not a live pointer.** Dana referred that broker in March; that stays
   true after Dana leaves, which is why a rep is deactivated rather than deleted.
 
+**To record one, use *Record a referral* at the bottom: type the broker's name or email, then pick
+who sent them.** It searches the 4,961 people in the CRM — the same register Brokers & Agencies
+works from — so recording a referral never makes a second copy of anybody. ⛔ **It cannot create a
+person**; somebody not in the register yet is added on Brokers & Agencies first, where the identity
+rules live.
+
+🔴 **Until 2026-08-27 there was no way to add a broker here at all, and the scoreboard read zero for
+everyone.** Eric: *"I see how to add a referral partner and a sales rep but not a broker... I think
+this page is good conceptually but not in practice."* **The page was built on the `brokers` table,
+which holds zero rows** — no broker has ever registered an account — so the two sides had no way to
+meet. It reads `people` now.
+
+⚠️ **THERE ARE TWO QUOTE COLUMNS AND THEY ARE NEVER ADDED TOGETHER.**
+
+| | |
+|---|---|
+| **Theirs** | quotes that name *this human* — an email of theirs, or their name beside their firm |
+| **Firm** | every quote that firm has ever run |
+
+**Only 142 of 6,170 quotes name a broker at all.** The rest are the imported back-catalogue, where
+the agency was the folder name and no person was recorded. ⭐ **So a good referral can show 0 of
+their own and 300 for their firm** — which is why both are on the row. ⛔ **Do not add them up
+across a partner:** several brokers at one firm would each claim all of that firm's work.
+
 ### RFP Watch
 
 Cities, counties, school districts and colleges putting these services out to bid.

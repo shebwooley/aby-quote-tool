@@ -3196,10 +3196,21 @@ const PERSON_SEARCH_CAP = 300;
  * ⚠️ GROUPED CTEs THROUGHOUT. The first version of this measurement was correlated subqueries and
  * D1 killed the connection with "exceeded its CPU time limit".
  */
+const RECENT_WINDOW = "datetime('now','-365 days')";
+
+// ⭐ THE FOUR MEASURES TRAVEL TOGETHER, so the referrals scoreboard and the broker list cannot
+// disagree about what a person produced. A caller that only wants the count simply ignores three
+// columns; a second CTE that computed "recent" its own way is how two screens start arguing.
 const PERSON_QUOTES_CTE =
-  "qe AS (SELECT lower(trim(broker_email)) k, COUNT(*) n FROM quotes " +
-  "       WHERE trim(COALESCE(broker_email,'')) <> '' GROUP BY 1), " +
-  "qn AS (SELECT lower(trim(broker_name)) nk, lower(trim(broker_agency)) ak, COUNT(*) n " +
+  'qe AS (SELECT lower(trim(broker_email)) k, COUNT(*) n, ' +
+  '         SUM(CASE WHEN created_at >= ' + RECENT_WINDOW + ' THEN 1 ELSE 0 END) recent, ' +
+  "         SUM(CASE WHEN status = 'S' AND created_at >= " + RECENT_WINDOW + ' THEN 1 ELSE 0 END) sold_recent, ' +
+  '         COALESCE(SUM(first_year_value),0) value ' +
+  "       FROM quotes WHERE trim(COALESCE(broker_email,'')) <> '' GROUP BY 1), " +
+  'qn AS (SELECT lower(trim(broker_name)) nk, lower(trim(broker_agency)) ak, COUNT(*) n, ' +
+  '         SUM(CASE WHEN created_at >= ' + RECENT_WINDOW + ' THEN 1 ELSE 0 END) recent, ' +
+  "         SUM(CASE WHEN status = 'S' AND created_at >= " + RECENT_WINDOW + ' THEN 1 ELSE 0 END) sold_recent, ' +
+  '         COALESCE(SUM(first_year_value),0) value ' +
   "       FROM quotes WHERE trim(COALESCE(broker_name,'')) <> '' " +
   "         AND trim(COALESCE(broker_email,'')) = '' GROUP BY 1, 2), " +
   'uq AS (SELECT lower(trim(name)) k FROM people GROUP BY 1 HAVING COUNT(*) = 1), ' +
@@ -3207,17 +3218,23 @@ const PERSON_QUOTES_CTE =
   '         (SELECT MIN(d4.agency_id) FROM broker_directory d4 ' +
   '            WHERE d4.person_id = p2.id AND d4.agency_id IS NOT NULL)) AS aid ' +
   '       FROM people p2), ' +
-  'pqe AS (SELECT d.person_id AS pid, SUM(COALESCE(qe.n,0)) AS n ' +
+  'pqe AS (SELECT d.person_id AS pid, SUM(COALESCE(qe.n,0)) AS n, ' +
+  '          SUM(COALESCE(qe.recent,0)) AS recent, SUM(COALESCE(qe.sold_recent,0)) AS sold_recent, ' +
+  '          SUM(COALESCE(qe.value,0)) AS value ' +
   '        FROM broker_directory d LEFT JOIN qe ON qe.k = lower(trim(d.email)) ' +
   '        WHERE d.person_id IS NOT NULL GROUP BY 1), ' +
-  'pqn AS (SELECT p3.id AS pid, qn.n AS n FROM people p3 ' +
+  'pqn AS (SELECT p3.id AS pid, qn.n AS n, qn.recent AS recent, ' +
+  '          qn.sold_recent AS sold_recent, qn.value AS value FROM people p3 ' +
   '        JOIN uq ON uq.k = lower(trim(p3.name)) ' +
   '        JOIN pa AS pa2 ON pa2.pid = p3.id ' +
   '        JOIN agencies a2 ON a2.id = pa2.aid ' +
   '        JOIN qn ON qn.nk = lower(trim(p3.name)) AND qn.ak = lower(trim(a2.name)))';
 
-// The expression that adds the two halves, so no caller writes it a second way.
+// The expressions that add the two halves, so no caller writes them a second way.
 const PERSON_QUOTES_SUM = '(COALESCE(pqe.n,0) + COALESCE(pqn.n,0))';
+const PERSON_RECENT_SUM = '(COALESCE(pqe.recent,0) + COALESCE(pqn.recent,0))';
+const PERSON_SOLD_SUM = '(COALESCE(pqe.sold_recent,0) + COALESCE(pqn.sold_recent,0))';
+const PERSON_VALUE_SUM = '(COALESCE(pqe.value,0) + COALESCE(pqn.value,0))';
 
 async function handleCrmPersonSearch(request, env) {
   const u = new URL(request.url).searchParams;
@@ -4897,20 +4914,40 @@ async function handleCrmRecordStatus(request, env) {
  * screens disagreeing about what "producing" means is worse than neither having it.
  */
 async function handleAdminReferrals(request, env) {
-  const win = "datetime('now','-365 days')";
-  // ⚠️ LEFT JOINs throughout, and the counts come from `quotes` by EMAIL, which is the only link
-  // between a person and their work that exists on every row ever saved.
+  // 🔴🔴 THIS READ `brokers`, WHICH HOLDS ZERO ROWS AND IS EMPTY BY DESIGN (F-417). No broker has
+  // ever registered an account, so the roll-up joined quotes to a table with nothing in it and the
+  // scoreboard beside every partner read zero, for everyone, for ever. Eric, 2026-08-26: "I think
+  // this page is good conceptually but not in practice." ⭐ It reads `people` now -- 4,961 rows,
+  // the identity the rest of the CRM is keyed on.
+  //
+  // ⚠️ AND THE FIRM'S NUMBER RIDES ALONGSIDE THE PERSON'S, BECAUSE THE PERSON'S IS SMALL AND THAT
+  // IS A FACT ABOUT THE DATA, NOT ABOUT THE BROKER. Only 180 of 6,170 quotes name a human at all;
+  // the rest are the folder-imported back-catalogue where the agency was the folder name. So a
+  // referred broker can read 0 quotes while their firm reads 300, and showing only the first would
+  // say a good referral produced nothing. ⛔ They are two columns and they are labelled -- never
+  // added together, because several people at one firm would each claim all of it.
   const roll =
-    "SELECT b.id, b.name, b.email, b.agency, b.referred_by_partner AS partner_id, " +
-    "       b.referred_by_contact AS contact_id, b.referred_at, b.referral_kind, " +
-    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '') AS quotes, " +
-    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '' " +
-    "          AND q.created_at >= " + win + ") AS recent, " +
-    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '' " +
-    "          AND q.status = 'S' AND q.created_at >= " + win + ") AS sold_recent, " +
-    "       (SELECT COALESCE(SUM(q.first_year_value),0) FROM quotes q " +
-    "          WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '') AS value " +
-    "FROM brokers b";
+    'WITH ' + PERSON_QUOTES_CTE + ', ' +
+    "     fq AS (SELECT lower(trim(broker_agency)) k, COUNT(*) n FROM quotes " +
+    "            WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1) " +
+    'SELECT p.id, p.name, ' +
+    '       (SELECT MIN(d.email) FROM broker_directory d WHERE d.person_id = p.id) AS email, ' +
+    "       COALESCE(a.name,'') AS agency, p.referred_by_partner AS partner_id, " +
+    '       p.referred_by_contact AS contact_id, p.referred_at, p.referral_kind, ' +
+    '       ' + PERSON_QUOTES_SUM + ' AS quotes, ' +
+    '       ' + PERSON_RECENT_SUM + ' AS recent, ' +
+    '       ' + PERSON_SOLD_SUM + ' AS sold_recent, ' +
+    '       ' + PERSON_VALUE_SUM + ' AS value, ' +
+    '       COALESCE(fq.n,0) AS firm_quotes ' +
+    'FROM people p ' +
+    'JOIN pa ON pa.pid = p.id ' +
+    'LEFT JOIN agencies a ON a.id = pa.aid ' +
+    'LEFT JOIN pqe ON pqe.pid = p.id ' +
+    'LEFT JOIN pqn ON pqn.pid = p.id ' +
+    'LEFT JOIN fq ON fq.k = lower(trim(a.name)) ' +
+    // Only the people somebody has actually attributed. 4,961 rows is a register, not a scoreboard.
+    "WHERE COALESCE(p.referred_by_partner,'') <> '' OR COALESCE(p.referred_by_contact,'') <> '' " +
+    'ORDER BY quotes DESC, p.name COLLATE NOCASE';
 
   const out = { partners: [], contacts: [], brokers: [], unavailable: {} };
   const attempt = async (name, run) => {
@@ -5253,13 +5290,29 @@ async function handleReferralContact(request, env) {
  * row claim a rep at one partner and a partner they do not work for -- and that row would look
  * perfectly fine on every screen while making both totals wrong.
  */
+/**
+ * WHO REFERRED THIS BROKER. Written on the PERSON now, not on `brokers` (F-417).
+ *
+ * ⭐ IT STILL ACCEPTS `brokerId`, because that is what the page has always sent and renaming a
+ * field is a separate change. `personId` is the name that means what it does.
+ *
+ * ⚠️ AN ADDRESS RESOLVES TO A PERSON, exactly as everywhere else in this CRM -- somebody adding a
+ * referral is far more likely to have an email to hand than a uuid.
+ *
+ * ⛔ CLEARING IS A REAL ACTION and keeps working: sending no partner and no rep removes the
+ * attribution. Somebody recorded a referral and was wrong.
+ */
 async function handleBrokerReferral(request, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
-  const brokerId = String(body.brokerId || '').trim();
-  if (!brokerId) return jsonResp({ error: 'Which broker?' }, 400);
+  const raw = String(body.personId || body.brokerId || body.email || '').trim();
+  if (!raw) return jsonResp({ error: 'Which broker?' }, 400);
   const contactId = String(body.contactId || '').trim();
   let partnerId = String(body.partnerId || '').trim();
   try {
+    const resolved = await crmResolvePerson(env, raw);
+    if (!resolved.id) return jsonResp({ error: resolved.why || 'No such person.' }, 404);
+    const personId = resolved.id;
+
     if (contactId) {
       const row = await env.DB.prepare(
         "SELECT partner_id FROM referral_contacts WHERE id = ?").bind(contactId).first();
@@ -5269,15 +5322,17 @@ async function handleBrokerReferral(request, env) {
     // ⚠️ `referred_at` is only stamped when it is not already set, so editing a rep years later
     // does not silently restate WHEN the referral happened.
     const existing = await env.DB.prepare(
-      "SELECT referred_at FROM brokers WHERE id = ?").bind(brokerId).first();
-    if (!existing) return jsonResp({ error: 'That broker no longer exists.' }, 404);
+      "SELECT referred_at FROM people WHERE id = ?").bind(personId).first();
+    if (!existing) return jsonResp({ error: 'That person no longer exists.' }, 404);
     const when = existing.referred_at || (partnerId ? new Date().toISOString() : null);
     await env.DB.prepare(
-      "UPDATE brokers SET referred_by_partner = ?, referred_by_contact = ?, referral_kind = ?, " +
-      "referred_at = ? WHERE id = ?")
+      "UPDATE people SET referred_by_partner = ?, referred_by_contact = ?, referral_kind = ?, " +
+      "referred_at = ?, updated_at = ? WHERE id = ?")
       .bind(partnerId || null, contactId || null,
-            String(body.kind || (partnerId ? 'referral' : '')).trim() || null, when, brokerId).run();
-    return jsonResp({ ok: true, partnerId: partnerId || null, contactId: contactId || null, referredAt: when });
+            String(body.kind || (partnerId ? 'referral' : '')).trim() || null, when,
+            new Date().toISOString(), personId).run();
+    return jsonResp({ ok: true, personId, partnerId: partnerId || null,
+                      contactId: contactId || null, referredAt: when });
   } catch (err) {
     return jsonResp({ error: String(err && err.message || err) }, 500);
   }
@@ -8888,9 +8943,17 @@ ${abyAdminNav('/admin/referrals')}
   <div id="partners"></div>
 
   <div class="card">
-    <h2>Brokers with no referral recorded</h2>
-    <p class="sub">Everyone who came to ABY some other way, or whose referrer has not been set yet.
-      Assign one and they move up into that partner.</p>
+    <h2>Record a referral</h2>
+    <p class="sub"><strong>Find the broker, then say who sent them.</strong> This searches the
+      4,961 people in the CRM by name or email &mdash; the same register the Brokers &amp; Agencies
+      page works from &mdash; so recording a referral never makes a second copy of anybody.
+      <strong>Somebody who is not there yet is added on Brokers &amp; Agencies first</strong>, where
+      the identity rules live.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <input id="bq" placeholder="Broker name or email" oninput="findBrokerSoon()" style="min-width:260px">
+      <span id="bqMsg" class="muted" style="align-self:center"></span>
+    </div>
+    <div id="bqResults"></div>
     <div id="unattributed"></div>
   </div>
 </main>
@@ -8924,8 +8987,14 @@ ${abyAdminNav('/admin/referrals')}
 
  function brokerTable(rows){
    if(!rows.length) return '<p class="muted">Nobody yet.</p>';
+   // ⚠️ TWO QUOTE COLUMNS, NEVER ADDED TOGETHER. "Theirs" counts only quotes that name this human
+   // -- an email of theirs, or their name beside their firm -- which is 142 of 6,170 quotes,
+   // because the rest are the imported back-catalogue where no human was recorded. "Their firm's"
+   // is where the volume actually is. Summing them across a partner would credit every broker at
+   // one firm with all of that firm's work.
    return '<table><thead><tr><th>Broker</th><th>Agency</th><th>Referred</th>'
-     +'<th class="n">Quotes</th><th class="n">Value</th><th>Rep</th></tr></thead><tbody>'
+     +'<th class="n">Theirs</th><th class="n">Firm</th>'
+     +'<th class="n">Value</th><th>Rep</th></tr></thead><tbody>'
      + rows.map(function(b){
          var reps=DATA.contacts.filter(function(c){return c.partner_id===b.partner_id});
          var sel='<select onchange="setRef(this)" data-b="'+esc(b.id)+'">'
@@ -8936,6 +9005,7 @@ ${abyAdminNav('/admin/referrals')}
              }).join('')+'</select>';
          return '<tr><td>'+esc(b.name||b.email)+'</td><td>'+esc(b.agency||'—')+'</td>'
            +'<td>'+day(b.referred_at)+'</td><td class="n">'+b.quotes+'</td>'
+           +'<td class="n">'+(Number(b.firm_quotes)||0)+'</td>'
            +'<td class="n">'+money(b.value)+'</td><td>'+sel+'</td></tr>';
        }).join('')+'</tbody></table>';
  }
@@ -8993,17 +9063,74 @@ ${abyAdminNav('/admin/referrals')}
              +'<option value="">— not referred —</option>'+opts+'</select></td></tr>';
          }).join('')+'</tbody></table>'
      // ⛔ AN EMPTY SET MUST NOT ASSERT A HAPPY STATE. This said "Everyone has a referrer recorded"
-     // whenever the list was empty -- and the list is built from the brokers table, which has ZERO rows
-     // because nobody has ever registered an account. So it reported a completed job over a
+     // whenever the list was empty -- and the list was built from the brokers table, which has ZERO
+     // rows because nobody has ever registered an account. So it reported a completed job over a
      // population that does not exist, which is the same defect as the Pipeline page reading
      // "Nobody on the list yet" (F-378) and the agency card once reporting "nobody has fallen
      // off" over a hundred agencies. TRAPS #264.
      // ⭐ NOTHING and ALL DONE are different answers and must read differently.
-     : (DATA.brokers.length
-         ? '<p class="muted">Everyone has a referrer recorded.</p>'
-         : '<p class="muted">No brokers have registered an account yet, so there is nobody to '
-           + 'attribute. This list fills up as brokers sign in — it is not empty because the '
-           + 'work is done.</p>');
+     // ⚠️ IT IS NOW A DIFFERENT QUESTION AGAIN: the endpoint returns only ATTRIBUTED people,
+     // because "everyone with no referral" is 4,961 rows -- a register, not a worklist. So this
+     // says what it actually knows and points at the search above rather than listing the book.
+     : '<p class="muted">Nobody has a referral recorded yet. There is no list of everyone who has '
+       + 'not been attributed, because that is all 4,961 people in the register &mdash; '
+       + 'use the search above to record one.</p>';
+ }
+
+ // ── FIND THE BROKER TO ATTRIBUTE ──────────────────────────────────────────────────────────
+ //
+ // ⭐⭐ ERIC'S ACTUAL COMPLAINT, 2026-08-26: "I see how to add a referral partner and a sales rep
+ // but not a broker." He was right, and the reason was structural: the only path that ever existed
+ // wrote into the brokers table, which nobody registers into, and it was retired the same evening.
+ //
+ // ⛔ IT SEARCHES THE CRM AND CANNOT CREATE ANYBODY. Adding a person is handleCrmImport's job and
+ // the identity rules live there -- an email is the key, otherwise name plus firm, ambiguity
+ // refused. A second creation path here is how one human ends up as two records.
+ var bqTimer=null, bqSeq=0;
+ function findBrokerSoon(){
+   if(bqTimer) clearTimeout(bqTimer);
+   bqTimer=setTimeout(findBroker,250);
+ }
+
+ async function findBroker(){
+   var box=document.getElementById('bqResults');
+   var msg=document.getElementById('bqMsg');
+   var term=(document.getElementById('bq').value||'').trim();
+   if(term.length<2){ box.innerHTML=''; msg.textContent=''; return; }
+   var mine=++bqSeq;
+   msg.textContent='Looking…';
+   var d=await (await fetch('/api/admin/crm/persons?q='+encodeURIComponent(term))).json()
+     .catch(function(){return{}});
+   if(mine!==bqSeq) return;
+   // 🔴 AN ERROR IS NOT "nobody by that name" -- that sentence is what talks somebody into
+   // creating a person we already have.
+   if(d.error){ msg.textContent=''; box.innerHTML='<p style="color:#a12622">Could not search: '+esc(d.error)+'</p>'; return; }
+   var rows=d.people||[];
+   msg.textContent=rows.length?(rows.length+(d.capped?'+':'')+' found'):'';
+   if(!rows.length){
+     box.innerHTML='<p class="muted">Nobody in the register matches that. Add them on '
+       +'<a href="/admin/brokers">Brokers &amp; Agencies</a> first.</p>';
+     return;
+   }
+   var opts=DATA.partners.map(function(p){
+     var reps=DATA.contacts.filter(function(c){return c.partner_id===p.id});
+     return reps.map(function(c){return '<option value="c:'+esc(c.id)+'">'+esc(p.name)+' — '+esc(c.name)+'</option>'}).join('')
+       +'<option value="p:'+esc(p.id)+'">'+esc(p.name)+' — rep not known</option>';
+   }).join('');
+   // ⛔ NO FIRM-QUOTES COLUMN HERE. The person search does not return it, and a column headed with
+   // a number that reads "on the firm" is a non-answer wearing a number's clothes. It appears on
+   // the scoreboard above, where the endpoint actually supplies it. This table's job is to make
+   // sure you are attributing the RIGHT person, which is the name, the email and the firm.
+   box.innerHTML='<table><thead><tr><th>Broker</th><th>Firm</th><th class="n">Their quotes</th>'
+     +'<th>Referred by</th></tr></thead><tbody>'
+     + rows.slice(0,25).map(function(p){
+         return '<tr><td>'+esc(p.name||'—')+'<div class="muted" style="font-size:12px">'
+           +esc(p.email||'no email')+'</div></td>'
+           +'<td>'+esc(p.agency_name||'no firm on file')+'</td>'
+           +'<td class="n">'+(Number(p.quotes)||0)+'</td>'
+           +'<td><select onchange="setRef(this)" data-b="'+esc(p.person_id)+'">'
+           +'<option value="">— not referred —</option>'+opts+'</select></td></tr>';
+       }).join('')+'</tbody></table>';
  }
 
  async function addPartner(){
@@ -9053,7 +9180,11 @@ ${abyAdminNav('/admin/referrals')}
    else if(v.indexOf('p:')===0) body.partnerId=v.slice(2);
    var r=await fetch('/api/admin/broker-referral',{method:'POST',headers:{'Content-Type':'application/json'},
      body:JSON.stringify(body)});
-   if(r.ok) load(); else await failed(r,'Could not save that referral.');
+   if(!r.ok){ await failed(r,'Could not save that referral.'); return; }
+   await load();
+   // The search results are a separate list and do not repaint with the partners, so a row just
+   // attributed would sit there still offering "not referred". Re-ask if a search is open.
+   if((document.getElementById('bq').value||'').trim().length>=2) findBroker();
  }
 
  load();
@@ -14058,6 +14189,30 @@ const MIGRATIONS = [
   // are not the same answer. Storing only the firm's would say every Higginbotham agent works in
   // Fort Worth, which is exactly the wrong thing to record.
   { sql: "ALTER TABLE people ADD COLUMN city TEXT", table: "people", column: "city" },
+
+  // ── WHO REFERRED THIS BROKER TO US, ON THE PERSON RATHER THAN ON `brokers` (F-417) ──────────
+  //
+  // 🔴🔴 THE REFERRALS PAGE WAS BUILT ON `brokers`, WHICH HOLDS ZERO ROWS AND IS EMPTY BY DESIGN:
+  // no broker has ever registered an account. Eric, 2026-08-26: "I see how to add a referral
+  // partner and a sales rep but not a broker... I think this page is good conceptually but not in
+  // practice." The scoreboard beside every partner read zero, for everyone, for ever -- not
+  // because nobody placed anything but because the two sides had no way to meet.
+  //
+  // ⭐ `people` IS WHERE A HUMAN ACTUALLY LIVES IN THIS SYSTEM -- 4,961 rows, the identity the
+  // whole CRM is keyed on. The same four columns, moved to the table that has the rows.
+  // ⛔ THE COLUMNS ON `brokers` ARE LEFT ALONE. If a broker ever does register, that row is a
+  // login, not a person; deleting the columns would be a second change riding on this one.
+  //
+  // ⚠️ SAME SHAPE AS #259 (the Owner column reached through `brokers` and read as unpopulated
+  // data) -- ASK WHAT FRACTION OF ROWS CAN TRAVERSE A JOIN BEFORE BUILDING A FEATURE ON IT.
+  { sql: "ALTER TABLE people ADD COLUMN referred_by_partner TEXT",
+    table: "people", column: "referred_by_partner" },
+  { sql: "ALTER TABLE people ADD COLUMN referred_by_contact TEXT",
+    table: "people", column: "referred_by_contact" },
+  { sql: "ALTER TABLE people ADD COLUMN referral_kind TEXT",
+    table: "people", column: "referral_kind" },
+  { sql: "ALTER TABLE people ADD COLUMN referred_at TEXT",
+    table: "people", column: "referred_at" },
 
   // ── THE BROKERS AND AGENCIES PAGE TOOK 23 SECONDS, AND EVERY JOIN IS ON AN EXPRESSION ──────
   //

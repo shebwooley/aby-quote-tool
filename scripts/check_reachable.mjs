@@ -281,6 +281,29 @@ const RULES = [
       && /CONSUMER\.indexOf\(domain\) === -1/.test(f.worker),
   },
   {
+    name: "a referral is recorded against a PERSON, not against the empty brokers table",
+    why: "Eric, 2026-08-26: 'I see how to add a referral partner and a sales rep but not a broker..."
+       + " I think this page is good conceptually but not in practice.' It read `brokers`, which"
+       + " holds ZERO rows because no broker has ever registered an account, so the scoreboard"
+       + " beside every partner read zero for everyone for ever. Same shape as the Owner column"
+       + " (#259): ask what fraction of rows can traverse a join before building on it.",
+    // ⚠️ SPECIFIC TO THE REFERRALS ROLL-UP, not to any mention of the brokers table. `brokers` is
+    // still the correct source for the broker-ACCOUNTS page and for the "has an account" check --
+    // a rule forbidding it outright would have failed three screens that are right.
+    holds: (f) => /UPDATE people SET referred_by_partner = \?/.test(f.worker)
+      && /p\.referred_by_partner AS partner_id/.test(f.worker)   // the roll-up reads people
+      && /function findBroker\(/.test(f.worker)           // and a broker can be FOUND to attribute
+      && /fetch\('\/api\/admin\/crm\/persons\?q='\+encodeURIComponent\(term\)\)/.test(f.worker),
+  },
+  {
+    name: "the referrals scoreboard shows the firm's quotes beside the person's",
+    why: "Only 142 of 6,170 quotes name a human at all -- the rest are the folder-imported"
+       + " back-catalogue. So a genuinely good referral can read 0 quotes of their own while their"
+       + " firm reads 300, and showing only the first says the referral produced nothing.",
+    holds: (f) => /COALESCE\(fq\.n,0\) AS firm_quotes/.test(f.worker)
+      && /Number\(b\.firm_quotes\)/.test(f.worker),
+  },
+  {
     name: "a note written on a PERSON can be read back on a screen",
     why: "crm_events has accepted a note on a person since the CRM was built and /api/admin/crm"
        + " serves them when asked -- but for four days the ONLY caller in the whole page asked for"
@@ -823,6 +846,18 @@ const SABOTAGES = [
     why: "the person search stops asking the server anything",
     apply: (f) => ({ ...f, worker: f.worker.replace(
       /fetch\('\/api\/admin\/crm\/persons\?'/g, "fetch('/api/admin/crm/nothing?'") }),
+  },
+  {
+    // Straight back to the defect F-417 records: the roll-up reads the table nobody registers into.
+    why: "the referrals roll-up goes back to reading the empty brokers table",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /UPDATE people SET referred_by_partner = \?/g, 'UPDATE brokers SET referred_by_partner = ?') }),
+  },
+  {
+    // The firm column goes, so a referral whose broker has no named quotes reads as unproductive.
+    why: "the referrals page stops showing the firm's quotes beside the person's",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /COALESCE\(fq\.n,0\) AS firm_quotes/g, '0 AS unused_firm_quotes') }),
   },
   {
     // The pass still runs and still finds them; only the SECTION goes. The screen then looks
