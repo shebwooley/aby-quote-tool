@@ -3195,6 +3195,30 @@ async function handleCrmImport(request, env) {
   const by = String(body.by || '').trim().toLowerCase();
   if (by && CRM_REPS.indexOf(by) === -1) return jsonResp({ error: 'Unknown person.' }, 400);
 
+  // ── WHERE WE FIRST MET THEM. IT IS SET ONCE, AND THE TAG SAYS WHICH ───────────────────────
+  //
+  // Eric's rule: source records where a person CAME FROM, never which lists they are on -- so it
+  // is written when a person is created and never overwritten for somebody already held.
+  //
+  // It became a parameter on 2026-08-27 because everything created here was stamped "import",
+  // which says nothing at all. Two of his sentences settle the shape:
+  //
+  //   "That's kind of a dumb way though to add someone because it's not from an event. Kelly just
+  //    works there and I know it."   -- being TOLD is not the same provenance as arriving on a list
+  //   "That event that I met Megan at was really the source."
+  //
+  // ⭐⭐ SO SOURCE IS THE CATEGORY AND THE TAG IS THE SPECIFIC EVENT. "event" is finite and
+  // filterable; "NABIP Tulsa 2026.08.18" is neither, and a free-text source would grow one value
+  // per event until no filter could offer them. Together they say exactly where somebody came
+  // from without making the column unbounded.
+  //
+  // ⛔ AN UNKNOWN VALUE IS REFUSED, NEVER STORED. A typo would otherwise invent a source that no
+  // filter offers and no screen shows -- present in the table and invisible in the product, which
+  // is this project's most expensive shape.
+  const CRM_SOURCES = ['event', 'hand_added'];
+  const source = String(body.source || 'event').trim().toLowerCase();
+  if (CRM_SOURCES.indexOf(source) === -1) return jsonResp({ error: 'Unknown source.' }, 400);
+
   const now = new Date().toISOString();
   // ⭐ adopted IS ITS OWN OUTCOME, NOT A KIND OF "known". It means an address arrived for somebody
   // we already held by name and firm -- the thing Eric asked for -- and it is the one outcome that
@@ -3239,7 +3263,7 @@ async function handleCrmImport(request, env) {
           personId = crypto.randomUUID();
           await env.DB.prepare(
             'INSERT INTO people (id, name, phone, agency_id, source, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
-          ).bind(personId, name, phone, agencyId, 'import', now, now).run();
+          ).bind(personId, name, phone, agencyId, source, now, now).run();
           added.push({ email: '', name: name });
         }
         if (label && personId) tagged += await crmTagPerson(env, personId, label, happenedAt, now, by);
@@ -3302,14 +3326,14 @@ async function handleCrmImport(request, env) {
           personId = crypto.randomUUID();
           await env.DB.prepare(
             'INSERT INTO people (id, name, phone, agency_id, source, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
-          ).bind(personId, name, phone, agencyId, 'import', now, now).run();
+          ).bind(personId, name, phone, agencyId, source, now, now).run();
         }
         // ⭐ source RECORDS WHERE THE ROW CAME FROM. Without it, first_seen on an imported agent reads
         // as "first quoted", which is a different and untrue fact.
         await env.DB.prepare(
           'INSERT INTO broker_directory (email, name, phone, agency, agency_id, first_seen, last_seen, ' +
           'quote_count, person_id, source) VALUES (?,?,?,?,?,?,?,?,?,?)'
-        ).bind(email, name, phone, agency, agencyId, now, now, 0, personId, 'import').run();
+        ).bind(email, name, phone, agency, agencyId, now, now, 0, personId, source).run();
         // ⭐ ADOPTED IS NOT ADDED. The address is new; the PERSON is not, and reporting them as a
         // new contact is how a list of 500 reads as 500 new relationships when some are existing ones.
         if (!prior.id) added.push({ email, name });
@@ -5768,6 +5792,9 @@ ${abyAdminNav('/admin/brokers')}
      method: 'POST', headers: { 'Content-Type': 'application/json' },
      body: JSON.stringify({
        rows: parsed, label: q('importTag').value, happened_at: q('importDate').value,
+       // This panel IS the event path, so the people it creates came from an event and the tag
+       // beside them says which one. Eric: "that event that I met Megan at was really the source."
+       source: 'event',
      }),
    });
    var d = await r.json().catch(function(){ return {}; });
@@ -6779,7 +6806,8 @@ ${abyAdminNav('/admin/brokers')}
    var d = await r.json().catch(function(){ return {}; });
    if (d.error){ box.innerHTML = '<p class="muted">Could not load these: ' + esc(d.error) + '</p>'; return; }
    var rows = d.people || [];
-   if (!rows.length){ box.innerHTML = '<p class="muted">Nobody on file at this firm yet.</p>'; return; }
+   if (!rows.length){ box.innerHTML = '<p class="muted">Nobody on file at this firm yet.</p>'
+                                    + addPersonForm(id); return; }
    var noEmail = 0;
    for (var i = 0; i < rows.length; i++){ if (!Number(rows[i].has_email)) noEmail++; }
    var h = '<table class="grid"><thead><tr><th>NAME</th><th>EMAIL</th><th>PHONE</th>'
@@ -6797,7 +6825,70 @@ ${abyAdminNav('/admin/brokers')}
    if (noEmail) h += '<p class="muted" style="font-size:12.5px;margin-top:6px">'
                   + noEmail + ' of these ' + (noEmail === 1 ? 'has' : 'have')
                   + ' no email address yet and can only be reached by phone.</p>';
-   box.innerHTML = h;
+   box.innerHTML = h + addPersonForm(id);
+ }
+
+ // ── ADD A PERSON, WITHOUT PRETENDING IT WAS AN EVENT ──────────────────────────────────────
+ //
+ // Eric, 2026-08-27: "That's kind of a dumb way though to add someone because it's not from an
+ // event. Kelly just works there and I know it." Until now the ONLY way to record a person was
+ // the event paste, which asks for a tag and a date -- so recording a plain fact about who works
+ // where meant inventing an occasion that never happened.
+ //
+ // ⭐ It posts to the SAME endpoint as the event paste, deliberately. The identity rules are hard
+ // and they are already written once: an email is the key when there is one, otherwise name plus
+ // firm, and a name matching more than one person is REFUSED rather than guessed. A second copy
+ // of that logic here would be the place the two quietly stopped agreeing.
+ function addPersonForm(id){
+   var a = null;
+   for (var i = 0; i < mktRows.length; i++){ if (mktRows[i].id === id){ a = mktRows[i]; break; } }
+   var nm = a ? a.name : '';
+   return '<div style="margin-top:12px;padding-top:10px;border-top:1px solid #e4eaf0">'
+     + '<div style="font-size:12.5px;color:#5f6b76;margin-bottom:6px">Add someone who works at '
+     + '<strong>' + esc(nm || 'this firm') + '</strong></div>'
+     + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
+     + '<input id="npName" placeholder="Name" style="flex:1 1 150px;padding:7px;border:1px solid #c8d2de;border-radius:6px">'
+     + '<input id="npEmail" placeholder="Email (optional)" style="flex:1 1 180px;padding:7px;border:1px solid #c8d2de;border-radius:6px">'
+     + '<input id="npPhone" placeholder="Phone (optional)" style="flex:1 1 130px;padding:7px;border:1px solid #c8d2de;border-radius:6px">'
+     + '<button onclick="addFirmPerson(' + "'" + id + "'" + ')" '
+     + 'style="background:#1a5c3a;color:#fff;border:1px solid #1a5c3a;border-radius:6px;padding:7px 15px;cursor:pointer;font-weight:600">Add</button>'
+     + '<span class="muted" id="npMsg"></span></div>'
+     + '<p class="sub" style="margin:6px 0 0;font-size:12px">No email needed -- somebody is known by '
+     + 'their address when there is one, and otherwise by their name and this firm together.</p>'
+     + '</div>';
+ }
+
+ async function addFirmPerson(id){
+   var msg = document.getElementById('npMsg');
+   var name = (document.getElementById('npName').value || '').trim();
+   if (!name){ msg.textContent = 'A name is needed.'; return; }
+   var a = null;
+   for (var i = 0; i < mktRows.length; i++){ if (mktRows[i].id === id){ a = mktRows[i]; break; } }
+   if (!a){ msg.textContent = 'Could not tell which firm this is -- reload the page.'; return; }
+   msg.textContent = 'Adding...';
+   var r = await fetch('/api/admin/crm/import', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({
+       rows: [{ name: name,
+                email: (document.getElementById('npEmail').value || '').trim(),
+                phone: (document.getElementById('npPhone').value || '').trim(),
+                agency: a.name }],
+       // Somebody we were TOLD about. Not an event, and not a list.
+       source: 'hand_added' })
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok || d.error){ msg.textContent = d.error || 'That did not save.'; return; }
+   // ⛔ A REFUSAL IS NOT A SAVE, AND IT MUST NOT READ AS ONE. An ambiguous name comes back in
+   // refused[] with a 200, so checking only r.ok would print "Added." over a person who was not.
+   var refused = (d.refused || [])[0];
+   await loadFirmPeople(id);
+   // The list was just re-rendered, so the old element is gone -- ask for the new one.
+   var m2 = document.getElementById('npMsg');
+   if (!m2) return;
+   m2.textContent = refused ? ('Not added: ' + refused.why)
+                  : ((d.added && d.added.length) ? 'Added.'
+                  : ((d.adopted && d.adopted.length) ? 'Already known -- their email is now on file.'
+                  : 'Already on file at this firm.'));
  }
 
  // The firms this one could sit under. ⛔ ONLY TOP-LEVEL FIRMS ARE OFFERED, because the rollup on

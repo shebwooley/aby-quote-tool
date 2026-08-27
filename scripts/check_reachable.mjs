@@ -168,6 +168,36 @@ const RULES = [
       && /crm\/relationship/.test(f.worker),
   },
   {
+    name: "a person can be added to a firm without inventing an event",
+    why: "Eric, 2026-08-27: 'That is kind of a dumb way though to add someone because it is not"
+       + " from an event. Kelly just works there and I know it.' The only way to record a person"
+       + " was the event paste, which asks for a tag and a date -- so recording a plain fact about"
+       + " who works where meant fabricating an occasion. The control belongs in the firm panel,"
+       + " the one screen where you already know which firm you mean.",
+    // ⭐ THE LAST TEST IS THE REACHABILITY HALF. The first three only prove the form EXISTS; a
+    // function defined and never called is precisely the built-and-unreachable state this file
+    // was written for, and it looks finished in every code search.
+    // ⚠️ THE LAST TEST MUST MATCH A CALL, NOT THE NAME. Its first version was
+    // /addPersonForm\(id\)/, which the function's own SIGNATURE satisfies -- so the rule was
+    // green with the form rendered by nothing, which is the exact defect it exists to catch.
+    // The self-test reported it MISSED on the first run. A checker that reads source text can
+    // always be satisfied by the declaration of the thing it is looking for.
+    holds: (f) => /function addPersonForm\(/.test(f.worker)
+      && /function addFirmPerson\(/.test(f.worker)
+      && /id="npName"/.test(f.worker)
+      && /\+\s*addPersonForm\(id\)/.test(f.worker),
+  },
+  {
+    name: "a hand-added person is not recorded as having come from an event",
+    why: "Source is where we FIRST met somebody and it is written once, so a wrong value is not"
+       + " something a later import quietly corrects. Eric: 'that event that I met Megan at was"
+       + " really the source.' So the event paste sends event and the firm panel sends hand_added."
+       + " If both sent the same value the distinction would exist only in the comments, and the"
+       + " column would go back to meaning nothing.",
+    holds: (f) => /source:\s*'hand_added'/.test(f.worker)
+      && /source:\s*'event'/.test(f.worker),
+  },
+  {
     name: "bulk apply is reachable from the rows themselves",
     why: "Eric asked for tick-the-rows-pick-a-tag-apply. The bar only appears once something is"
        + " selected, so the checkbox is its only door.",
@@ -623,6 +653,19 @@ const SABOTAGES = [
   {
     why: "the acquisition control is orphaned from its endpoint",
     apply: (f) => ({ ...f, worker: f.worker.replace(/function saveRel\(/g, "function unusedRel(") }),
+  },
+  {
+    // ⭐ THE DEFINITION SURVIVES AND ONLY THE CALL GOES. That is the state this rule exists for:
+    // a form that is fully written, correct, and rendered by nothing. Removing the function
+    // instead would be caught by check_declarations, so it would prove a different guard.
+    why: "the add-a-person form is built but never rendered",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/\+ addPersonForm\(id\)/g, "+ ''") }),
+  },
+  {
+    // The distinction Eric asked for, collapsed: if the firm panel also claims "event", then
+    // being told somebody works somewhere is recorded as having met them at an event.
+    why: "a hand-added person is stamped as having come from an event",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/source: 'hand_added'/g, "source: 'event'") }),
   },
   {
     why: "the marketing switch is removed from the page",
