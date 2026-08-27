@@ -2592,13 +2592,40 @@ async function handleCrmAgencies(request, env) {
     // the parent shows the total -- and the branches render INDENTED UNDER the parent, so the
     // relationship is on screen rather than implied. `own_quotes` is returned beside the rollup so
     // a row can say both without either being recomputed in the page.
+    // ── THE ROLLUP WALKS THE WHOLE TREE, NOT ONE HOP ───────────────────────────────────────
+    //
+    // 🔴 IT WAS ONE HOP UNTIL 2026-08-26, AND THE STRUCTURE ERIC ASKED FOR THAT EVENING BREAKS
+    // THAT ASSUMPTION. His shape is three levels deep on purpose: a holding company (MMA), the
+    // office that actually quotes (MMA - DFW), and the firms bought and folded INTO that office
+    // (MHBT). With a single hop, MHBT's 185 quotes stop at MMA - DFW and never reach MMA -- so
+    // the parent would under-report by exactly the acquisitions, which are the quotes somebody
+    // most wants credited.
+    //
+    // ⚠️ THE OLD COMMENT SAID A CHAIN COULD NOT FORM, and it was true when written: "the seeding
+    // script asserts no parent is itself a child". That assertion is what Eric's instruction
+    // retires, and a rule that is enforced by a script somewhere else is not a rule this query
+    // can lean on. So the query stops assuming.
+    //
+    // ⛔ THE `depth < 6` GUARD IS NOT DECORATION. A cycle -- A parent of B, B parent of A -- would
+    // otherwise spin here forever, and nothing in the schema prevents somebody creating one from
+    // the firm panel. Six is far deeper than any real ownership chain and terminates regardless.
     '       COALESCE(q.quotes, 0) AS own_quotes, ' +
-    '       COALESCE(q.quotes, 0) + COALESCE((SELECT SUM(cq.quotes) FROM agencies c ' +
-    '          JOIN q cq ON cq.k = lower(trim(c.name)) WHERE c.parent_id = a.id), 0) AS quotes, ' +
+    '       COALESCE(q.quotes, 0) + COALESCE((' +
+    '         WITH RECURSIVE kin(id) AS (' +
+    '           SELECT id FROM agencies WHERE parent_id = a.id' +
+    '           UNION' +
+    '           SELECT c.id FROM agencies c JOIN kin ON c.parent_id = kin.id' +
+    '         ) SELECT SUM(cq.quotes) FROM kin JOIN agencies k ON k.id = kin.id' +
+    '           JOIN q cq ON cq.k = lower(trim(k.name))), 0) AS quotes, ' +
     '       q.last_quote, ' +
     '       COALESCE(s.sales, 0) AS own_sales, ' +
-    '       COALESCE(s.sales, 0) + COALESCE((SELECT SUM(cs.sales) FROM agencies c2 ' +
-    '          JOIN s cs ON cs.k = lower(trim(c2.name)) WHERE c2.parent_id = a.id), 0) AS sales, ' +
+    '       COALESCE(s.sales, 0) + COALESCE((' +
+    '         WITH RECURSIVE kin2(id) AS (' +
+    '           SELECT id FROM agencies WHERE parent_id = a.id' +
+    '           UNION' +
+    '           SELECT c.id FROM agencies c JOIN kin2 ON c.parent_id = kin2.id' +
+    '         ) SELECT SUM(cs.sales) FROM kin2 JOIN agencies k2 ON k2.id = kin2.id' +
+    '           JOIN s cs ON cs.k = lower(trim(k2.name))), 0) AS sales, ' +
     // ⭐ BOTH KINDS OF PERSON ARE COUNTED. Somebody held by name and firm has no broker_directory
     // row by design, so counting only that table would have reported "0 agents" for a firm whose
     // whole team we had just imported -- the count quietly meaning "agents with an email".
