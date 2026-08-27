@@ -16806,6 +16806,26 @@ function downloadCommitment(id) {
   var c = entry.c;
   var products = entry.products;
 
+  // 🔴🔴 THE SIGNED DOCUMENT PRINTED AN EMPTY PRODUCT BOX ON A REAL EMPLOYER'S COMMITMENT, AND THE
+  // PRODUCT WAS IN THE DATABASE THE WHOLE TIME. Found 2026-08-27 on TriStone Insurance Group's
+  // signed authorization, which Eric sent over: the "Products & Pricing Agreed To" section rendered
+  // <strong></strong> with nothing in it.
+  //
+  // ⭐ THE MISMATCH, EXACTLY: abyElectedProducts() in assets/js/app.js pushes a LABEL onto its list
+  // -- an array of plain STRINGS like "POP / Cafeteria Plan". This renderer reads p.name and
+  // p.fees. A string has no name property, so it rendered empty, every time, for everybody.
+  //
+  // ⛔ NEITHER SHAPE IS "WRONG" AND THAT IS WHY IT SURVIVED: the store is faithful, the send is
+  // faithful, and only the READER disagreed. Nothing threw and nothing was logged -- the box was
+  // simply blank on the one document that matters.
+  //
+  // ⚠️ IT ACCEPTS BOTH SHAPES RATHER THAN CHANGING ONE. Employers have already signed and
+  // downloaded documents built from strings, and those rows are in the database for good; a
+  // renderer that only understood the newer shape would go on printing nothing for them.
+  var productName = function(p) {
+    if (typeof p === 'string') return p;
+    return (p && (p.name || p.label)) || '';
+  };
   var productRows = products.map(function(p) {
     var feesHtml = '';
     if (Array.isArray(p.fees) && p.fees.length) {
@@ -16836,10 +16856,19 @@ function downloadCommitment(id) {
         }).join('') + '</table>';
     }
     return '<div style="margin-bottom:14px;padding:12px 16px;border:1px solid #d8e8d8;border-radius:6px;background:#fafffe">' +
-           '<strong style="font-size:14px;color:#1a5c3a">' + (p.name || '') + '</strong>' +
+           '<strong style="font-size:14px;color:#1a5c3a">' + productName(p) + '</strong>' +
            feesHtml +
            '</div>';
   }).join('');
+
+  // ⛔ AND AN EMPTY SECTION MUST SAY SO. A signed authorization whose product list renders as blank
+  // space is worse than one that says nothing was recorded: the first reads as a document that
+  // failed to load, and neither the employer nor ABY can tell which.
+  if (!productRows) {
+    productRows = '<div style="padding:12px 16px;border:1px solid #e0c98a;border-radius:6px;' +
+      'background:#fdf9ef;color:#7a5410;font-size:13px">No products were recorded with this ' +
+      'authorization. Check the quote it references.</div>';
+  }
 
   var submittedDate = new Date(c.submitted_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 
@@ -16889,14 +16918,22 @@ function downloadCommitment(id) {
         '<div class="field"><div class="lbl">Phone</div><div class="val">' + (c.auth_phone || '') + '</div></div>' +
       '</div>' +
     '</div>' +
+    // ⚠️ THE HR BLOCK IS OPTIONAL ON THE FORM AND WAS LEFT BLANK ON THE FIRST REAL SIGNATURE, so
+    // the document printed four empty rows under a heading. ⛔ That reads as a document that failed
+    // to load, not as a question nobody answered -- and ABY needs to know which, because one of
+    // those means chase the employer for a contact.
     '<div class="section">' +
       '<div class="section-title">HR / Benefits Contact</div>' +
-      '<div class="grid">' +
-        '<div class="field"><div class="lbl">Name</div><div class="val">' + (c.hr_contact || '') + '</div></div>' +
-        '<div class="field"><div class="lbl">Title</div><div class="val">' + (c.hr_title || '') + '</div></div>' +
-        '<div class="field"><div class="lbl">Email</div><div class="val">' + (c.hr_email || '') + '</div></div>' +
-        '<div class="field"><div class="lbl">Phone</div><div class="val">' + (c.hr_phone || '') + '</div></div>' +
-      '</div>' +
+      ((c.hr_contact || c.hr_title || c.hr_email || c.hr_phone)
+        ? '<div class="grid">' +
+            '<div class="field"><div class="lbl">Name</div><div class="val">' + (c.hr_contact || '&mdash;') + '</div></div>' +
+            '<div class="field"><div class="lbl">Title</div><div class="val">' + (c.hr_title || '&mdash;') + '</div></div>' +
+            '<div class="field"><div class="lbl">Email</div><div class="val">' + (c.hr_email || '&mdash;') + '</div></div>' +
+            '<div class="field"><div class="lbl">Phone</div><div class="val">' + (c.hr_phone || '&mdash;') + '</div></div>' +
+          '</div>'
+        : '<div style="padding:10px 14px;border:1px solid #eee;border-radius:6px;color:#888;' +
+          'font-size:13px">Not provided. The signer did not name a separate HR or benefits ' +
+          'contact, so the authorized signer above is the only contact on this authorization.</div>') +
     '</div>' +
     '<div class="section">' +
       '<div class="section-title">Products &amp; Pricing Agreed To</div>' +
