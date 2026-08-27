@@ -58,10 +58,19 @@
           Email
           <input type="email" name="brokerEmail" placeholder="jane@brokerage.com">
         </label>
+        <!-- ⭐⭐ IT NOW SAYS WHAT IT DOES *AND WHAT IT DOES NOT*. Eric, 2026-08-27, after a logo
+             uploaded here never appeared on the share link: "it should probably tell us instead of
+             accepting the upload and then not doing anything with it."
+             🔴 IT WAS NEVER REJECTED AND WAS NEVER TOO LARGE. It is simply not SAVED anywhere:
+             it brands the document rendered right now and goes when the page does.
+             ⛔ A control that quietly does less than a reader assumes is the defect -- not the
+             limitation itself, which is a reasonable one. -->
         <label class="field">
           Broker logo (optional)
           <input type="file" name="brokerLogo" accept="image/*">
-          <span class="helper-text">Appears top-right of the quote.</span>
+          <span class="helper-text">Brands <strong>this</strong> quote only &mdash; it is not
+            saved. To brand every quote a firm runs, including shared links, set their logo on the
+            firm in Brokers &amp; Agencies.</span>
         </label>
       </div>
     </section>
