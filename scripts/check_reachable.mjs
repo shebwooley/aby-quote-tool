@@ -312,6 +312,17 @@ const RULES = [
       && /agencyLogoPath/.test(f.app),
   },
   {
+    name: "a firm's WEBSITE can be TYPED, not only displayed",
+    why: "The column shipped 2026-08-26 with a reader and no writer: the panel rendered a link and"
+       + " 830 of 1,453 firms had one only because an import put it there. Eric supplied one on"
+       + " 2026-08-27 and the save was refused. A field that can be read and not written is the same"
+       + " half-a-feature as the 3,298 unreadable notes, arriving from the other direction.",
+    holds: (f) => /id="fSite"/.test(f.worker)
+      && /onclick="saveSite\(/.test(f.worker)
+      && /async function saveSite\(id\)\{/.test(f.worker)
+      && /website: \(v\) => \{/.test(f.worker),
+  },
+  {
     name: "a firm's QUOTING NAME can be set from the panel somebody is already looking at",
     why: "Eric asked for it as a pair -- 'a friendly name for us and then a quoting name based on"
        + " what they want for the quotes' -- and a pair is only meaningful read together. The"
@@ -994,6 +1005,16 @@ const SABOTAGES = [
     apply: (f) => ({ ...f, worker: f.worker.replace(
       /lower\(trim\(name\)\) = \? AND COALESCE\(logo_data_url,''\) <> ''/g,
       "id = ? AND COALESCE(logo_data_url,'') <> ''") }),
+  },
+  {
+    // Back to a column with a reader and no writer -- the state Eric hit on 2026-08-27.
+    why: "the website becomes display-only again",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/id="fSite"/g, 'id="fSiteGone"') }),
+  },
+  {
+    // The input stays and the server refuses it, which is the exact error he saw.
+    why: "the server stops accepting website as a settable field",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/website: \(v\) => \{/g, 'website_disabled: (v) => {') }),
   },
   {
     // The control leaves the panel. Eric could still set a quoting name with SQL, which is the

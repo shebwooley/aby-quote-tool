@@ -3502,6 +3502,31 @@ async function handleCrmAgencyField(request, env) {
       const s2 = out.trim();
       return s2.slice(0, 120) || null;
     },
+    // ⭐⭐ A WEBSITE YOU CAN ACTUALLY TYPE (2026-08-27). The column has existed since 2026-08-26 and
+    // the panel has always SHOWN one -- but 830 of 1,453 firms had one only because an IMPORT put it
+    // there, and nothing could enter one by hand. Eric supplied Becker's Insurance Services' site and
+    // the save came back "That is not a field this sets."
+    // 🔴 A COLUMN THAT CAN BE READ AND NOT WRITTEN IS HALF A FEATURE -- the same shape as the 3,298
+    // unreadable notes and the logo with no serving route (TRAPS #315-#317), arriving from the other
+    // direction: the reader was built and the writer never was.
+    // ⛔ http AND https ONLY. This string is rendered straight into an href on an admin screen, so a
+    // javascript: or data: URL here would run with that admin's session. Anything else is REFUSED
+    // rather than quietly corrected.
+    // ⚠️ A BARE DOMAIN IS THE COMMON CASE -- it gets https:// put in front, because that is what
+    // somebody copying off a business card will type.
+    website: (v) => {
+      var raw = String(v == null ? '' : v).trim();
+      if (!raw) return null;
+      if (raw.indexOf(' ') !== -1) return undefined;
+      var low = raw.toLowerCase();
+      if (low.indexOf('http://') !== 0 && low.indexOf('https://') !== 0) {
+        if (low.indexOf(':') !== -1) return undefined;
+        raw = 'https://' + raw;
+        low = raw.toLowerCase();
+      }
+      if (low.indexOf('.') === -1) return undefined;
+      return raw.slice(0, 200);
+    },
     city: (v) => String(v || '').trim().slice(0, 80) || null,
     state: (v) => {
       const s = String(v || '').trim().toUpperCase();
@@ -8298,6 +8323,14 @@ ${abyAdminNav('/admin/brokers')}
          // record cannot keep, and a link that goes nowhere is worse than no link on a screen
          // somebody is calling from.
          // ⚠️ rel=noopener because target=_blank hands the new tab a handle on this one.
+         // ⭐⭐ TYPEABLE SINCE 2026-08-27, AND IT WAS READ-ONLY FOR A DAY. Eric gave a firm's website
+         // and the save was refused, because the column had a reader and no writer. The input sits
+         // where the link already was, so the place you LOOK is the place you TYPE.
+         // ⚠️ Always rendered, unlike the link. A field that appears only once it has a value cannot
+         // be used to give it one.
+         + '<input id="fSite" placeholder="Website" value="' + esc(a.website || '') + '" '
+         + 'style="flex:1;min-width:170px;padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
+         + '<button onclick="saveSite(' + "'" + id + "'" + ')">Save site</button>'
          + (a.website
              ? ' <a class="site" href="' + esc(a.website) + '" target="_blank" rel="noopener">'
                + esc(String(a.website).replace(/^https?:[/][/]/, '').replace(/^www[.]/, '')) + '</a>'
@@ -8529,6 +8562,22 @@ ${abyAdminNav('/admin/brokers')}
  // and deliberately a SEPARATE button from "Save the name": renaming a firm and changing what
  // their clients call them are different decisions with different consequences, and one button
  // doing both would make the safe one feel as risky as the other.
+ // ⭐ The website, saved from the row it is displayed on. Its twin is saveWhere.
+ // ⚠️ A REFUSAL IS SHOWN, NOT SWALLOWED: the server rejects anything that is not http/https, and a
+ // silently-ignored paste is exactly how somebody concludes the field does not work.
+ async function saveSite(id){
+   var el = q('fSite');
+   q('fMsg').textContent = 'Saving...';
+   var r = await fetch('/api/admin/crm/agency', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ id: id, field: 'website', value: el.value }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok){ q('fMsg').textContent = d.error || 'That did not save.'; return; }
+   for (var i = 0; i < mktRows.length; i++){ if (mktRows[i].id === id) mktRows[i].website = d.value; }
+   openFirm(id);
+ }
+
  async function saveQuoting(id){
    var el = q('fQuoting');
    q('fMsg').textContent = 'Saving...';
