@@ -2908,6 +2908,20 @@ async function handleCrmRename(request, env) {
     }
     await env.DB.prepare('UPDATE agencies SET name = ? WHERE id = ?').bind(raw, id).run();
     renamed = true;
+
+    // 🔴 RENAMING CLEARS "check the name", BECAUSE RENAMING IS THE CHECK.
+    // Eric, 2026-08-26: "Once I fix a name like Group Health OK, why does it still say check the
+    // name?" Because nothing cleared it -- the flag was set by an import and only an import knew
+    // it existed.
+    // ⭐⭐ THE FLAG SAYS WHAT TO DO, SO DOING IT MUST TURN IT OFF. A task that stays lit
+    // after it is finished is worse than no task: the badge stops meaning "look at this" and
+    // starts meaning "this row came from an import", which is what  already says.
+    // ⛔ ONLY THAT ONE MESSAGE. A firm flagged for some other reason -- a miscategorised
+    // domain, say -- keeps its flag, because a new name does not answer a question about what the
+    // firm SELLS.
+    await env.DB.prepare(
+      "UPDATE agencies SET needs_review = NULL WHERE id = ? AND needs_review LIKE '%DERIVED%'"
+    ).bind(id).run();
   }
 
   await env.DB.prepare(
