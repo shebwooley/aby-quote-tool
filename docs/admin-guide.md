@@ -519,6 +519,34 @@ their people registers.** The admin reports those pairs — matched ignoring pun
 **suggestions only.** *Lone Star Insurance* and *Lone Star Insurance Services* may be one firm or
 two, and only you and Niels know.
 
+### 🔴 A firm row that is somebody's NAME
+
+**At the top of *Tidy up* is a green block: firm rows that are actually a person's name, offered
+against the firm we already have for them.** 16 rows today, holding 35 quotes.
+
+🔴 **The rest of the Tidy up screen cannot find these and never will.** Both of its lists match on
+**shared words** — and *Jason Sandler* shares no word with *Sandler Insurance*. So the biggest
+single split in the book sat where nothing was looking: **12 quotes and 2 sales as "Jason Sandler",
+30 and 10 as "Sandler Insurance" — one firm reading 29% smaller than it is.**
+
+⭐ **The evidence is the person's own email address**, which is independent of both names.
+`jason@sandlerins.com` says where he works more reliably than either row does.
+
+| The row says | What it matched on |
+|---|---|
+| **their email domain** | strong — the domain is the firm's, e.g. `bdeaton@thedeatonagency.com` → *The Deaton Agency* |
+| **surname only — check this one** | weaker, and shown as a prompt. It is what connects *Louanne Trebing* to *Trebing Insurance Services* — and it is also what would connect two unrelated Smiths |
+
+⛔ **A personal email address is never used as evidence** — gmail, yahoo, hotmail and the rest say
+nothing about where somebody works, and 1,140 of our 1,212 firm-less people are on one.
+
+⛔ **A solo agent whose firm really is their own name is not an error.** Several of these have a
+domain that is simply their own name. **Press *Not the same — leave it*** and it stops being asked.
+
+**Pressing *Same firm* makes the person-named row an alias of the real firm** — the same act as
+*Keep this* above it. Nothing is deleted, the quotes stay put and roll up to the survivor, and
+changing the relationship back undoes it.
+
 ---
 
 ## RFP Watch

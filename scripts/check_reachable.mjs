@@ -259,6 +259,28 @@ const RULES = [
       && /handleCrmPersonFirm/.test(f.worker),
   },
   {
+    name: "a firm row that is somebody's NAME is offered against the real firm we already have",
+    why: "The two duplicate passes match on shared words and can never see this class: 'Jason"
+       + " Sandler' shares no word with 'Sandler Insurance', and their seven-letter prefixes are"
+       + " 'jasonsa' and 'sandler'. So the biggest single split in the book -- 12 quotes and 2 sales"
+       + " under a person's name, 30 and 10 under the firm -- sat where nothing was looking. The"
+       + " evidence is the person's own email domain, which is independent of both names.",
+    holds: (f) => /let named = \[\];/.test(f.worker)
+      && /named,/.test(f.worker)                       // it reaches the response
+      && /nameds = d\.named \|\| \[\];/.test(f.worker)  // the page reads it
+      && /function namedPick\(/.test(f.worker)
+      && /function namedNot\(/.test(f.worker)
+      && /if \(nameds\.length\)\{/.test(f.worker),      // and it renders
+  },
+  {
+    name: "a consumer email domain is never used as evidence of a firm",
+    why: "gmail.com says nothing about where somebody works. A domain rule that did not exclude"
+       + " them would match nothing useful and, worse, could join unrelated people through a shared"
+       + " mailbox provider -- and 1,140 of the 1,212 people with no firm are on one.",
+    holds: (f) => /const CONSUMER = \[/.test(f.worker)
+      && /CONSUMER\.indexOf\(domain\) === -1/.test(f.worker),
+  },
+  {
     name: "a note written on a PERSON can be read back on a screen",
     why: "crm_events has accepted a note on a person since the CRM was built and /api/admin/crm"
        + " serves them when asked -- but for four days the ONLY caller in the whole page asked for"
@@ -801,6 +823,18 @@ const SABOTAGES = [
     why: "the person search stops asking the server anything",
     apply: (f) => ({ ...f, worker: f.worker.replace(
       /fetch\('\/api\/admin\/crm\/persons\?'/g, "fetch('/api/admin/crm/nothing?'") }),
+  },
+  {
+    // The pass still runs and still finds them; only the SECTION goes. The screen then looks
+    // complete and quietly stops offering the one class the other passes cannot see.
+    why: "the person-named firms are computed and never rendered",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/if \(nameds\.length\)\{/g, 'if (false){') }),
+  },
+  {
+    // Consumer domains stop being excluded, so gmail.com becomes evidence.
+    why: "a consumer email domain is accepted as evidence of which firm somebody is at",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /CONSUMER\.indexOf\(domain\) === -1/g, 'true') }),
   },
   {
     // The exact regression this pair of rules exists for: the panel still opens, and asks the

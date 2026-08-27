@@ -4521,13 +4521,31 @@ async function handleCrmAgencyDupes(request, env) {
       return nm.replace(/[^a-z]/g, '').length <= 3;          // NX, RR, K&S: shown, never judged
     }).sort((a, b) => (b.quotes || 0) - (a.quotes || 0));
 
-    for (const r of odd) {
+    // 🔴 ONE QUERY, NOT ONE PER ROW. This was 45 sequential awaits and the compound pass below was
+    // another 18 -- 63 round trips to D1 at roughly 90ms of latency each, which is where 5.8 of
+    // this endpoint's 5.9 seconds went. ⭐ MEASURED, NOT GUESSED: every individual query here runs
+    // in 0-13ms, so the SQL was never the cost; the COUNT of queries was.
+    // ⚠️ A window function does per-name "top 3" in one pass. Same output, same order.
+    const examplesFor = async (names) => {
+      const out = {};
+      if (!names.length) return out;
+      const marks = names.map(() => '?').join(',');
       const ex = await env.DB.prepare(
-        'SELECT client_name, substr(created_at,1,10) AS dt FROM quotes ' +
-        'WHERE lower(trim(broker_agency)) = ? ORDER BY created_at DESC LIMIT 3'
-      ).bind(String(r.name || '').trim().toLowerCase()).all();
-      r.examples = (ex.results || []).map((x) => (x.client_name || '(not stated)') + ' · ' + x.dt);
-    }
+        'WITH e AS (SELECT lower(trim(broker_agency)) AS k, client_name, ' +
+        '                  substr(created_at,1,10) AS dt, ' +
+        '                  ROW_NUMBER() OVER (PARTITION BY lower(trim(broker_agency)) ' +
+        '                                     ORDER BY created_at DESC) AS rn ' +
+        '           FROM quotes WHERE lower(trim(broker_agency)) IN (' + marks + ')) ' +
+        'SELECT k, client_name, dt FROM e WHERE rn <= 3 ORDER BY k, rn'
+      ).bind(...names).all();
+      for (const x of (ex.results || [])) {
+        (out[x.k] = out[x.k] || []).push((x.client_name || '(not stated)') + ' · ' + x.dt);
+      }
+      return out;
+    };
+
+    const oddEx = await examplesFor(odd.map((r) => String(r.name || '').trim().toLowerCase()));
+    for (const r of odd) r.examples = oddEx[String(r.name || '').trim().toLowerCase()] || [];
 
     // The messages ride back with the groups, so the screen can show what has already been said
     // about each one without a second request.
@@ -4564,6 +4582,9 @@ async function handleCrmAgencyDupes(request, env) {
     for (const r of (realRows.results || [])) byName[String(r.name).trim().toLowerCase()] = r;
 
     const compound = [];
+    // The same one-query-not-one-per-row treatment as odd above, for the same reason.
+    const compEx = await examplesFor(
+      (compRows.results || []).map((c) => String(c.name).trim().toLowerCase()));
     for (const c of (compRows.results || [])) {
       // ⚠️ A HALF THAT IS NOT A FIRM WE HAVE IS SHOWN, NOT SILENTLY DROPPED. "NO BROKERS; Worth
       // Benefits" is one of these, and knowing the other half is unrecognised is the useful part.
@@ -4573,10 +4594,7 @@ async function handleCrmAgencyDupes(request, env) {
         return { name: nm, id: (hit && hit.id) || null, quotes: (hit && hit.quotes) || 0 };
       // The busiest real firm first: usually the one that actually ran it.
       }).sort((a, b) => (b.id ? 1 : 0) - (a.id ? 1 : 0) || (b.quotes - a.quotes));
-      const ex = await env.DB.prepare(
-        'SELECT client_name, substr(created_at,1,10) AS dt FROM quotes ' +
-        'WHERE lower(trim(broker_agency)) = ? ORDER BY created_at DESC LIMIT 3'
-      ).bind(String(c.name).trim().toLowerCase()).all();
+      const cex = compEx[String(c.name).trim().toLowerCase()] || [];
       // \u26d4 A COMPOUND ROW WITH NO QUOTES LEFT HAS BEEN ANSWERED, AND MUST STOP BEING ASKED.
       // Resolving one moves its quotes onto the real firm -- either both firms, where two of them
       // genuinely quoted the employer, or the one whose logo is on the cover. The compound agency
@@ -4586,11 +4604,8 @@ async function handleCrmAgencyDupes(request, env) {
       // attention. 20 of the 42 were answered on 2026-08-24 from the original proposals.
       // \u26a0\ufe0f HIDDEN, NEVER DELETED. The row is still on the analysis view and still carries the
       // history; it has simply stopped being a question.
-      if (!(ex.results || []).length) continue;
-      compound.push({
-        id: c.id, name: c.name, options: opts,
-        examples: (ex.results || []).map((x) => (x.client_name || '(not stated)') + ' · ' + x.dt),
-      });
+      if (!cex.length) continue;
+      compound.push({ id: c.id, name: c.name, options: opts, examples: cex });
     }
 
     // -- A NAME ON QUOTES THAT NO AGENCY ROW ANSWERS TO -----------------------------------------
@@ -4626,6 +4641,141 @@ async function handleCrmAgencyDupes(request, env) {
       orphans = [];
     }
 
+    // \u2500\u2500 A FIRM ROW THAT IS SOMEBODY'S NAME, AND THE REAL FIRM WE ALREADY HAVE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    //
+    // \ud83d\udd34\ud83d\udd34 THE PASSES ABOVE CANNOT SEE THIS CLASS AND NEVER WILL, BY CONSTRUCTION. Both of them
+    // match on SHARED WORDS -- "Jason Sandler" and "Sandler Insurance" share none, and their
+    // seven-letter prefixes are "jasonsa" and "sandler". So the biggest single split in the book
+    // sat under a person's name where nothing was looking: 12 quotes and 2 sales as "Jason
+    // Sandler", 30 and 10 as "Sandler Insurance" -- one firm reading 29% smaller than it is.
+    //
+    // \u2b50\u2b50 THE EVIDENCE IS THE PERSON'S OWN EMAIL DOMAIN, which is independent of both names.
+    // jason@sandlerins.com says which firm he is at more reliably than either row does.
+    // \u26d4 CONSUMER DOMAINS CARRY NO EVIDENCE and must not be used: gmail.com would match nothing
+    // and, worse, a rule that "matched" on one would join unrelated people.
+    //
+    // \u26a0\ufe0f A SURNAME IS A WEAKER SIGNAL AND IS LABELLED AS SUCH, never silently mixed in with the
+    // domain matches. It is what connects "Louanne Trebing" to "Trebing Insurance Services", and
+    // it is also what would connect two unrelated Smiths -- so it is shown, and it is Eric's call.
+    //
+    // \u26d4 AND A SOLO AGENT WHOSE FIRM REALLY IS THEIR OWN NAME IS NOT AN ERROR. Six of these have a
+    // domain that is their own name (karenburkholder.com); the row is CORRECT and the only thing
+    // offered is a surname match, if one exists at all.
+    //
+    // \u26d4 IT PROPOSES. It never merges: two people can share a name with a firm, and a wrong merge
+    // moves one firm's quote history onto another silently -- the one thing this screen must never
+    // do. Resolving is the same alias control the pairs above use.
+    const CONSUMER = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com',
+      'sbcglobal.net', 'att.net', 'msn.com', 'verizon.net', 'comcast.net', 'live.com', 'ymail.com',
+      'cox.net', 'swbell.net', 'rocketmail.com', 'bellsouth.net', 'me.com', 'earthlink.net',
+      'protonmail.com', 'mac.com', 'charter.net', 'juno.com', 'windstream.net', 'suddenlink.net'];
+    let named = [];
+    try {
+      // The rows whose NAME is a person we hold. Same exclusions as every other pass, so a name
+      // Eric has already confirmed cannot come back.
+      const pn = await env.DB.prepare(
+        "WITH q AS (SELECT lower(trim(broker_agency)) k, COUNT(*) n FROM quotes " +
+        "           WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1), " +
+        "     s AS (SELECT lower(trim(agency)) k, COUNT(*) n FROM aby_sales " +
+        "           WHERE trim(COALESCE(agency,'')) <> '' GROUP BY 1) " +
+        'SELECT a.id, a.name, p.id AS person_id, COALESCE(q.n,0) AS quotes, COALESCE(s.n,0) AS sales, ' +
+        '       (SELECT MIN(d.email) FROM broker_directory d WHERE d.person_id = p.id) AS email ' +
+        'FROM agencies a JOIN people p ON lower(trim(p.name)) = lower(trim(a.name)) ' +
+        'LEFT JOIN q ON q.k = lower(trim(a.name)) LEFT JOIN s ON s.k = lower(trim(a.name)) ' +
+        "WHERE COALESCE(a.relationship,'') NOT IN ('succeeded','alias') " +
+        '  AND a.name_confirmed_at IS NULL ' +
+        "  AND a.name NOT LIKE '%;%' " +
+        'ORDER BY quotes DESC, a.name'
+      ).all();
+
+      // Every firm that could be the answer, counted BY NAME exactly like the sections above, so
+      // this screen cannot show two different sizes for one firm.
+      // 🔴 GROUPED CTEs, NOT PER-ROW SUBQUERIES. The first version of this counted agents with two
+      // correlated subqueries over 2,365 agencies and took the whole endpoint from milliseconds to
+      // 6,865 ms. That is the exact fault this screen's own comment records ("the earlier version
+      // locked the page for fifteen seconds") and the one the six expression indexes were added to
+      // fix. ⭐ TIME THE ENDPOINT AFTER ADDING A PASS TO IT.
+      const cand = await env.DB.prepare(
+        "WITH q AS (SELECT lower(trim(broker_agency)) k, COUNT(*) n FROM quotes " +
+        "           WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1), " +
+        "     s AS (SELECT lower(trim(agency)) k, COUNT(*) n FROM aby_sales " +
+        "           WHERE trim(COALESCE(agency,'')) <> '' GROUP BY 1), " +
+        '     pe AS (SELECT agency_id, COUNT(*) n FROM broker_directory ' +
+        '            WHERE agency_id IS NOT NULL GROUP BY 1), ' +
+        '     px AS (SELECT p2.agency_id, COUNT(*) n FROM people p2 ' +
+        '            WHERE p2.agency_id IS NOT NULL ' +
+        '              AND NOT EXISTS (SELECT 1 FROM broker_directory d2 WHERE d2.person_id = p2.id) ' +
+        '            GROUP BY 1) ' +
+        "SELECT a.id, a.name, COALESCE(a.website,'') AS website, " +
+        '       COALESCE(q.n,0) AS quotes, COALESCE(s.n,0) AS sales, ' +
+        '       (COALESCE(pe.n,0) + COALESCE(px.n,0)) AS agents ' +
+        'FROM agencies a ' +
+        'LEFT JOIN q ON q.k = lower(trim(a.name)) LEFT JOIN s ON s.k = lower(trim(a.name)) ' +
+        'LEFT JOIN pe ON pe.agency_id = a.id LEFT JOIN px ON px.agency_id = a.id ' +
+        "WHERE COALESCE(a.relationship,'') <> 'alias' AND a.name NOT LIKE '%;%'"
+      ).all();
+
+      const candidates = cand.results || [];
+      // ⚠️ AMPERSAND IS A SPELLING OF "AND", and squash() alone drops it -- so "High & Associates"
+      // reduced to "highassociates" and the domain highandassociates.net did not match it, while
+      // the OTHER spelling of the same firm did. Eric found this exact thing in the pass above;
+      // the note there says so, and this one had to learn it separately.
+      const amp = (t) => squash(String(t || '').toLowerCase().replace(/&/g, ' and '));
+      for (const c of candidates) {
+        c._sq = amp(c.name);
+        // The candidate's WORDS, for the surname test. A prefix test on the whole string matched
+        // "Wells" to "Wellspring", "Wells Fargo" and "Wellsping" -- three firms with nothing to do
+        // with Mark Wells. A surname is a WORD, so it has to match one.
+        c._words = String(c.name || '').toLowerCase().replace(/&/g, ' and ')
+          .replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean);
+      }
+
+      for (const r of (pn.results || [])) {
+        const email = String(r.email || '').toLowerCase().trim();
+        const at = email.lastIndexOf('@');
+        const domain = at > -1 ? email.slice(at + 1) : '';
+        const label = domain ? domain.split('.')[0] : '';        // sandlerins, from sandlerins.com
+        const useDomain = domain && CONSUMER.indexOf(domain) === -1 && label.length >= 5;
+        const selfSq = amp(r.name);
+        // The surname, which is the last word of a name of two or more words.
+        const parts = String(r.name || '').trim().split(/\s+/);
+        const surname = parts.length > 1 ? squash(parts[parts.length - 1]) : '';
+
+        const hits = [];
+        for (const c of candidates) {
+          if (c.id === r.id) continue;              // the row itself is never its own answer
+          if (c._sq === selfSq) continue;           // nor another row of the same person's name
+          let how = '';
+          if (useDomain) {
+            if (c.website && squash(c.website).indexOf(squash(domain)) !== -1) how = 'website';
+            else if (c._sq === label) how = 'domain';
+            // \u26a0\ufe0f A PREFIX, NOT A SUBSTRING. sandlerins is the front of sandlerinsurance; allowing
+            // it anywhere in the name would match "ins" inside a dozen unrelated firms.
+            else if (c._sq.length >= label.length && c._sq.slice(0, label.length) === label) how = 'domain';
+          }
+          // \u26d4 A WHOLE WORD, NEVER A PREFIX. Matching the start of the squashed name put Mark Wells
+          // against Wellspring, Wells Fargo and Wellsping -- 59 quotes of somebody else's history
+          // offered as his firm.
+          if (!how && surname.length >= 4 && c._words.indexOf(surname) !== -1) how = 'surname';
+          if (how) hits.push({ id: c.id, name: c.name, quotes: c.quotes, sales: c.sales,
+                               agents: c.agents, how: how });
+        }
+        if (!hits.length) continue;
+        const rank = { website: 0, domain: 1, surname: 2 };
+        hits.sort((a, b) => (rank[a.how] - rank[b.how]) || (b.quotes - a.quotes));
+        // Same dismissal key shape as every other group, so ruling on one here sticks.
+        const sig = [r.id].concat(hits.map((x) => x.id)).slice().sort().join('|');
+        if (dismissed[sig]) continue;
+        named.push({ id: r.id, name: r.name, quotes: r.quotes, sales: r.sales,
+                     email: email || null, options: hits.slice(0, 4), group_key: sig });
+      }
+      named.sort((a, b) => (b.quotes - a.quotes) || String(a.name).localeCompare(b.name));
+    } catch (err) {
+      // Its own error, like orphans: the duplicate finder above is the everyday job and must not
+      // go dark because this extra pass did.
+      named = [];
+    }
+
     // \u2b50 SAID OUT LOUD. A list that quietly stops offering rows cannot be told from one that has
     // run out of them -- and "nothing left to tidy" is exactly the wrong impression to give.
     let confirmed = 0;
@@ -4637,12 +4787,13 @@ async function handleCrmAgencyDupes(request, env) {
     } catch { confirmed = 0; }
 
     return jsonResp({
-      pairs, maybe, odd, notes, compound, orphans, confirmed, matched: pairs.length,
+      pairs, maybe, odd, notes, compound, orphans, named, confirmed, matched: pairs.length,
       orphanQuotes: orphans.reduce(function (t, r) { return t + (Number(r.quotes) || 0); }, 0),
+      namedQuotes: named.reduce(function (t, r) { return t + (Number(r.quotes) || 0); }, 0),
       note: 'Suggestions only. Two similar names may be one firm or two, and only a person knows.',
     });
   } catch (err) {
-    return jsonResp({ pairs: [], maybe: [], odd: [], error: String((err && err.message) || err) }, 500);
+    return jsonResp({ pairs: [], maybe: [], odd: [], named: [], error: String((err && err.message) || err) }, 500);
   }
 }
 async function handleCrmRecordStatus(request, env) {
@@ -6702,6 +6853,8 @@ ${abyAdminNav('/admin/brokers')}
 
  // Quote-log names that no agency row answers to. Filled by loadDupes, drawn by paintDupes.
  var orphanNames = [], orphanQuotes = 0;
+ // Firm rows that are somebody's NAME, with the real firm found through their email domain.
+ var nameds = [], namedQuotes = 0;
  // How many firms this screen is deliberately not asking about, because their names are settled.
  var confirmedCount = 0;
 
@@ -6720,6 +6873,8 @@ ${abyAdminNav('/admin/brokers')}
    confirmedCount = Number(d.confirmed) || 0;
    orphanNames = d.orphans || [];
    orphanQuotes = Number(d.orphanQuotes) || 0;
+   nameds = d.named || [];
+   namedQuotes = Number(d.namedQuotes) || 0;
    paintDupes();
  }
 
@@ -6857,6 +7012,49 @@ ${abyAdminNav('/admin/brokers')}
 
    // ⭐⭐ TWO FIRMS IN ONE NAME. Fixing one runs the ordinary correction path, so the quote is
    // renamed to the firm picked and keeps a note saying what it was typed as.
+   // ⭐⭐ A FIRM ROW THAT IS SOMEBODY'S NAME. Placed high, because the two passes above cannot see
+   // this class at all -- they match on shared words, and "Jason Sandler" shares none with
+   // "Sandler Insurance". The evidence is the person's own email domain, which is independent of
+   // both names, so these are usually more certain than the near-matches above rather than less.
+   if (nameds.length){
+     h += '<div style="border:1px solid #cfe0d4;background:#f4f9f5;border-radius:7px;padding:10px 12px;margin:0 0 12px">'
+        + '<p style="margin:0 0 6px;font-size:13px;color:#1a5c3a"><strong>' + nameds.length
+        + ' firm row' + (nameds.length === 1 ? '' : 's') + '</strong> holding <strong>' + namedQuotes
+        + ' quote' + (namedQuotes === 1 ? '' : 's') + '</strong> ' + (nameds.length === 1 ? 'is' : 'are')
+        + ' filed under a PERSON&rsquo;S NAME, and we already have their firm.</p>'
+        + '<p class="sub" style="margin:0 0 8px">Nothing above can find these &mdash; the lists up '
+        + 'there match on shared words, and <em>Jason Sandler</em> shares none with <em>Sandler '
+        + 'Insurance</em>. <strong>The match is their own email domain</strong>, which is evidence '
+        + 'neither name gives you. A <em>surname</em> match is a weaker guess and says so.</p>';
+     for (var nd = 0; nd < nameds.length; nd++){
+       var nr = nameds[nd];
+       var nq = Number(nr.quotes) || 0, ns = Number(nr.sales) || 0;
+       h += '<div style="border:1px solid #dde5ee;background:#fff;border-radius:7px;padding:9px 11px;margin-bottom:8px">'
+          + '<div style="font-size:12.5px;margin-bottom:5px"><strong>' + esc(nr.name) + '</strong> '
+          + '<span style="color:#1a5c3a">' + nq + ' quote' + (nq === 1 ? '' : 's') + '</span>'
+          + (ns ? ' <span class="muted">&middot; ' + ns + ' sale' + (ns === 1 ? '' : 's') + '</span>' : '')
+          + (nr.email ? ' <span class="muted">&middot; ' + esc(nr.email) + '</span>' : '')
+          + '</div>';
+       for (var no = 0; no < nr.options.length; no++){
+         var op2 = nr.options[no];
+         var why = op2.how === 'surname'
+           ? '<span style="color:#8a6d1f;font-size:12px">surname only &mdash; check this one</span>'
+           : '<span style="color:#1a5c3a;font-size:12px">their email domain</span>';
+         h += '<div style="display:flex;align-items:center;gap:9px;padding:2px 0;flex-wrap:wrap">'
+            + '<button style="font-size:12px;padding:3px 9px" onclick="namedPick(' + nd + ',' + no + ')">'
+            + 'Same firm</button>'
+            + '<span style="min-width:230px">' + esc(op2.name) + '</span>'
+            + '<span class="muted" style="font-size:12px">' + (op2.quotes || 0) + ' quotes &middot; '
+            + (op2.agents || 0) + ' agents</span>' + why + '</div>';
+       }
+       h += '<div style="margin-top:5px"><button style="font-size:12px;padding:3px 9px" '
+          + 'onclick="namedNot(' + nd + ')">Not the same &mdash; leave it</button> '
+          + '<span class="muted" style="font-size:12px">A solo agent&rsquo;s firm really can be '
+          + 'their own name.</span></div></div>';
+     }
+     h += '</div>';
+   }
+
    if (comps.length){
      h += '<p class="sub" style="margin:16px 0 10px;padding-top:12px;border-top:1px solid #e6ecf3">'
         + '<strong>' + comps.length + ' rows have two firm names in one box.</strong> Somebody typed both '
@@ -6890,6 +7088,61 @@ ${abyAdminNav('/admin/brokers')}
      return;
    }
    box.innerHTML = h;
+ }
+
+ // ⭐ THE SAME ACT AS "Keep this" ABOVE, AND DELIBERATELY THE SAME MECHANISM: the person-named row
+ // becomes an ALIAS of the real firm. ⛔ Nothing is deleted and nothing is renamed -- the alias
+ // keeps its own quotes and the recursive rollup adds them to the survivor, which is why this is
+ // reversible by changing one relationship back.
+ async function namedPick(i, o){
+   var nr = nameds[i];
+   if (!nr) return;
+   var keep = nr.options[o];
+   var r = await fetch('/api/admin/crm/relationship', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ id: nr.id, parent_id: keep.id, relationship: 'alias',
+                            note: nr.name + ' is a person, not a firm -- their firm is ' + keep.name }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   // ⛔ A FAILURE IS NAMED, NOT SWALLOWED.
+   if (!r.ok){
+     q('tidyMsg').innerHTML = '<span style="color:#a12622">' + esc(nr.name) + ': '
+       + esc(d.error || 'did not save') + '</span>';
+     return;
+   }
+   // Settling the SURVIVING name, exactly as keepThis does, so the finder stops asking about it.
+   try {
+     await fetch('/api/admin/crm/rename', {
+       method: 'POST', headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ id: keep.id, confirm: true }),
+     });
+   } catch (e) { /* the alias is already saved; confirming is the belt, not the braces */ }
+   nameds.splice(i, 1);
+   namedQuotes = 0;
+   for (var k = 0; k < nameds.length; k++) namedQuotes += (Number(nameds[k].quotes) || 0);
+   paintDupes();
+   q('tidyMsg').textContent = esc(nr.name) + ' rolled into ' + keep.name + '.';
+   await loadMkt();
+ }
+
+ // ⛔ "Not the same" IS AN ANSWER AND IS RECORDED AS ONE. A solo agent whose firm really is their
+ // own name is not an error, and re-offering them every week is how this screen loses its
+ // credibility -- the same complaint that produced tidy_dismissed in the first place.
+ async function namedNot(i){
+   var nr = nameds[i];
+   if (!nr) return;
+   var r = await fetch('/api/admin/tidy-dismiss', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ group_key: nr.group_key,
+                            names: nr.name + ' / ' + nr.options.map(function(x){ return x.name; }).join(' / ') }),
+   });
+   if (!r.ok){
+     var d = await r.json().catch(function(){ return {}; });
+     q('tidyMsg').innerHTML = '<span style="color:#a12622">' + esc(d.error || 'That did not save.') + '</span>';
+     return;
+   }
+   nameds.splice(i, 1);
+   paintDupes();
  }
 
  // ⚠️ Dismissed for this sitting only, and it says so. Storing "not a duplicate" would be a fourth
