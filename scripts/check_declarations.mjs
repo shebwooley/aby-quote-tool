@@ -133,9 +133,54 @@ if (process.argv.includes("--self-test")) {
   process.exit(caught ? 0 : 1);
 }
 
+// ── INVISIBLE CONTROL CHARACTERS ────────────────────────────────────────────────────────────
+//
+// 🔴 NOTHING IN THIS REPO COULD SEE ONE. On 2026-08-27 two separators went into worker.js as raw
+// 0x01 and 0x02 bytes -- a GROUP_CONCAT separator and a group key joined on another. Both PARSED,
+// both would have WORKED, and both are invisible in an editor and in a diff.
+//
+// ⛔ THAT IS WHAT MAKES THEM DANGEROUS RATHER THAN HARMLESS: the SQL side and the JavaScript side
+// have to agree on the separator, and the next person to edit one of them cannot see what they are
+// matching. benefitlab-notes has check-control-chars.py over the NOTES for the same reason; the
+// code had nothing.
+//
+// ⚠️ TAB, NEWLINE AND CARRIAGE RETURN ARE FINE. Everything else below 0x20 is not.
+function controlChars(files) {
+  let bad = 0;
+  for (const f of files) {
+    const buf = fs.readFileSync(path.join(ROOT, f));
+    const hits = [];
+    for (let i = 0; i < buf.length; i += 1) {
+      const b = buf[i];
+      if (b === 9 || b === 10 || b === 13) continue;
+      if (b < 32) {
+        const line = buf.slice(0, i).toString("utf8").split("\n").length;
+        hits.push("0x" + b.toString(16).padStart(2, "0") + " at line " + line);
+      }
+    }
+    if (hits.length) {
+      bad += 1;
+      console.log("  FAIL " + f + ": " + hits.length + " control character(s) -- "
+        + hits.slice(0, 5).join(", "));
+    } else {
+      console.log("  ok   " + f + "  (no control characters)");
+    }
+  }
+  return bad;
+}
+
 console.log("TOP-LEVEL DECLARATIONS -- did this edit delete one?");
 const problems = check(FILES);
-console.log(problems
-  ? "\n>> A declaration went missing. That is a run-time error nothing else here can see."
-  : "\nnothing that was declared has stopped being declared.");
-process.exit(problems ? 1 : 0);
+console.log("\nCONTROL CHARACTERS -- a separator you cannot see is one nobody can maintain");
+const ctl = controlChars(FILES);
+if (problems) {
+  console.log("\n>> A declaration went missing. That is a run-time error nothing else here can see.");
+}
+if (ctl) {
+  console.log("\n>> An invisible control character is in the source. Replace it with a visible "
+    + "separator -- both sides of it, because something else is matching on it.");
+}
+if (!problems && !ctl) {
+  console.log("\nnothing that was declared has stopped being declared, and nothing invisible.");
+}
+process.exit(problems || ctl ? 1 : 0);

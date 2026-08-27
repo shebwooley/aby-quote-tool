@@ -281,6 +281,33 @@ const RULES = [
       && /CONSUMER\.indexOf\(domain\) === -1/.test(f.worker),
   },
   {
+    name: "two records of one human can be found and merged from a screen",
+    why: "F-423. The firm duplicate finder looks for duplicate FIRMS and structurally cannot see"
+       + " two rows for one person inside a single correct firm -- 60 groups, 121 records, always"
+       + " one human with two email addresses. The merge mechanism already existed and was already"
+       + " reversible; what was missing was anywhere to say 'these are the same person'.",
+    holds: (f) => /handleCrmPersonDupes/.test(f.worker)
+      && /handleCrmMergePerson/.test(f.worker)
+      && /fetch\('\/api\/admin\/crm\/person-dupes'\)/.test(f.worker)
+      && /fetch\('\/api\/admin\/crm\/merge-person'/.test(f.worker)
+      && /function pdKeep\(/.test(f.worker)
+      && /ontoggle="if\(this\.open\)loadPersonDupes\(\)"/.test(f.worker),
+  },
+  {
+    name: "merging two records moves the notes before the row is deleted",
+    why: "The notes are about a HUMAN and the whole premise of the merge is that these two records"
+       + " were always the same human. Deleting first and asking later is how 'we tagged them in"
+       + " March' quietly stops being true -- and 3,298 person notes exist to lose.",
+    holds: (f) => {
+      const i = f.worker.indexOf('async function handleCrmMergePerson');
+      if (i === -1) return false;
+      const body = f.worker.slice(i, i + 3000);
+      const move = body.indexOf("UPDATE crm_events SET entity_id = ?");
+      const del = body.indexOf("DELETE FROM people WHERE id = ?");
+      return move !== -1 && del !== -1 && move < del;
+    },
+  },
+  {
     name: "a referral is recorded against a PERSON, not against the empty brokers table",
     why: "Eric, 2026-08-26: 'I see how to add a referral partner and a sales rep but not a broker..."
        + " I think this page is good conceptually but not in practice.' It read `brokers`, which"
@@ -846,6 +873,23 @@ const SABOTAGES = [
     why: "the person search stops asking the server anything",
     apply: (f) => ({ ...f, worker: f.worker.replace(
       /fetch\('\/api\/admin\/crm\/persons\?'/g, "fetch('/api/admin/crm/nothing?'") }),
+  },
+  {
+    // The finder still runs; only the door goes. 60 groups computed and nobody able to open them.
+    why: "the duplicate-people section is computed and has no door",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /ontoggle="if\(this\.open\)loadPersonDupes\(\)"/g, 'data-was-here="1"') }),
+  },
+  {
+    // The notes are never moved at all, so a merge silently drops everything anybody recorded
+    // about the losing record. 3,298 person notes exist to lose this way.
+    // ⚠️ GLOBAL, because handleCrmLinkPerson carries the identical statement and a non-global
+    // replace hit that one instead -- leaving the merge handler untouched and the rule green.
+    // A sabotage that lands somewhere else is a sabotage that proves nothing.
+    why: "merging drops the losing record's notes instead of moving them",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /UPDATE crm_events SET entity_id = \? WHERE entity_type = 'person' AND entity_id = \?/g,
+      'SELECT 1 WHERE 0 -- notes no longer moved') }),
   },
   {
     // Straight back to the defect F-417 records: the roll-up reads the table nobody registers into.

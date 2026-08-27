@@ -452,6 +452,32 @@ nowhere:
 **1,125 people have more than one.** ⚠️ **So before deciding a prospect is a stranger, open their
 notes** — we often already know what they do and where we found them.
 
+### Same person twice
+
+**On the Marketing view, *Same person twice* lists two records that are one human.** 60 groups
+covering 121 records today.
+
+⭐ **The cause is always the same and it is not a bug: one person, two email addresses.** Abby Crain
+is `abby.crain@patriotgis.com` and `abby@benefitstexas.com` — the acquiring firm's address and the
+acquired firm's. Bronwyn Alsup is her work address and her Yahoo one. **Identity here is keyed on the
+email, so two addresses are two records by design** — it assumes somebody will eventually say they
+are the same, and this is where you say it.
+
+⚠️ **The addresses are the evidence, so they are the loudest thing on each row.** They are what tells
+you these two are one person — or that they are not.
+
+⛔ **Nothing merges on its own.** Two people really can share a name at one firm, and a wrong merge
+moves one person's quote history onto another with nothing on any screen saying so.
+
+**Press *Keep this one* on the record that should survive.** The other record's addresses and notes
+move to it and the empty row goes. 🔴 **No quote is rewritten and no history changes firm** — the
+quotes belong to the address, which is what makes this safe. **Press *Not the same person*** and the
+pair stops being offered.
+
+⚠️ **14 of the 60 groups have no firm on either side.** That is a weaker match — two records for
+*Brady Lenz* with nothing to place either of them could genuinely be two people — so those are
+marked and sorted last.
+
 ### Where a firm is
 
 **Open a firm and type its city and state.** They start empty.

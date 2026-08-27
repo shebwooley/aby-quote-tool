@@ -93,6 +93,10 @@ export default {
     if (path === '/api/admin/crm/staged'       && method === 'GET')  return withAuth(request, env, () => handleCrmStagedNext(request, env));
     if (path === '/api/admin/crm/staged-done'  && method === 'POST') return withAuth(request, env, () => handleCrmStagedDone(request, env));
     if (path === '/api/admin/crm/agency-dupes' && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyDupes(request, env));
+    // The same job as agency-dupes, over PEOPLE. Separate because the evidence is different and
+    // the merge is a different act -- see the comment on handleCrmPersonDupes.
+    if (path === '/api/admin/crm/person-dupes' && method === 'GET')  return withAuth(request, env, () => handleCrmPersonDupes(request, env));
+    if (path === '/api/admin/crm/merge-person' && method === 'POST') return withAuth(request, env, () => handleCrmMergePerson(request, env));
     if (path === '/api/admin/crm/people'       && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyPeople(request, env));
     if (path === '/api/admin/crm/never-quoted' && method === 'GET')  return withAuth(request, env, () => handleCrmNeverQuoted(request, env));
     if (path === '/api/admin/crm/rename'       && method === 'POST') return withAuth(request, env, () => handleCrmRename(request, env));
@@ -3637,6 +3641,188 @@ async function handleCrmPersonFirm(request, env) {
 }
 
 /**
+ * THE SAME PERSON, TWICE. Same name, same firm, two records (F-423).
+ *
+ * 🔴 THE FIRM DUPLICATE FINDER CANNOT SEE THESE, because it looks for duplicate FIRMS. Two rows
+ * for one human sit inside a single correct firm and nothing was asking the question.
+ *
+ * ⭐⭐ THE PATTERN IS ALWAYS THE SAME AND IT IS NOT A BUG IN THE IMPORT: ONE HUMAN, TWO EMAIL
+ * ADDRESSES. Abby Crain is `abby.crain@patriotgis.com` and `abby@benefitstexas.com` -- the
+ * acquiring firm's address and the acquired firm's. Bronwyn Alsup is her work address and her
+ * Yahoo one. Identity is keyed on EMAIL, so two addresses for one person are two people, exactly
+ * as designed -- the design assumes somebody will later say they are the same, and until this
+ * screen there was nowhere to say it.
+ *
+ * ⛔ IT PROPOSES AND NEVER MERGES. Two people really can share a name at one firm, and a wrong
+ * merge silently moves one person's quote history onto another. The register's own rule is that a
+ * name matching more than one person is REFUSED rather than guessed.
+ *
+ * ⚠️ THE NO-FIRM GROUPS ARE KEPT AND LABELLED, NOT DROPPED. 14 of the 60 groups are two records
+ * for somebody we cannot place, which is a WEAKER match -- "Brady Lenz" twice with no firm either
+ * side could be two people. The screen says so rather than the finder pretending it did not see
+ * them.
+ */
+async function handleCrmPersonDupes(request, env) {
+  try {
+    // ⚠️ GROUPED, NOT CORRELATED. Every measurement that built this screen had to be rewritten
+    // once for exactly that reason -- D1 answered the first draft with "exceeded its CPU time
+    // limit and was reset".
+    const r = await env.DB.prepare(
+      'WITH ' + PERSON_QUOTES_CTE + ', ' +
+      "     k AS (SELECT p.id, p.name, lower(trim(p.name)) nm, COALESCE(pa.aid,'') aid " +
+      '           FROM people p JOIN pa ON pa.pid = p.id ' +
+      "           WHERE trim(COALESCE(p.name,'')) <> '' " +
+      "             AND COALESCE(p.disposition,'') NOT IN ('" + SUPPRESSED.join("','") + "')), " +
+      '     g AS (SELECT nm, aid FROM k GROUP BY nm, aid HAVING COUNT(*) > 1), ' +
+      "     em AS (SELECT person_id pid, GROUP_CONCAT(email, ' | ') addrs, COUNT(*) n " +
+      '            FROM broker_directory WHERE person_id IS NOT NULL GROUP BY 1), ' +
+      "     nt AS (SELECT entity_id pid, COUNT(*) n FROM crm_events " +
+      "            WHERE entity_type = 'person' AND kind = 'note' GROUP BY 1) " +
+      'SELECT k.id, k.name, k.nm, k.aid, ' +
+      "       COALESCE(a.name,'') AS firm, " +
+      "       COALESCE(p.source,'') AS source, COALESCE(p.disposition,'') AS disposition, " +
+      "       COALESCE(p.city,'') AS city, p.created_at, " +
+      "       COALESCE(em.addrs,'') AS addrs, COALESCE(em.n,0) AS address_count, " +
+      '       COALESCE(nt.n,0) AS notes, ' +
+      '       ' + PERSON_QUOTES_SUM + ' AS quotes ' +
+      'FROM g JOIN k ON k.nm = g.nm AND k.aid = g.aid ' +
+      'JOIN people p ON p.id = k.id ' +
+      'LEFT JOIN agencies a ON a.id = k.aid ' +
+      'LEFT JOIN em ON em.pid = k.id ' +
+      'LEFT JOIN nt ON nt.pid = k.id ' +
+      'LEFT JOIN pqe ON pqe.pid = k.id ' +
+      'LEFT JOIN pqn ON pqn.pid = k.id ' +
+      'ORDER BY k.nm, k.aid, quotes DESC, p.created_at'
+    ).all();
+
+    let dismissed = {};
+    try {
+      const dr = await env.DB.prepare('SELECT group_key FROM tidy_dismissed').all();
+      for (const d of (dr.results || [])) dismissed[d.group_key] = 1;
+    } catch (err) { /* the table arrives with the next migration */ }
+
+    const byKey = {};
+    for (const row of (r.results || [])) {
+      const gk = row.nm + '::' + row.aid;
+      (byKey[gk] = byKey[gk] || []).push(row);
+    }
+
+    const groups = [];
+    for (const gk of Object.keys(byKey)) {
+      const people = byKey[gk].map((x) => ({
+        id: x.id, name: x.name, source: x.source, disposition: x.disposition, city: x.city,
+        quotes: Number(x.quotes) || 0, notes: Number(x.notes) || 0,
+        address_count: Number(x.address_count) || 0,
+        emails: x.addrs ? String(x.addrs).split(' | ') : [],
+      }));
+      // Same dismissal key shape as every other group on the tidy screens: the row ids, sorted.
+      const sig = people.map((p) => p.id).slice().sort().join('|');
+      if (dismissed[sig]) continue;
+      groups.push({
+        group_key: sig,
+        name: byKey[gk][0].name,
+        firm: byKey[gk][0].firm,
+        firm_id: byKey[gk][0].aid || null,
+        // ⚠️ SAID ON THE GROUP, because it changes how much the match is worth. Two records with
+        // no firm either side is a weaker claim than two at the same named firm.
+        no_firm: !byKey[gk][0].aid,
+        people,
+      });
+    }
+    // The ones with a real firm first: those are the confident ones.
+    groups.sort((x, y) => (x.no_firm ? 1 : 0) - (y.no_firm ? 1 : 0)
+      || String(x.name).localeCompare(String(y.name)));
+
+    return jsonResp({
+      groups,
+      people: groups.reduce((t, g) => t + g.people.length, 0),
+      withFirm: groups.filter((g) => !g.no_firm).length,
+      noFirm: groups.filter((g) => g.no_firm).length,
+      // ⚠️ THE LABELS TRAVEL WITH THE ANSWER. Reading them from a variable the BROKER LIST fills
+      // in means this section renders "cce_attendee" to anybody who opens it first -- a screen
+      // whose wording depends on which other screen you opened is a screen that is sometimes wrong.
+      sourceLabels: SOURCE_LABEL,
+    });
+  } catch (err) {
+    // 🔴 AN ERROR IS NOT "no duplicates". This screen's whole job is to report a population, and
+    // an empty one reads as a finished job.
+    return jsonResp({ groups: [], error: String((err && err.message) || err) }, 500);
+  }
+}
+
+/**
+ * MERGE TWO RECORDS OF ONE HUMAN. The write behind that screen.
+ *
+ * ⭐⭐ IT IS THE SAME MOVE handleCrmLinkPerson ALREADY MAKES, applied to every address at once:
+ * an address points at a person, and merging repoints it. ⛔ NO QUOTE IS REWRITTEN, no count is
+ * recomputed and no history changes agency -- the quotes stay with the ADDRESS, and therefore
+ * with the firm where the work was done. That is what makes this reversible.
+ *
+ * 🔴 A LOSER WITH NO ADDRESS AT ALL IS THE CASE link CANNOT HANDLE, because link is keyed on an
+ * email. Aaron Burke is exactly that: one record with an address and one without. So this moves
+ * the notes and removes the empty row directly, which link only ever did as a side effect.
+ *
+ * ⛔ THE NOTES MOVE BEFORE THE ROW GOES. They are about a HUMAN, and the whole premise of the
+ * merge is that these two records were always the same human. Deleting first and asking later is
+ * how "we tagged them in March" quietly stops being true.
+ *
+ * ⚠️ REVERSING IT IS `POST /api/admin/crm/link` WITH `person_id: null` on the address, which gives
+ * that address a person of its own again. ⛔ What does NOT come back is which notes belonged to
+ * which half -- the same limitation link already documents, stated here because this is the screen
+ * that will produce most of the merges.
+ */
+async function handleCrmMergePerson(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const keep = String(body.keep || '').trim();
+  const drop = Array.isArray(body.drop) ? body.drop.map((x) => String(x || '').trim()).filter(Boolean)
+             : [String(body.drop || '').trim()].filter(Boolean);
+  if (!keep || !drop.length) return jsonResp({ error: 'Which records?' }, 400);
+  if (drop.indexOf(keep) !== -1) return jsonResp({ error: 'A record cannot be merged into itself.' }, 400);
+
+  const survivor = await env.DB.prepare('SELECT id, name FROM people WHERE id = ?').bind(keep).first();
+  if (!survivor) return jsonResp({ error: 'No such person to keep.' }, 404);
+
+  const now = new Date().toISOString();
+  let addressesMoved = 0, eventsMoved = 0, removed = 0;
+  const missing = [];
+
+  for (const id of drop) {
+    const loser = await env.DB.prepare('SELECT id FROM people WHERE id = ?').bind(id).first();
+    if (!loser) { missing.push(id); continue; }
+
+    const a = await env.DB.prepare(
+      'UPDATE broker_directory SET person_id = ? WHERE person_id = ?').bind(keep, id).run();
+    addressesMoved += (a && a.meta && a.meta.changes) || 0;
+
+    const e = await env.DB.prepare(
+      "UPDATE crm_events SET entity_id = ? WHERE entity_type = 'person' AND entity_id = ?"
+    ).bind(keep, id).run();
+    eventsMoved += (e && e.meta && e.meta.changes) || 0;
+
+    // ⭐ THE FIRM IS CARRIED ONLY IF THE SURVIVOR HAS NONE. Somebody merged into a record that
+    // already knows where they work must not have that overwritten by the other half.
+    const s = await env.DB.prepare('SELECT agency_id FROM people WHERE id = ?').bind(keep).first();
+    if (!s || !s.agency_id) {
+      const l = await env.DB.prepare('SELECT agency_id FROM people WHERE id = ?').bind(id).first();
+      if (l && l.agency_id) {
+        await env.DB.prepare('UPDATE people SET agency_id = ? WHERE id = ?').bind(l.agency_id, keep).run();
+      }
+    }
+
+    const r = await env.DB.prepare('DELETE FROM people WHERE id = ?').bind(id).run();
+    removed += (r && r.meta && r.meta.changes) || 0;
+  }
+
+  await env.DB.prepare('UPDATE people SET updated_at = ? WHERE id = ?').bind(now, keep).run();
+
+  return jsonResp({
+    ok: true, keep, kept_name: survivor.name,
+    addressesMoved, eventsMoved, removed,
+    missing: missing.length ? missing : undefined,
+  });
+}
+
+/**
  * Find or create an agency by name, safely under concurrency.
  *
  * ⭐⭐ ONE IMPLEMENTATION, USED BY EVERY CALLER. The backfill and the event import both need this, and
@@ -5609,6 +5795,25 @@ ${abyAdminNav('/admin/brokers')}
             <span class="muted" id="nqCount" style="margin-left:auto;font-size:13px"></span>
           </div>
           <div id="nqBox"><p class="muted">Pick a product.</p></div>
+        </div>
+      </details>
+      <!-- THE SAME PERSON TWICE (F-423). The firm duplicate finder above looks for duplicate
+           FIRMS and structurally cannot see two rows for one human inside a single correct firm.
+           Always the same cause: one person, two email addresses -- the acquiring firm's and the
+           acquired firm's, or a work one and a personal one. Shut by default like the rest. -->
+      <details style="margin:0 0 10px" ontoggle="if(this.open)loadPersonDupes()">
+        <summary style="cursor:pointer;font-size:13.5px;color:#1a5c3a;font-weight:600">
+          Same person twice &mdash; one human, two records</summary>
+        <div style="margin-top:10px">
+          <p class="sub" style="margin:0 0 8px">Two people with the same name at the same firm.
+            <strong>It is nearly always one human with two email addresses</strong> &mdash; the
+            acquiring firm's and the acquired firm's, or a work one and a personal one.
+            <strong>Identity here is keyed on the email address, so that is two records by
+            design</strong> &mdash; it assumes somebody will eventually say they are the same, and
+            this is where you say it. <strong>Merging moves the addresses onto one record and
+            nothing else:</strong> no quote is rewritten and no history changes firm, because the
+            quotes belong to the address. <strong>Keep the record you want to survive.</strong></p>
+          <div id="pdBox"><p class="muted">Looking...</p></div>
         </div>
       </details>
       <!-- EVERY BROKER, ONE ROW EACH. Eric, 2026-08-27: "what we desperately need is a list of just
@@ -8092,6 +8297,122 @@ ${abyAdminNav('/admin/brokers')}
      + 'style="padding:5px 12px;border:1px solid #1a5c3a;border-radius:6px;background:#1a5c3a;color:#fff;cursor:pointer">Next '
      + Math.min(d.cap, total - psOffset - rows.length) + '</button>';
    document.getElementById('psPager').innerHTML = pg;
+ }
+
+ // ── THE SAME PERSON TWICE ─────────────────────────────────────────────────────────────────
+ //
+ // ⛔ NOTHING IS EVER MERGED AUTOMATICALLY. Two people really can share a name at one firm, and a
+ // wrong merge moves one person's quote history onto another with nothing on any screen saying so.
+ // The finder proposes; a human picks which record survives.
+ var pdGroups = [];
+
+ async function loadPersonDupes(){
+   var box = document.getElementById('pdBox');
+   if (!box) return;
+   box.innerHTML = '<p class="muted">Looking...</p>';
+   var r = await fetch('/api/admin/crm/person-dupes');
+   var d = await r.json().catch(function(){ return {}; });
+   // 🔴 AN ERROR IS NOT "no duplicates" -- this screen's whole job is to report a population, and
+   // an empty one reads as a finished job.
+   if (d.error){
+     box.innerHTML = '<p style="color:#a12622">Could not check: ' + esc(d.error) + '</p>';
+     return;
+   }
+   pdGroups = d.groups || [];
+   // Only if the broker list has not already supplied them, so the two cannot disagree.
+   if (d.sourceLabels && !Object.keys(firmSrcLabel).length) firmSrcLabel = d.sourceLabels;
+   paintPersonDupes(d);
+ }
+
+ function paintPersonDupes(d){
+   var box = document.getElementById('pdBox');
+   if (!pdGroups.length){
+     box.innerHTML = '<p class="muted">Nobody appears twice under the same name and firm.</p>';
+     return;
+   }
+   var h = '<p class="sub" style="margin:0 0 10px"><strong>' + pdGroups.length + ' group'
+         + (pdGroups.length === 1 ? '' : 's') + '</strong> covering ' + d.people + ' records. '
+         + d.withFirm + ' are at a named firm; <strong>' + d.noFirm + ' have no firm either side, '
+         + 'which is a weaker match</strong> and could genuinely be two people.</p>';
+   for (var i = 0; i < pdGroups.length; i++){
+     var g = pdGroups[i];
+     h += '<div style="border:1px solid ' + (g.no_firm ? '#e0c98a' : '#dde5ee')
+        + ';background:' + (g.no_firm ? '#fdf9ef' : '#fff')
+        + ';border-radius:7px;padding:9px 11px;margin-bottom:8px">'
+        + '<div style="font-size:12.5px;margin-bottom:6px"><strong>' + esc(g.name) + '</strong> '
+        + (g.no_firm
+            ? '<span style="color:#8a6d1f">no firm on file either side &mdash; check this one</span>'
+            : '<span class="muted">at ' + esc(g.firm) + '</span>') + '</div>';
+     for (var j = 0; j < g.people.length; j++){
+       var p = g.people[j];
+       var bits = [];
+       if (p.quotes) bits.push(p.quotes + ' quote' + (p.quotes === 1 ? '' : 's'));
+       if (p.notes) bits.push(p.notes + ' note' + (p.notes === 1 ? '' : 's'));
+       if (p.city) bits.push(esc(p.city));
+       if (p.source) bits.push(esc(firmSrcLabel[p.source] || p.source));
+       if (p.disposition) bits.push('<span style="color:#8a6d1f">' + esc(p.disposition) + '</span>');
+       h += '<div style="display:flex;align-items:center;gap:9px;padding:3px 0;flex-wrap:wrap">'
+          + '<button style="font-size:12px;padding:3px 9px" onclick="pdKeep(' + i + ',' + j + ')">'
+          + 'Keep this one</button>'
+          + '<span style="min-width:250px">'
+          // ⭐ THE ADDRESSES ARE THE EVIDENCE, so they are the loudest thing on the row. They are
+          // what tells you these two are one human -- or that they are not.
+          + (p.emails.length
+              ? p.emails.map(esc).join('<br>')
+              : '<span class="muted">no email on this record</span>')
+          + '</span>'
+          + '<span class="muted" style="font-size:12px">' + (bits.join(' &middot; ') || 'nothing recorded') + '</span>'
+          + '</div>';
+     }
+     h += '<div style="margin-top:5px"><button style="font-size:12px;padding:3px 9px" '
+        + 'onclick="pdNot(' + i + ')">Not the same person</button> '
+        + '<span class="muted" style="font-size:12px">Two people really can share a name.</span>'
+        + '</div></div>';
+   }
+   box.innerHTML = h;
+ }
+
+ async function pdKeep(i, j){
+   var g = pdGroups[i];
+   if (!g) return;
+   var keep = g.people[j];
+   var drop = g.people.filter(function(_, n){ return n !== j; }).map(function(p){ return p.id; });
+   var r = await fetch('/api/admin/crm/merge-person', {
+     method: 'POST', headers: {'Content-Type':'application/json'},
+     body: JSON.stringify({ keep: keep.id, drop: drop }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok || d.error){
+     document.getElementById('pdBox').insertAdjacentHTML('afterbegin',
+       '<p style="color:#a12622">That did not merge: ' + esc(d.error || 'unknown error') + '</p>');
+     return;
+   }
+   // ⭐ REFETCHED, NOT SPLICED. A merge changes the register -- the survivor gains addresses and
+   // the other rows are gone -- and a list patched in memory would go on offering a person who no
+   // longer exists.
+   await loadPersonDupes();
+   await loadMkt();
+ }
+
+ // ⛔ "Not the same person" IS AN ANSWER AND IS RECORDED AS ONE, on the same dismissal table the
+ // firm finder uses. Re-offering a pair somebody has already ruled on is what made Eric say the
+ // tidy-up screen ignored his answers.
+ async function pdNot(i){
+   var g = pdGroups[i];
+   if (!g) return;
+   var r = await fetch('/api/admin/tidy-dismiss', {
+     method: 'POST', headers: {'Content-Type':'application/json'},
+     body: JSON.stringify({ group_key: g.group_key,
+                            names: g.name + ' at ' + (g.firm || 'no firm') }),
+   });
+   if (!r.ok){
+     var d = await r.json().catch(function(){ return {}; });
+     document.getElementById('pdBox').insertAdjacentHTML('afterbegin',
+       '<p style="color:#a12622">' + esc(d.error || 'That did not save.') + '</p>');
+     return;
+   }
+   pdGroups.splice(i, 1);
+   loadPersonDupes();
  }
 
  // ── NOTES ON A PERSON ─────────────────────────────────────────────────────────────────────
