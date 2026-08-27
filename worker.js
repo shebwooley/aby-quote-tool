@@ -2991,7 +2991,7 @@ async function handleCrmRename(request, env) {
 // Sharing one vocabulary is right -- the question ("why are they off the list?") is the same -- but
 // the values have to cover both subjects or the person-level reasons get recorded as firm-level ones.
 const DISPOSITIONS = ['out_of_business', 'no_group_products', 'not_interested', 'do_not_contact',
-                      'deceased', 'left_the_firm', 'wrong_record'];
+                      'deceased', 'left_the_firm', 'retired', 'wrong_record'];
 // ⛔ NEVER IN ANY LIST, WHATEVER FILTER IS SET.
 //  because the person asked.  for a reason that needs no argument -- and
 // it belongs here rather than among the ordinary reasons because "show me everything" must not be
@@ -3215,7 +3215,11 @@ async function handleCrmImport(request, env) {
   // ⛔ AN UNKNOWN VALUE IS REFUSED, NEVER STORED. A typo would otherwise invent a source that no
   // filter offers and no screen shows -- present in the table and invisible in the product, which
   // is this project's most expensive shape.
-  const CRM_SOURCES = ['event', 'hand_added'];
+  // cce_attendee: Eric's ComedyCE list. He teaches CE to licensed health agents, so attending a
+  // class is genuinely where we first met most of these people. ⛔ IT IS A SOURCE AND NEVER A TAG:
+  // "We are not going to Tag based on a CE class they attended. I've done 2,000 classes. That
+  // would be stupid. If we do an ABY-hosted CE class, that's different."
+  const CRM_SOURCES = ['event', 'hand_added', 'cce_attendee'];
   const source = String(body.source || 'event').trim().toLowerCase();
   if (CRM_SOURCES.indexOf(source) === -1) return jsonResp({ error: 'Unknown source.' }, 400);
 
@@ -3232,6 +3236,8 @@ async function handleCrmImport(request, env) {
     const name = String((row && row.name) || '').trim().slice(0, 120);
     const agency = String((row && row.agency) || '').trim().slice(0, 120);
     const phone = String((row && row.phone) || '').trim().slice(0, 40);
+    // Optional, and blank is a perfectly good answer -- most pasted lists carry no city at all.
+    const city = String((row && row.city) || '').trim().slice(0, 80);
 
     // ⭐⭐ NO EMAIL IS NO LONGER A REFUSAL. Eric, 2026-08-24: "if we know an agent and an agency then
     // that should work and an email added later." What replaces the address as the key is the pair
@@ -3259,11 +3265,17 @@ async function handleCrmImport(request, env) {
             await env.DB.prepare("UPDATE people SET phone = ?, updated_at = ? WHERE id = ? AND trim(COALESCE(phone,'')) = ''")
               .bind(phone, now, personId).run();
           }
+          // ⭐ SAME RULE FOR THE CITY: fill a blank, never overwrite. Somebody may have corrected
+          // it by hand, and a list is not better evidence than a person who went and found out.
+          if (city) {
+            await env.DB.prepare("UPDATE people SET city = ?, updated_at = ? WHERE id = ? AND trim(COALESCE(city,'')) = ''")
+              .bind(city, now, personId).run();
+          }
         } else {
           personId = crypto.randomUUID();
           await env.DB.prepare(
-            'INSERT INTO people (id, name, phone, agency_id, source, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
-          ).bind(personId, name, phone, agencyId, source, now, now).run();
+            'INSERT INTO people (id, name, phone, city, agency_id, source, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)'
+          ).bind(personId, name, phone, city, agencyId, source, now, now).run();
           added.push({ email: '', name: name });
         }
         if (label && personId) tagged += await crmTagPerson(env, personId, label, happenedAt, now, by);
@@ -3298,6 +3310,11 @@ async function handleCrmImport(request, env) {
           ).bind(personId, email).run();
         }
         known.push({ email, name: existing.name || name });
+        // Fill a blank city, never overwrite one. Same rule as the phone on the emailless path.
+        if (city) {
+          await env.DB.prepare("UPDATE people SET city = ?, updated_at = ? WHERE id = ? AND trim(COALESCE(city,'')) = ''")
+            .bind(city, now, personId).run();
+        }
         // ⚠️ REPORTED, NOT APPLIED. What we hold was typed by somebody dealing with them.
         if (name && existing.name && name.toLowerCase() !== String(existing.name).toLowerCase()) {
           differs.push({ email, weHold: existing.name, theList: name, field: 'name' });
@@ -3322,11 +3339,15 @@ async function handleCrmImport(request, env) {
           personId = prior.id;
           adopted.push({ email, name });
           await env.DB.prepare('UPDATE people SET updated_at = ? WHERE id = ?').bind(now, personId).run();
+          if (city) {
+            await env.DB.prepare("UPDATE people SET city = ? WHERE id = ? AND trim(COALESCE(city,'')) = ''")
+              .bind(city, personId).run();
+          }
         } else {
           personId = crypto.randomUUID();
           await env.DB.prepare(
-            'INSERT INTO people (id, name, phone, agency_id, source, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
-          ).bind(personId, name, phone, agencyId, source, now, now).run();
+            'INSERT INTO people (id, name, phone, city, agency_id, source, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)'
+          ).bind(personId, name, phone, city, agencyId, source, now, now).run();
         }
         // ⭐ source RECORDS WHERE THE ROW CAME FROM. Without it, first_seen on an imported agent reads
         // as "first quoted", which is a different and untrue fact.
@@ -3533,12 +3554,17 @@ async function handleCrmAgencyPeople(request, env) {
   if (!id) return jsonResp({ error: 'Which firm?' }, 400);
   try {
     const r = await env.DB.prepare(
+      // ⭐ THE CITY COMES OFF THE PERSON EVEN ON THE EMAILED ARM, which is why this joins back to
+      // people: broker_directory is keyed on an ADDRESS and has no city of its own. Without the
+      // join, every agent we hold by email would show a blank city while the phone-only ones
+      // showed theirs -- a column that looks broken rather than one that is simply not known yet.
       "SELECT d.name AS name, d.email AS email, d.phone AS phone, d.quote_count AS quotes, " +
-      "       1 AS has_email, COALESCE(d.source,'quotes') AS source " +
-      'FROM broker_directory d WHERE d.agency_id = ? ' +
+      "       1 AS has_email, COALESCE(pd.city,'') AS city, COALESCE(d.source,'quotes') AS source " +
+      'FROM broker_directory d LEFT JOIN people pd ON pd.id = d.person_id ' +
+      'WHERE d.agency_id = ? ' +
       'UNION ALL ' +
       "SELECT p.name AS name, '' AS email, COALESCE(p.phone,'') AS phone, 0 AS quotes, " +
-      "       0 AS has_email, COALESCE(p.source,'import') AS source " +
+      "       0 AS has_email, COALESCE(p.city,'') AS city, COALESCE(p.source,'import') AS source " +
       'FROM people p WHERE p.agency_id = ? ' +
       '  AND NOT EXISTS (SELECT 1 FROM broker_directory d2 WHERE d2.person_id = p.id) ' +
       'ORDER BY has_email DESC, quotes DESC, name COLLATE NOCASE'
@@ -6741,6 +6767,11 @@ ${abyAdminNav('/admin/brokers')}
    do_not_contact: 'Do not contact',
    deceased: 'Deceased',
    left_the_firm: 'No longer at this firm',
+   // Eric, 2026-08-27: "we need to add retired as an option under an agent as well." It is
+   // DELIBERATELY not suppressed: a retired agent has not asked us to stop, and is not deceased,
+   // so "show me everything" should still find them -- they may refer, and they may know who took
+   // the book. Off the working list, still on the books.
+   retired: 'Retired',
    wrong_record: 'Not a real firm'
  };
 
@@ -6810,7 +6841,7 @@ ${abyAdminNav('/admin/brokers')}
                                     + addPersonForm(id); return; }
    var noEmail = 0;
    for (var i = 0; i < rows.length; i++){ if (!Number(rows[i].has_email)) noEmail++; }
-   var h = '<table class="grid"><thead><tr><th>NAME</th><th>EMAIL</th><th>PHONE</th>'
+   var h = '<table class="grid"><thead><tr><th>NAME</th><th>EMAIL</th><th>PHONE</th><th>CITY</th>'
          + '<th style="text-align:right">QUOTES</th></tr></thead><tbody>';
    for (var j = 0; j < rows.length; j++){
      var x = rows[j];
@@ -6819,6 +6850,7 @@ ${abyAdminNav('/admin/brokers')}
      h += '<tr><td>' + (esc(x.name || '') || '&mdash;') + '</td>'
         + '<td>' + (Number(x.has_email) ? esc(x.email) : '<span class="muted">no email yet</span>') + '</td>'
         + '<td>' + (esc(x.phone || '') || '&mdash;') + '</td>'
+        + '<td>' + (esc(x.city || '') || '&mdash;') + '</td>'
         + '<td style="text-align:right">' + (Number(x.quotes) || 0) + '</td></tr>';
    }
    h += '</tbody></table>';
@@ -6850,6 +6882,7 @@ ${abyAdminNav('/admin/brokers')}
      + '<input id="npName" placeholder="Name" style="flex:1 1 150px;padding:7px;border:1px solid #c8d2de;border-radius:6px">'
      + '<input id="npEmail" placeholder="Email (optional)" style="flex:1 1 180px;padding:7px;border:1px solid #c8d2de;border-radius:6px">'
      + '<input id="npPhone" placeholder="Phone (optional)" style="flex:1 1 130px;padding:7px;border:1px solid #c8d2de;border-radius:6px">'
+     + '<input id="npCity" placeholder="City (optional)" style="flex:1 1 120px;padding:7px;border:1px solid #c8d2de;border-radius:6px">'
      + '<button onclick="addFirmPerson(' + "'" + id + "'" + ')" '
      + 'style="background:#1a5c3a;color:#fff;border:1px solid #1a5c3a;border-radius:6px;padding:7px 15px;cursor:pointer;font-weight:600">Add</button>'
      + '<span class="muted" id="npMsg"></span></div>'
@@ -6872,6 +6905,7 @@ ${abyAdminNav('/admin/brokers')}
        rows: [{ name: name,
                 email: (document.getElementById('npEmail').value || '').trim(),
                 phone: (document.getElementById('npPhone').value || '').trim(),
+                city: (document.getElementById('npCity').value || '').trim(),
                 agency: a.name }],
        // Somebody we were TOLD about. Not an event, and not a list.
        source: 'hand_added' })
@@ -12567,6 +12601,19 @@ const MIGRATIONS = [
   // Tulsa firm IS its email domain, so most rows can answer this without anybody typing.
   { sql: "ALTER TABLE agencies ADD COLUMN website TEXT", table: "agencies", column: "website" },
   { sql: "CREATE INDEX IF NOT EXISTS people_source ON people (source)", index: "people_source" },
+
+  // ── A PERSON'S OWN CITY (Eric, 2026-08-27) ────────────────────────────────────────────────
+  //
+  // "For Higginbotham, put city on the broker profile if you know it." Higginbotham alone brings
+  // 79 CE attendees, spread across many Texas offices, and they are all going under one
+  // "Higginbotham - TX" row for now -- so the city is the only thing that says WHICH office, and
+  // it is the field a later split will be built from.
+  //
+  // ⛔ ON THE PERSON, NOT THE FIRM, AND THEY ARE DIFFERENT FACTS. A firm's city is where the firm
+  // is; a broker's city is where that broker sits, and for a national with twenty offices those
+  // are not the same answer. Storing only the firm's would say every Higginbotham agent works in
+  // Fort Worth, which is exactly the wrong thing to record.
+  { sql: "ALTER TABLE people ADD COLUMN city TEXT", table: "people", column: "city" },
 
   // ── THE BROKERS AND AGENCIES PAGE TOOK 23 SECONDS, AND EVERY JOIN IS ON AN EXPRESSION ──────
   //
