@@ -3166,6 +3166,59 @@ async function handleCrmAgencyField(request, env) {
  */
 const PERSON_SEARCH_CAP = 300;
 
+/**
+ * HOW MANY QUOTES HAS THIS PERSON RUN. One definition, used by every screen that asks.
+ *
+ * 🔴🔴 THE COLUMN THIS REPLACES WAS WRONG FOR 92 OF THE 96 PEOPLE WHO HAVE EVER QUOTED.
+ * `broker_directory.quote_count` is incremented by the SAVE PATH, once per quote run through the
+ * live tool with an email on it. It therefore describes only quotes taken since that table
+ * existed, and knows nothing of the 15-year back-catalogue that was imported.
+ * 🔬 Measured 2026-08-27: it totals **15** across the whole register and is non-zero for **6**
+ * people. The real answer is **157** across **96**. It also DISAGREES where it is non-zero --
+ * Connie Kidd reads 4 there and 2 here -- so it is not even a low estimate, it is a different
+ * question. ⛔ It is left alone rather than deleted: the save path and the broker page still use
+ * it, and it is a true count of something, just not of this.
+ *
+ * ⭐⭐ TWO WAYS TO KNOW A QUOTE IS THEIRS, AND THE SECOND IS DELIBERATELY THE STRICTER ONE:
+ *   ① the quote carries an EMAIL that is one of theirs -- exact, and worth 103 quotes.
+ *   ② the quote carries no email, but a NAME that belongs to exactly ONE person we hold, AND an
+ *      AGENCY that is that person's firm -- worth 39.
+ * ⛔ NAME ALONE WAS REJECTED, and the measurement is why: it would add 11 more quotes and it
+ * drops the only check that a quote naming "Chris Moore" is OUR Chris Moore. That is the same
+ * rule crmPersonAtAgency already enforces -- a name matching more than one person is REFUSED,
+ * never guessed -- and 2 quotes really are ambiguous that way.
+ *
+ * ⚠️ SO A PERSON-LEVEL SCOREBOARD DESCRIBES 142 OF 6,170 QUOTES, AND ANY SCREEN USING IT MUST SAY
+ * SO. Only 180 quotes name a broker at all; the rest are the folder-imported back-catalogue where
+ * the agency was the folder name and no human was recorded. ⛔ A page that shows a person's quote
+ * count without that context invites the reading that everyone else has never quoted.
+ *
+ * ⚠️ GROUPED CTEs THROUGHOUT. The first version of this measurement was correlated subqueries and
+ * D1 killed the connection with "exceeded its CPU time limit".
+ */
+const PERSON_QUOTES_CTE =
+  "qe AS (SELECT lower(trim(broker_email)) k, COUNT(*) n FROM quotes " +
+  "       WHERE trim(COALESCE(broker_email,'')) <> '' GROUP BY 1), " +
+  "qn AS (SELECT lower(trim(broker_name)) nk, lower(trim(broker_agency)) ak, COUNT(*) n " +
+  "       FROM quotes WHERE trim(COALESCE(broker_name,'')) <> '' " +
+  "         AND trim(COALESCE(broker_email,'')) = '' GROUP BY 1, 2), " +
+  'uq AS (SELECT lower(trim(name)) k FROM people GROUP BY 1 HAVING COUNT(*) = 1), ' +
+  'pa AS (SELECT p2.id AS pid, COALESCE(p2.agency_id, ' +
+  '         (SELECT MIN(d4.agency_id) FROM broker_directory d4 ' +
+  '            WHERE d4.person_id = p2.id AND d4.agency_id IS NOT NULL)) AS aid ' +
+  '       FROM people p2), ' +
+  'pqe AS (SELECT d.person_id AS pid, SUM(COALESCE(qe.n,0)) AS n ' +
+  '        FROM broker_directory d LEFT JOIN qe ON qe.k = lower(trim(d.email)) ' +
+  '        WHERE d.person_id IS NOT NULL GROUP BY 1), ' +
+  'pqn AS (SELECT p3.id AS pid, qn.n AS n FROM people p3 ' +
+  '        JOIN uq ON uq.k = lower(trim(p3.name)) ' +
+  '        JOIN pa AS pa2 ON pa2.pid = p3.id ' +
+  '        JOIN agencies a2 ON a2.id = pa2.aid ' +
+  '        JOIN qn ON qn.nk = lower(trim(p3.name)) AND qn.ak = lower(trim(a2.name)))';
+
+// The expression that adds the two halves, so no caller writes it a second way.
+const PERSON_QUOTES_SUM = '(COALESCE(pqe.n,0) + COALESCE(pqn.n,0))';
+
 async function handleCrmPersonSearch(request, env) {
   const u = new URL(request.url).searchParams;
   const term = String(u.get('q') || '').trim().toLowerCase();
@@ -3224,10 +3277,7 @@ async function handleCrmPersonSearch(request, env) {
     // being capped and useless for working through a list: there is no way to tell 301 from 4,961,
     // and no way to know whether yesterday's pass made a dent.
     const countRow = await env.DB.prepare(
-      "WITH pa AS (SELECT p2.id AS pid, COALESCE(p2.agency_id, " +
-      '              (SELECT MIN(d4.agency_id) FROM broker_directory d4 ' +
-      '                WHERE d4.person_id = p2.id AND d4.agency_id IS NOT NULL)) AS aid ' +
-      '            FROM people p2) ' +
+      'WITH ' + PERSON_QUOTES_CTE + ' ' +
       'SELECT COUNT(*) AS n FROM people p JOIN pa ON pa.pid = p.id ' +
       'LEFT JOIN agencies a ON a.id = pa.aid WHERE ' + where.join(' AND ')
     ).bind(...args).first();
@@ -3245,10 +3295,9 @@ async function handleCrmPersonSearch(request, env) {
       //
       // ⛔ THE FIX IS NOT TO BACKFILL THE COLUMN. That would fight a written, deliberate decision
       // and put the same fact in two places, which is exactly what the import avoided.
-      "WITH pa AS (SELECT p2.id AS pid, COALESCE(p2.agency_id, " +
-      '              (SELECT MIN(d4.agency_id) FROM broker_directory d4 ' +
-      '                WHERE d4.person_id = p2.id AND d4.agency_id IS NOT NULL)) AS aid ' +
-      '            FROM people p2) ' +
+      // ⭐ pa NOW LIVES IN PERSON_QUOTES_CTE, because the quote rule needs the same "which firm is
+      // this person at" answer. One definition; two readers cannot drift.
+      'WITH ' + PERSON_QUOTES_CTE + ' ' +
       'SELECT p.id AS person_id, p.name AS name, ' +
       "       COALESCE(p.city,'') AS city, COALESCE(p.phone,'') AS phone, " +
       "       COALESCE(p.source,'') AS source, COALESCE(p.disposition,'') AS disposition, " +
@@ -3265,8 +3314,9 @@ async function handleCrmPersonSearch(request, env) {
       // itself is fetched when somebody opens it.
       "       (SELECT COUNT(*) FROM crm_events e WHERE e.entity_type = 'person' " +
       "          AND e.entity_id = p.id AND e.kind = 'note') AS notes, " +
-      '       (SELECT COALESCE(SUM(d2.quote_count),0) FROM broker_directory d2 WHERE d2.person_id = p.id) AS quotes ' +
+      '       ' + PERSON_QUOTES_SUM + ' AS quotes ' +
       'FROM people p JOIN pa ON pa.pid = p.id LEFT JOIN agencies a ON a.id = pa.aid ' +
+      'LEFT JOIN pqe ON pqe.pid = p.id LEFT JOIN pqn ON pqn.pid = p.id ' +
       'WHERE ' + where.join(' AND ') + ' ' +
       'ORDER BY ' + orderBy + ' ' +
       'LIMIT ? OFFSET ?'
@@ -5528,7 +5578,12 @@ ${abyAdminNav('/admin/brokers')}
             panel, which is where the reason is kept. <strong>Browsing hides people somebody has
             already taken off the list</strong> &mdash; searching by name finds them anyway, because
             a search is for somebody you already have in mind.
-            <strong>State is the firm's</strong>, so it is blank until the firm is.</p>
+            <strong>State is the firm's</strong>, so it is blank until the firm is.
+            <strong>QUOTES counts only quotes that name a person</strong> &mdash; an email of
+            theirs, or their name beside their firm. Just 180 of 6,170 quotes name a broker at
+            all; the rest are the imported back-catalogue, where the agency was the folder name
+            and no human was recorded. <strong>A 0 here means we cannot tell, not that they have
+            never quoted</strong> &mdash; their firm's count is the real one.</p>
           <div class="mfilters">
             <input id="psQ" placeholder="Name or email" oninput="peopleSearchSoon()"
                    style="min-width:200px;padding:5px 8px;border:1px solid #c8d2de;border-radius:5px;font-size:13px">
