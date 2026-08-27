@@ -1442,12 +1442,62 @@ async function handleLogin(request, env) {
     pw = fd?.get('password');
   }
 
-  if (!pw || pw !== env.ADMIN_PASSWORD) {
+  // ── THROTTLE FIRST, AND IT IS WHAT MAKES A MEMORABLE PASSWORD DEFENSIBLE ─────────────────
+  //
+  // 🔴🔴 UNTIL 2026-08-27 THIS ENDPOINT ALLOWED UNLIMITED GUESSES AT FULL SPEED: no delay, no
+  // lockout, no log. Eric asked for simpler passwords, and the honest answer was that the
+  // password was carrying the entire defence on its own.
+  // ⭐⭐ THE ARITHMETIC IS THE ARGUMENT. Unthrottled, a short password is guessed in minutes. At
+  // 10 tries per 15 minutes it is thousands of years, and the difference is this block -- not the
+  // password. ⛔ So do not remove it to "simplify the login": it is the reason the login is
+  // allowed to be simple.
+  // ⚠️ Keyed on the caller's IP. It is not a perfect key -- an attacker with many addresses gets
+  // many buckets -- but it stops the attack that actually happens, which is one host hammering
+  // one endpoint. Failing OPEN on a database error is deliberate: locking Eric out of his own
+  // admin because a table is unavailable is a worse outcome than an unthrottled minute.
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const now = Date.now();
+  const WINDOW_MS = 15 * 60 * 1000;
+  const MAX_FAILS = 10;
+  try {
+    await env.DB.prepare(
+      'CREATE TABLE IF NOT EXISTS admin_login_fails (ip TEXT NOT NULL, at INTEGER NOT NULL)'
+    ).run();
+    await env.DB.prepare('DELETE FROM admin_login_fails WHERE at < ?').bind(now - WINDOW_MS).run();
+    const c = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM admin_login_fails WHERE ip = ? AND at >= ?'
+    ).bind(ip, now - WINDOW_MS).first();
+    if (c && Number(c.n) >= MAX_FAILS) {
+      // ⛔ THE SAME MESSAGE WHETHER OR NOT THE PASSWORD WAS RIGHT. A "you are locked out" that
+      // only appears for wrong guesses would confirm a correct one.
+      return jsonResp({ error: 'Too many attempts. Try again in 15 minutes.' }, 429);
+    }
+  } catch (err) {
+    console.error('login throttle unavailable:', err);
+  }
+
+  let who = null;
+  for (const id of ADMIN_IDENTITIES) {
+    const secret = env[id.secret];
+    // ⚠️ An unset secret must never match an empty password -- that would make an identity Eric
+    // has not configured into a way in.
+    if (secret && pw && pw === secret) { who = id.who; break; }
+  }
+
+  if (!who) {
+    try {
+      await env.DB.prepare('INSERT INTO admin_login_fails (ip, at) VALUES (?,?)').bind(ip, now).run();
+    } catch (err) { /* the throttle is a guard, not a gate: a failed write must not grant access */ }
     return jsonResp({ error: 'Unauthorized' }, 401);
   }
 
-  const token = await makeToken(env.ADMIN_PASSWORD);
-  return new Response(JSON.stringify({ ok: true }), {
+  // A correct password clears the record for that address, so a fumbled attempt costs nothing.
+  try {
+    await env.DB.prepare('DELETE FROM admin_login_fails WHERE ip = ?').bind(ip).run();
+  } catch (err) { /* nothing to do; the rows age out on their own */ }
+
+  const token = await makeToken(env[ADMIN_IDENTITIES.find((i) => i.who === who).secret], who);
+  return new Response(JSON.stringify({ ok: true, who }), {
     headers: {
       'Content-Type': 'application/json',
       'Set-Cookie': `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400`,
@@ -1468,9 +1518,12 @@ async function withAuth(request, env, handler) {
   const cookies = parseCookies(request.headers.get('Cookie') || '');
   const token   = cookies[COOKIE_NAME];
 
-  if (token && await verifyToken(token, env.ADMIN_PASSWORD)) {
-    return handler();
-  }
+  // ⭐ THE NAME IS HANDED TO THE HANDLER, and every existing handler ignores the argument, so
+  // nothing had to change to keep working. A handler that wants to stamp who did something takes
+  // it; one that does not, does not. ⛔ It is NOT put on `request` -- a handler reading identity
+  // off a request object is a handler that can be given one by a caller who should not.
+  const who = await tokenIdentity(token, env);
+  if (who) return handler(who);
 
   // API routes: return JSON 401 so the admin JS can show a real error message
   if (new URL(request.url).pathname.startsWith('/api/')) {
@@ -1489,17 +1542,78 @@ async function withAuth(request, env, handler) {
 
 // ─── Token helpers ─────────────────────────────────────────────────────────────
 
-async function makeToken(password) {
+/**
+ * WHO IS SIGNED IN. Three logins, ONE set of permissions (F-405).
+ *
+ * ⭐⭐ ERIC, 2026-08-27: *"let's create separate logins for me and Niels and keep the other one.
+ * It will be shared for the rest of the office."* And the constraint that shapes it: *"if we do we
+ * still need to be able to see everything."*
+ *
+ * ⛔ SO THIS IS IDENTITY, NOT PERMISSION, AND THE TWO MUST NOT BE CONFLATED. Every login below is
+ * a FULL admin and sees exactly the same things. The only thing that changes is that an action can
+ * say who did it. ⚠️ Do not grow this into roles without Eric asking for roles -- a permission
+ * system nobody requested is how somebody discovers at 9pm that they cannot open the quote log.
+ *
+ * 🔴 THE HARDCODED 'eric' IS WHY THIS EXISTS. handleCrmRename stamped `name_confirmed_by = 'eric'`
+ * on every confirmation, so the 12 firms Niels settled on 2026-08-27 are all recorded as Eric's.
+ * ⛔ PAST WORK IS NOT RE-ATTRIBUTED (Eric: *"No, no re-attributing past work"*) -- there is no way
+ * to know which rows were whose, and a guess would put a false name on a record.
+ *
+ * ⚠️ THE OFFICE PASSWORD IS KEPT AND IS NOT SECOND-CLASS. It is what the rest of the office uses;
+ * its actions are stamped `office`, which is honest -- it says a named person is not known, rather
+ * than naming the wrong one.
+ */
+const ADMIN_IDENTITIES = [
+  { who: 'eric',   secret: 'ADMIN_PASSWORD_ERIC' },
+  { who: 'niels',  secret: 'ADMIN_PASSWORD_NIELS' },
+  // Kept last so a named password always wins if two were ever set to the same value.
+  { who: 'office', secret: 'ADMIN_PASSWORD' },
+];
+
+/**
+ * ⭐ THE TOKEN CARRIES WHO, AND IS STILL SIGNED WITH THE PASSWORD IT CAME FROM. `who.signature`:
+ * the name is readable, and worthless on its own -- changing it invalidates the signature, so a
+ * cookie cannot be edited to become somebody else.
+ * ⛔ The signature covers the NAME as well as the constant, or every identity signed with the same
+ * secret would produce interchangeable tokens.
+ */
+async function makeToken(password, who) {
   const enc = new TextEncoder();
   const key  = await crypto.subtle.importKey('raw', enc.encode(password), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const sig  = await crypto.subtle.sign('HMAC', key, enc.encode('aby-admin-v1'));
-  return btoa(String.fromCharCode(...new Uint8Array(sig)));
+  const sig  = await crypto.subtle.sign('HMAC', key, enc.encode('aby-admin-v1:' + (who || 'office')));
+  const mac  = btoa(String.fromCharCode(...new Uint8Array(sig)));
+  return who ? who + '.' + mac : mac;
 }
 
-async function verifyToken(token, password) {
-  if (!password) return false;
-  try { return token === await makeToken(password); }
-  catch { return false; }
+/**
+ * Returns the NAME behind a valid token, or null. ⚠️ Never a boolean: a caller that only wants
+ * "is this allowed" reads it as truthy, and a caller that wants the name gets it from the same
+ * call -- so the two can never disagree about who is signed in.
+ *
+ * ⭐ A BARE TOKEN WITH NO NAME IS STILL ACCEPTED, AND THAT IS DELIBERATE: every session issued
+ * before this shipped looks like that. Forcing a re-login would have been a self-inflicted
+ * outage for whoever was mid-task.
+ */
+async function tokenIdentity(token, env) {
+  if (!token) return null;
+  const dot = token.indexOf('.');
+  const named = dot > 0 ? token.slice(0, dot) : '';
+  for (const id of ADMIN_IDENTITIES) {
+    const secret = env[id.secret];
+    if (!secret) continue;
+    if (named) {
+      if (named !== id.who) continue;
+      try { if (token === await makeToken(secret, id.who)) return id.who; } catch { /* next */ }
+    } else {
+      // Legacy shape, minted before names existed. Only the shared password ever produced one.
+      try { if (token === await makeToken(secret, null)) return 'office'; } catch { /* next */ }
+    }
+  }
+  return null;
+}
+
+async function verifyToken(token, env) {
+  return !!(await tokenIdentity(token, env));
 }
 
 /**

@@ -593,9 +593,44 @@
     var brokerLogoFile = formEl.querySelector('[name="brokerLogo"]').files[0];
     if (brokerLogoFile) {
       var reader = new FileReader();
-      reader.onload = function () {
-        form.brokerLogoDataUrl = reader.result;
+      // 🔴🔴 AN IMAGE THE BROWSER CANNOT DECODE USED TO FAIL IN COMPLETE SILENCE, AND THAT IS
+      // WHAT A REAL BROKER HIT. Eric, 2026-08-27, relaying Niels: "he uploaded the logo and ran
+      // the quote and it never appeared -- not on his version of the quote, not on the quote that
+      // popped up from the link, nothing."
+      //
+      // ⭐⭐ THE MECHANISM, REPRODUCED EXACTLY: FileReader happily turns ANY file into a data URL,
+      // including one that is not a decodable image -- a HEIC from a phone, a renamed file, a
+      // truncated download. The <img> is then emitted with a perfectly well-formed src, the
+      // browser declines to decode it, and the result is an EMPTY BOX with no error anywhere.
+      // ⚠️ `complete` is TRUE in that state; `naturalWidth === 0` is the only tell.
+      //
+      // ⛔ SO THE FILE IS DECODED BEFORE IT IS TRUSTED, and a failure is SAID OUT LOUD. Eric:
+      // "it should probably tell us instead of accepting the upload and then not doing anything
+      // with it." ⭐ The quote still renders -- a bad logo must never cost somebody their quote.
+      reader.onerror = function () {
+        logoProblem('That file could not be read. The quote was generated without a logo.');
         renderQuote(form);
+      };
+      reader.onload = function () {
+        var probe = new Image();
+        probe.onload = function () {
+          if (!probe.naturalWidth) {
+            logoProblem('That image could not be displayed, so the quote was generated without '
+              + 'it. Please try a PNG or JPG saved from your computer.');
+            renderQuote(form);
+            return;
+          }
+          logoProblem('');
+          form.brokerLogoDataUrl = reader.result;
+          renderQuote(form);
+        };
+        probe.onerror = function () {
+          // The usual case for a phone photo (HEIC) or a file whose name does not match its bytes.
+          logoProblem('That does not look like an image this browser can show, so the quote was '
+            + 'generated without it. Please try a PNG or JPG.');
+          renderQuote(form);
+        };
+        probe.src = reader.result;
       };
       reader.readAsDataURL(brokerLogoFile);
     } else {
@@ -609,6 +644,32 @@
       else if (accountLogoDataUrl) form.brokerLogoDataUrl = accountLogoDataUrl;
       renderQuote(form);
     }
+  }
+
+  /**
+   * Say why the logo is missing, beside the field it came from.
+   *
+   * ⭐ NEXT TO THE INPUT, NOT AT THE TOP OF THE PAGE. The broker has just scrolled past this
+   * control to press Generate; a banner somewhere else is a message about a field they can no
+   * longer see. ⛔ And it is NOT an alert(): a modal dialog would interrupt a quote that
+   * generated perfectly well, over decoration.
+   * ⚠️ Called with '' to clear -- a stale complaint about a file that has since been replaced is
+   * worse than none, because it makes the broker doubt a logo that is actually there.
+   */
+  function logoProblem(message) {
+    var input = document.querySelector('[name="brokerLogo"]');
+    if (!input) return;
+    var box = document.getElementById('brokerLogoProblem');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'brokerLogoProblem';
+      box.setAttribute('role', 'status');
+      box.style.cssText = 'margin-top:6px;padding:7px 10px;border:1px solid #e0c98a;'
+        + 'background:#fdf9ef;color:#7a5410;border-radius:5px;font-size:12.5px';
+      (input.parentElement || input).appendChild(box);
+    }
+    box.textContent = message || '';
+    box.style.display = message ? 'block' : 'none';
   }
 
   function renderQuote(form) {
