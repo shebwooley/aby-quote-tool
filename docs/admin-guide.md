@@ -371,6 +371,41 @@ people in the directory with the same name at two addresses, and **all three nee
 ⛔ **Nothing in the data tells those apart.** The tool suggests the pair; a person decides. **And it
 is reversible** — splitting them back restores exactly what was there before.
 
+### The broker list, and attaching somebody to a firm
+
+**Open *Brokers — every person, their firm, email and state* on the Marketing view.** Everything
+else on that page is grouped by firm; this is the flat list — **one row per person**, name, firm,
+email and state, and it is the only place somebody with **no firm on file** appears at all.
+
+**Eric:** *"what I don't want is to open an agency name, see that there's no agents, and add an
+agent when we already have a record of that agent separately — we just need the firm name attached.
+I don't want to create duplicates."*
+
+**To work through the ones we cannot place:** set **Firm: none on file**. That is **1,211 people**
+today, a quarter of the register — nearly all of them from the CE list, where the roster gave a
+personal email address and no agency.
+
+**Start typing a firm beside their name and it offers the firms we already have**, with the quotes
+and the people on each so two similar names can be told apart. Arrow down, Enter, done.
+
+- ⭐ **A misspelling finds the right firm.** Typing *Blumburg* offers **Blumberg Benefits** and says
+  which spelling it matched — the 114 alternate spellings and the 10 acquired names are all routes
+  to the surviving firm, never destinations.
+- ⭐ **A holding company says how many offices it has**, so a row with no quotes on it reads as
+  *Higginbotham, 7 offices* rather than as a firm nothing has ever come through.
+- 🔴 **It cannot create a firm, on purpose.** If nothing matches, check a shorter piece of the name
+  first — a new firm is added on the firm list, where the name gets looked at.
+- ⭐ **Getting it wrong is undoable.** *change* reopens the picker on anybody who already has a firm,
+  and *no firm* beside it puts them back to blank.
+
+⚠️ **State is the FIRM'S state, not the person's** — so it is blank until the firm is, and fills in
+the moment you attach one. There is no state on a person and there should not be: the same fact in
+two places is how two places end up disagreeing.
+
+⚠️ **Browsing hides anybody somebody has already taken off the list** (retired, wrong record, not
+interested); **searching by name finds them anyway**, because a search is for one person you
+already have in mind. *Do not contact* and *deceased* are never in these results at all.
+
 ### Where a firm is
 
 **Open a firm and type its city and state.** They start empty.

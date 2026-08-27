@@ -230,11 +230,43 @@ const RULES = [
        + " agencies that are now prospects.'",
     // ⚠️ THE FETCH IS THE REACHABILITY HALF. A search box that exists and asks nobody anything
     // is the same finished-looking dead control as a form nothing renders.
+    // ⚠️ THE FETCH IS THE REACHABILITY HALF. A search box that exists and asks nobody anything
+    // is the same finished-looking dead control as a form nothing renders.
+    // ⚠️ id="psNoFirm" WAS THE TICKBOX THIS ASSERTED UNTIL 2026-08-27. It became the psFirm select
+    // when the search grew into a list, and the three-way control answers the same question with a
+    // third state -- so this rule follows the control rather than being deleted with it.
     holds: (f) => /id="psQ"/.test(f.worker)
-      && /id="psNoFirm"/.test(f.worker)
+      && /id="psFirm"/.test(f.worker)
+      && /<option value="none">/.test(f.worker)
       && /function loadPeopleSearch\(/.test(f.worker)
       && /fetch\('\/api\/admin\/crm\/persons\?'/.test(f.worker)
       && /ontoggle="if\(this\.open\)loadPeopleSearch\(\)"/.test(f.worker),
+  },
+  {
+    name: "a broker with no firm can be given one, from the firms we already have",
+    why: "Eric, 2026-08-27: 'what I don't want is to open an agency name, see that there's no"
+       + " agents, and add an agent when we already have a record of that agent separately - we"
+       + " just need the firm name attached. I don't want to create duplicates. But it needs to be"
+       + " something where it's easy to add the firm name.' The whole list is only worth having if"
+       + " the firm can be attached FROM it -- otherwise it reports the problem and cannot fix it.",
+    // Three things, and any one missing makes the control finished-looking and dead: the input has
+    // to exist, it has to ask the server what matches, and the choice has to be saved somewhere.
+    holds: (f) => /function firmPickBox\(/.test(f.worker)
+      && /fetch\('\/api\/admin\/crm\/firm-suggest\?q='/.test(f.worker)
+      && /fetch\('\/api\/admin\/crm\/person-firm'/.test(f.worker)
+      && /firmPickBox\(pid\)/.test(f.worker)
+      && /handleCrmFirmSuggest/.test(f.worker)
+      && /handleCrmPersonFirm/.test(f.worker),
+  },
+  {
+    name: "attaching a broker to a firm writes where that person's firm is actually read from",
+    why: "handleCrmImport records the link on the ADDRESS row and clears people.agency_id whenever"
+       + " somebody has an email, deliberately -- and the firm panel counts an addressed person"
+       + " through broker_directory. So writing people.agency_id for everybody would look right on"
+       + " the broker list and leave them ABSENT from the firm they were just attached to. This is"
+       + " the same defect that put 140 real people under 'no firm on file' from the other side.",
+    holds: (f) => /UPDATE broker_directory SET agency_id = \? WHERE person_id = \?/.test(f.worker)
+      && /UPDATE people SET agency_id = NULL, updated_at = \? WHERE id = \?/.test(f.worker),
   },
   {
     name: "the people search cannot list somebody who asked not to be contacted",
@@ -746,6 +778,21 @@ const SABOTAGES = [
     why: "the person search stops asking the server anything",
     apply: (f) => ({ ...f, worker: f.worker.replace(
       /fetch\('\/api\/admin\/crm\/persons\?'/g, "fetch('/api/admin/crm/nothing?'") }),
+  },
+  {
+    // The picker renders and offers firms; only the SAVE goes. This is the shape that looks most
+    // finished of all -- somebody types, chooses, and the row appears to take it.
+    why: "the firm picker stops saving the firm anybody chooses",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /fetch\('\/api\/admin\/crm\/person-firm'/g, "fetch('/api/admin/crm/nothing'") }),
+  },
+  {
+    // The other half: the firm is written to the person row for everybody, which is right for the
+    // 407 with no address and wrong for the 4,554 who have one.
+    why: "attaching a firm writes people.agency_id even for somebody whose firm is read off their address",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /UPDATE people SET agency_id = NULL, updated_at = \? WHERE id = \?/g,
+      'UPDATE people SET agency_id = ?, updated_at = ? WHERE id = ?') }),
   },
   {
     why: "the people search drops its do-not-contact suppression",

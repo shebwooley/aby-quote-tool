@@ -76,6 +76,11 @@ export default {
     if (path === '/api/admin/crm/link'    && method === 'POST') return withAuth(request, env, () => handleCrmLinkPerson(request, env));
     if (path === '/api/admin/crm/person-field' && method === 'POST') return withAuth(request, env, () => handleCrmPersonField(request, env));
     if (path === '/api/admin/crm/persons'     && method === 'GET')  return withAuth(request, env, () => handleCrmPersonSearch(request, env));
+    // The two halves of "attach a firm to a broker we already have": what to offer while somebody
+    // types, and where to write the answer. They are split because the first is read-only and runs
+    // on every keystroke, while the second changes a record.
+    if (path === '/api/admin/crm/firm-suggest' && method === 'GET')  return withAuth(request, env, () => handleCrmFirmSuggest(request, env));
+    if (path === '/api/admin/crm/person-firm'  && method === 'POST') return withAuth(request, env, () => handleCrmPersonFirm(request, env));
     if (path === '/api/admin/crm/suggest' && method === 'GET')  return withAuth(request, env, () => handleCrmSuggestPeople(request, env));
     if (path === '/api/admin/rfp/library'     && method === 'GET')  return withAuth(request, env, () => handleRfpLibrary(request, env));
     if (path === '/api/admin/rfp/answer'      && method === 'POST') return withAuth(request, env, () => handleRfpAnswerSave(request, env));
@@ -3141,40 +3146,93 @@ async function handleCrmAgencyField(request, env) {
  *
  * A CAP THAT SAYS SO. The agency list silently truncated at 2,000 the moment the CE import took it
  * past that, and a list that stops without mentioning it reads as a complete answer.
+ *
+ * ── WIDENED 2026-08-27 INTO THE BROKER LIST ERIC ASKED FOR ────────────────────────────────────
+ *
+ * ⭐⭐ HIS WORDS: "what we desperately need is a list of just brokers with their name, agency name,
+ * email, and state. That way it's easy to see who we have and assign agencies to them. And we
+ * could filter or sort by those who don't have agencies."
+ *
+ * 🔴 SO IT NO LONGER REFUSES TO BROWSE. It used to answer nothing without a search term, on the
+ * reasoning that "the first 300 of five thousand looks like an answer to whatever question you had
+ * in mind" -- which was right for a SEARCH BOX and wrong for a LIST. The defect it guarded against
+ * is a silent truncation, and the fix for that is a page that says which page it is and how many
+ * there are in total, not a screen that shows nothing.
+ *
+ * ⚠️ STATE IS THE FIRM'S, BECAUSE A PERSON HAS NO STATE COLUMN AND INVENTING ONE WOULD BE THE SAME
+ * FACT TWICE. That has a consequence worth knowing before reading the column: somebody with no
+ * firm has no state either, and 897 of the 1,212 have no city on file, so the state column is
+ * mostly blank on exactly the rows this list exists to fix. It fills in the moment the firm does.
  */
 const PERSON_SEARCH_CAP = 300;
 
 async function handleCrmPersonSearch(request, env) {
   const u = new URL(request.url).searchParams;
   const term = String(u.get('q') || '').trim().toLowerCase();
-  const noFirm = u.get('no_firm') === '1';
-  if (!term && !noFirm) {
-    // Refusing beats returning the first 300 of five thousand people: a list nobody asked a
-    // question of looks like an answer to whatever question they had in mind.
-    return jsonResp({ people: [], matched: 0, needsQuery: true });
-  }
+  // no_firm=1 is the old spelling and still works; firm=none|has|any is the filter the list uses.
+  const firmFilter = u.get('no_firm') === '1' ? 'none' : String(u.get('firm') || 'any').toLowerCase();
+  const state = String(u.get('state') || '').trim().toUpperCase();
+  const source = String(u.get('source') || '').trim().toLowerCase();
+  // Somebody taken off the list is hidden from a BROWSE and found by a SEARCH (see below). This
+  // makes that overridable in the one direction it needs to be, and it can never reach the
+  // suppressed dispositions -- those are enforced in the WHERE and are not a filter.
+  const includeOff = u.get('include_off') === '1';
+  const sort = String(u.get('sort') || '').toLowerCase();
+  const offset = Math.max(0, Math.min(100000, parseInt(u.get('offset') || '0', 10) || 0));
 
   const where = ["COALESCE(p.disposition,'') NOT IN ('" + SUPPRESSED.join("','") + "')"];
   const args = [];
-  if (noFirm) where.push('pa.aid IS NULL');
+  if (firmFilter === 'none') where.push('pa.aid IS NULL');
+  else if (firmFilter === 'has') where.push('pa.aid IS NOT NULL');
   // A BROWSE AND A SEARCH ARE NOT THE SAME QUESTION, and this is where they part.
   //
-  // BROWSING the no-firm people is a WORKING LIST -- "who could I call?" -- so it follows the same
-  // default as the firm list: nobody who has already been taken off. Somebody recorded as retired
-  // or as a wrong record is exactly who a call list must not put back in front of you.
+  // BROWSING is a WORKING LIST -- "who could I call?" -- so it follows the same default as the firm
+  // list: nobody who has already been taken off. Somebody recorded as retired or as a wrong record
+  // is exactly who a call list must not put back in front of you.
   //
   // SEARCHING BY NAME IS A LOOKUP, and the opposite rule applies: you are after ONE person you
   // already have in mind, and hiding them because somebody dispositioned them last year is how a
   // search box earns the reputation of not working. So a term overrides this.
-  if (noFirm && !term) where.push("COALESCE(p.disposition,'') = ''");
+  if (!term && !includeOff) where.push("COALESCE(p.disposition,'') = ''");
   if (term) {
     // Name OR email, because a broker remembers one or the other and never knows which we hold.
     where.push('(lower(p.name) LIKE ? OR EXISTS (SELECT 1 FROM broker_directory d3 ' +
                '  WHERE d3.person_id = p.id AND lower(trim(d3.email)) LIKE ?))');
     args.push('%' + term + '%', '%' + term + '%');
   }
+  if (/^[A-Z]{2}$/.test(state)) { where.push('upper(COALESCE(a.state, ?)) = ?'); args.push('', state); }
+  if (source && PERSON_SOURCES.includes(source)) { where.push("COALESCE(p.source,'') = ?"); args.push(source); }
+
+  // ⛔ A CLOSED LIST OF ORDERINGS, never a column name off the query string. The default is the one
+  // that answers "who matters" -- the people who have actually sent us quotes first.
+  // ⛔ NAMELESS LAST, IN EVERY ORDERING. 39 people are held by an email address with no name on
+  // it, and without this they sort FIRST on every tie -- so the no-firm list, where every row has
+  // the same 0 quotes, opened on a page of dashes. The first screen of a working list should be
+  // its most workable rows, not its least.
+  const NAMED = "(CASE WHEN trim(COALESCE(p.name,'')) = '' THEN 1 ELSE 0 END)";
+  const ORDERS = {
+    name:   NAMED + ', p.name COLLATE NOCASE, quotes DESC',
+    firm:   "COALESCE(a.name,'zzzz') COLLATE NOCASE, " + NAMED + ', p.name COLLATE NOCASE',
+    state:  "COALESCE(a.state,'ZZ'), COALESCE(a.name,'zzzz') COLLATE NOCASE, " + NAMED + ', p.name COLLATE NOCASE',
+    email:  "COALESCE((SELECT MIN(d5.email) FROM broker_directory d5 WHERE d5.person_id = p.id),'zzzz') COLLATE NOCASE",
+    quotes: 'quotes DESC, ' + NAMED + ', p.name COLLATE NOCASE',
+  };
+  const orderBy = ORDERS[sort] || ORDERS.quotes;
 
   try {
+    // 🔴 THE TOTAL IS COUNTED, NOT INFERRED FROM THE PAGE. "300 shown of more" was honest about
+    // being capped and useless for working through a list: there is no way to tell 301 from 4,961,
+    // and no way to know whether yesterday's pass made a dent.
+    const countRow = await env.DB.prepare(
+      "WITH pa AS (SELECT p2.id AS pid, COALESCE(p2.agency_id, " +
+      '              (SELECT MIN(d4.agency_id) FROM broker_directory d4 ' +
+      '                WHERE d4.person_id = p2.id AND d4.agency_id IS NOT NULL)) AS aid ' +
+      '            FROM people p2) ' +
+      'SELECT COUNT(*) AS n FROM people p JOIN pa ON pa.pid = p.id ' +
+      'LEFT JOIN agencies a ON a.id = pa.aid WHERE ' + where.join(' AND ')
+    ).bind(...args).first();
+    const total = Number((countRow && countRow.n) || 0);
+
     const r = await env.DB.prepare(
       // 🔴🔴 A PERSON'S FIRM IS NOT ALWAYS ON THEIR PERSON ROW, AND ASSUMING IT WAS PUT 140 REAL
       // PEOPLE UNDER "no firm on file" WHO HAVE ONE.
@@ -3196,21 +3254,40 @@ async function handleCrmPersonSearch(request, env) {
       "       COALESCE(p.source,'') AS source, COALESCE(p.disposition,'') AS disposition, " +
       "       COALESCE(p.disposition_note,'') AS disposition_note, p.disposition_at AS disposition_at, " +
       "       pa.aid AS agency_id, COALESCE(a.name,'') AS agency_name, " +
-      "       COALESCE(a.state,'') AS agency_state, " +
+      "       COALESCE(a.state,'') AS agency_state, COALESCE(a.city,'') AS agency_city, " +
       '       (SELECT MIN(d.email) FROM broker_directory d WHERE d.person_id = p.id) AS email, ' +
+      '       (SELECT COUNT(*) FROM broker_directory d6 WHERE d6.person_id = p.id) AS addresses, ' +
       '       (SELECT COALESCE(SUM(d2.quote_count),0) FROM broker_directory d2 WHERE d2.person_id = p.id) AS quotes ' +
       'FROM people p JOIN pa ON pa.pid = p.id LEFT JOIN agencies a ON a.id = pa.aid ' +
       'WHERE ' + where.join(' AND ') + ' ' +
-      'ORDER BY quotes DESC, p.name COLLATE NOCASE ' +
-      'LIMIT ?'
-    ).bind(...args, PERSON_SEARCH_CAP + 1).all();
+      'ORDER BY ' + orderBy + ' ' +
+      'LIMIT ? OFFSET ?'
+    ).bind(...args, PERSON_SEARCH_CAP, offset).all();
+
+    // ⭐ THE STATE DROPDOWN IS BUILT FROM THE STATES ACTUALLY PRESENT, so it can never offer one
+    // with nothing behind it -- the same rule the firm list's own state filter follows. Counted in
+    // PEOPLE rather than firms, because this is a list of people and a dropdown reading "TX (851)"
+    // beside a page of 3,620 would be describing something else.
+    const st = await env.DB.prepare(
+      "WITH pa AS (SELECT p2.id AS pid, COALESCE(p2.agency_id, " +
+      '              (SELECT MIN(d4.agency_id) FROM broker_directory d4 ' +
+      '                WHERE d4.person_id = p2.id AND d4.agency_id IS NOT NULL)) AS aid ' +
+      '            FROM people p2) ' +
+      'SELECT upper(a.state) AS state, COUNT(*) AS n FROM people p JOIN pa ON pa.pid = p.id ' +
+      "JOIN agencies a ON a.id = pa.aid WHERE COALESCE(a.state,'') <> '' " +
+      'GROUP BY 1 ORDER BY n DESC'
+    ).all();
 
     const rows = r.results || [];
-    const capped = rows.length > PERSON_SEARCH_CAP;
     return jsonResp({
-      people: capped ? rows.slice(0, PERSON_SEARCH_CAP) : rows,
-      matched: capped ? PERSON_SEARCH_CAP : rows.length,
-      capped, cap: PERSON_SEARCH_CAP,
+      people: rows,
+      matched: rows.length,
+      total,
+      offset,
+      states: st.results || [],
+      // ⛔ "capped" now means THERE IS ANOTHER PAGE, not "we stopped and will not say where".
+      capped: offset + rows.length < total,
+      cap: PERSON_SEARCH_CAP,
       dispositions: DISPOSITIONS, sources: PERSON_SOURCES, sourceLabels: SOURCE_LABEL,
     });
   } catch (err) {
@@ -3288,6 +3365,200 @@ async function handleCrmPersonField(request, env) {
   const r = await env.DB.prepare(sql).bind(...binds).run();
   if (!r || !r.meta || !r.meta.changes) return jsonResp({ error: 'No such person.' }, 404);
   return jsonResp({ ok: true, id, field, value });
+}
+
+/**
+ * WHICH FIRMS COULD THIS BE? The list behind the type-ahead beside a broker's name.
+ *
+ * ⭐⭐ ERIC, 2026-08-27, and the reason is the whole design: "what I don't want is to open an agency
+ * name, see that there's no agents, and add an agent when we already have a record of that agent
+ * separately - we just need the firm name attached. I don't want to create duplicates."
+ * ⛔ SO THIS SUGGESTS AND NEVER CREATES. Creating a firm is a separate, deliberate act; a control
+ * that quietly makes one on a typo is how 2,365 firms becomes 2,400 with nobody meaning it.
+ *
+ * 🔴 A MISSPELLING IS A ROUTE TO THE RIGHT FIRM, NOT A DEAD END. 114 rows are aliases and 10 are
+ * dead names that were acquired -- both point at the surviving firm through parent_id. Typing the
+ * old or wrong spelling therefore RESOLVES to the survivor and says which spelling it matched, so
+ * somebody who types "Blumburg" is told it is Blumberg Benefits rather than being offered a firm
+ * they have never heard of. ⛔ An alias must never itself be the answer: filing a person under a
+ * name variant puts them at a firm the agent count and the quote rollup both ignore.
+ *
+ * ⚠️ THE COUNTS ARE ON THE ROW ON PURPOSE. Two firms with similar names are told apart by which
+ * one has the quotes and the people, not by their spelling -- that is the only thing on screen
+ * that distinguishes "Alliant - DFW" from "Alliant".
+ *
+ * ⛔ NAMES CONTAINING A SEMICOLON ARE NEVER OFFERED. 46 agency rows hold two firms separated by
+ * one ("Gallagher; USI") because a quote was run through both; the marketing list already hides
+ * them and none of them is a firm anybody works at.
+ */
+const FIRM_SUGGEST_CAP = 8;
+
+async function handleCrmFirmSuggest(request, env) {
+  const u = new URL(request.url).searchParams;
+  const term = String(u.get('q') || '').trim().toLowerCase();
+  // Two characters, because one letter matches most of the book and a suggestion list that always
+  // has something in it teaches somebody to ignore it.
+  if (term.length < 2) return jsonResp({ firms: [], needsQuery: true, min: 2 });
+
+  const like = '%' + term.replace(/[%_]/g, '') + '%';
+  const starts = term.replace(/[%_]/g, '') + '%';
+
+  try {
+    // PASS 1 -- what matched, and where it points. Deliberately wider than the cap: several
+    // matches can collapse onto one surviving firm, and the caller asked for eight FIRMS.
+    const hit = await env.DB.prepare(
+      'SELECT a.id, a.name, COALESCE(a.relationship, ?) AS relationship, a.parent_id, ' +
+      '       CASE WHEN lower(trim(a.name)) = ? THEN 0 ' +
+      '            WHEN lower(trim(a.name)) LIKE ? THEN 1 ELSE 2 END AS rk ' +
+      'FROM agencies a ' +
+      "WHERE lower(a.name) LIKE ? AND a.name NOT LIKE '%;%' " +
+      'ORDER BY rk, length(a.name), a.name COLLATE NOCASE LIMIT 60'
+    ).bind('', term, starts, like).all();
+
+    const order = [];
+    const via = {};
+    for (const row of (hit.results || [])) {
+      // An alias or a dead name answers with the firm it points at. With no parent recorded there
+      // is nothing to redirect to, so the row stands for itself -- better than dropping the only
+      // match somebody's spelling found.
+      const redirect = (row.relationship === 'alias' || row.relationship === 'succeeded') && row.parent_id;
+      const target = redirect ? row.parent_id : row.id;
+      if (order.indexOf(target) === -1) {
+        order.push(target);
+        if (redirect) via[target] = row.name;
+      }
+      if (order.length >= FIRM_SUGGEST_CAP + 1) break;
+    }
+    if (!order.length) return jsonResp({ firms: [], matched: 0 });
+
+    const capped = order.length > FIRM_SUGGEST_CAP;
+    const show = capped ? order.slice(0, FIRM_SUGGEST_CAP) : order;
+    const marks = show.map(() => '?').join(',');
+
+    // PASS 2 -- the firms themselves, with what tells them apart. Counted exactly the way the
+    // marketing list counts them, so a firm cannot read as having two different sizes on two
+    // screens: BOTH kinds of person, because somebody held by name and firm has no address row.
+    const det = await env.DB.prepare(
+      "SELECT a.id, a.name, COALESCE(a.city,'') AS city, COALESCE(a.state,'') AS state, " +
+      "       COALESCE(a.relationship,'') AS relationship, COALESCE(pa.name,'') AS parent_name, " +
+      '       ((SELECT COUNT(*) FROM broker_directory d WHERE d.agency_id = a.id) + ' +
+      '        (SELECT COUNT(*) FROM people p WHERE p.agency_id = a.id ' +
+      '           AND NOT EXISTS (SELECT 1 FROM broker_directory d2 WHERE d2.person_id = p.id))) AS agents, ' +
+      '       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_agency)) = lower(trim(a.name))) AS quotes, ' +
+      // 🔴 A HOLDING ROW READS AS A DEAD FIRM WITHOUT THIS. The quotes and the people sit on the
+      // OFFICES, by Eric's own rule, so the parent row honestly counts zero of both -- and
+      // "nothing recorded yet" beside "Higginbotham" steers somebody away from the row they want.
+      // ⛔ Aliases are not offices: a name variant under a firm is the same firm, not a branch.
+      '       (SELECT COUNT(*) FROM agencies c WHERE c.parent_id = a.id ' +
+      "          AND COALESCE(c.relationship,'') <> 'alias') AS offices " +
+      'FROM agencies a LEFT JOIN agencies pa ON pa.id = a.parent_id ' +
+      'WHERE a.id IN (' + marks + ')'
+    ).bind(...show).all();
+
+    const byId = {};
+    for (const row of (det.results || [])) byId[row.id] = row;
+    const firms = show.map((id) => byId[id]).filter(Boolean)
+      .map((f) => ({ ...f, matched_as: via[f.id] || '' }));
+
+    return jsonResp({ firms, matched: firms.length, capped, cap: FIRM_SUGGEST_CAP });
+  } catch (err) {
+    // 🔴 AN ERROR IS NOT AN EMPTY SUGGESTION LIST. "No firm matches that" is the single most
+    // dangerous thing this endpoint could say when the truth is that the query fell over: it is
+    // the sentence that talks somebody into creating a firm we already have.
+    return jsonResp({ firms: [], error: String((err && err.message) || err) }, 500);
+  }
+}
+
+/**
+ * ATTACH A BROKER TO A FIRM. The write behind the type-ahead.
+ *
+ * 🔴🔴 IT WRITES TO WHICHEVER TABLE HOLDS THE ANSWER FOR THIS PERSON, AND THAT IS NOT A DETAIL.
+ * handleCrmImport records the link on the ADDRESS row and clears people.agency_id whenever
+ * somebody has an email, on purpose, "because keeping it on people too would be the same fact
+ * twice". The read side already honours that (see the pa CTE in handleCrmPersonSearch, and the
+ * agent count on the marketing list, which adds the two populations together).
+ * ⛔ SO WRITING people.agency_id FOR EVERYBODY WOULD LOOK RIGHT ON THIS SCREEN AND BE WRONG: the
+ * firm panel counts an addressed person through broker_directory, so they would be attached in the
+ * list and absent from the firm they were just attached to.
+ *
+ * ⭐ AN ALIAS RESOLVES TO THE SURVIVING FIRM HERE TOO, not only in the suggestions -- a caller
+ * that posts an id directly must not be able to do what the picker refuses.
+ *
+ * ⭐ CLEARING IS ALLOWED, because attaching the wrong firm has to be undoable by the person who
+ * did it. It is the same act in reverse and needs no separate screen.
+ *
+ * ⛔ IT NEVER CREATES A FIRM. An id that does not exist is refused by name.
+ */
+async function handleCrmPersonFirm(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const raw = String(body.id || body.person_id || body.email || '').trim();
+  if (!raw) return jsonResp({ error: 'Which person?' }, 400);
+  const resolved = await crmResolvePerson(env, raw);
+  if (!resolved.id) return jsonResp({ error: resolved.why }, 400);
+  const id = resolved.id;
+
+  const wanted = String(body.agency_id === null || body.agency_id === undefined ? '' : body.agency_id).trim();
+
+  let agencyId = null;
+  let agencyName = '';
+  let agencyState = '';
+  let agencyCity = '';
+  let redirectedFrom = '';
+  if (wanted) {
+    const cols = "SELECT id, name, COALESCE(state,'') AS state, COALESCE(city,'') AS city, " +
+                 "COALESCE(relationship,'') AS relationship, parent_id FROM agencies WHERE id = ?";
+    const a = await env.DB.prepare(cols).bind(wanted).first();
+    if (!a) return jsonResp({ error: 'No such firm.' }, 404);
+    let use = a;
+    if ((a.relationship === 'alias' || a.relationship === 'succeeded') && a.parent_id) {
+      const p = await env.DB.prepare(cols).bind(a.parent_id).first();
+      if (p) { use = p; redirectedFrom = a.name; }
+    }
+    // ⭐ THE STATE COMES BACK WITH IT, because the state column on the list is the FIRM'S state and
+    // it has just changed. Blanking it and hoping for a refetch leaves a row asserting less than we
+    // know; leaving the old one leaves it asserting something false.
+    agencyId = use.id; agencyName = use.name; agencyState = use.state; agencyCity = use.city;
+  }
+
+  // What it was, read the same way the list reads it, so the answer we report back is the answer
+  // the screen will show after it refetches.
+  const before = await env.DB.prepare(
+    'SELECT COALESCE(a1.name, a2.name) AS nm FROM people p ' +
+    'LEFT JOIN agencies a1 ON a1.id = p.agency_id ' +
+    'LEFT JOIN agencies a2 ON a2.id = (SELECT MIN(d.agency_id) FROM broker_directory d ' +
+    '                                   WHERE d.person_id = p.id AND d.agency_id IS NOT NULL) ' +
+    'WHERE p.id = ?'
+  ).bind(id).first();
+
+  const addrs = await env.DB.prepare(
+    'SELECT COUNT(*) AS n FROM broker_directory WHERE person_id = ?'
+  ).bind(id).first();
+  const addressed = Number((addrs && addrs.n) || 0) > 0;
+
+  const now = new Date().toISOString();
+  if (addressed) {
+    // EVERY address this person holds moves together. Two addresses for one human at two different
+    // firms is not a fact anybody entered; it is what a half-applied change looks like afterwards.
+    await env.DB.prepare('UPDATE broker_directory SET agency_id = ? WHERE person_id = ?')
+      .bind(agencyId, id).run();
+    await env.DB.prepare('UPDATE people SET agency_id = NULL, updated_at = ? WHERE id = ?')
+      .bind(now, id).run();
+  } else {
+    await env.DB.prepare('UPDATE people SET agency_id = ?, updated_at = ? WHERE id = ?')
+      .bind(agencyId, now, id).run();
+  }
+
+  return jsonResp({
+    ok: true,
+    id,
+    agency_id: agencyId,
+    agency_name: agencyName,
+    agency_state: agencyState,
+    agency_city: agencyCity,
+    previous: (before && before.nm) || '',
+    wrote: addressed ? 'directory' : 'person',
+    redirected_from: redirectedFrom,
+  });
 }
 
 /**
@@ -4902,6 +5173,13 @@ ${ADMIN_HEADER_CSS}
  table.grid{table-layout:fixed;width:100%}
  table.grid td,table.grid th{overflow:hidden;text-overflow:ellipsis}
  table.grid td.wrapcell{white-space:normal;overflow-wrap:anywhere;text-overflow:clip}
+ /* 🔴 THE FIRM PICKER'S SUGGESTIONS ARE CLIPPED BY THE RULE ABOVE, AND THE CONTROL LOOKS BROKEN
+    RATHER THAN CLIPPED. overflow:hidden on a cell clips an absolutely positioned child of that
+    cell, so the dropdown rendered with display:block, nine real suggestions in it, and nothing on
+    screen -- which reads as "the type-ahead does not work". Measured on the live page 2026-08-27.
+    ⛔ Do NOT fix this by widening the rule above: table.grid is table-layout:fixed and the
+    ellipsis is Eric's own fix for the agency column eating every other column's width. */
+ table.grid td.firmcell{overflow:visible}
  .c{text-align:center;font-variant-numeric:tabular-nums}
  th.c{text-align:center}
  .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
@@ -5059,31 +5337,56 @@ ${abyAdminNav('/admin/brokers')}
           <div id="nqBox"><p class="muted">Pick a product.</p></div>
         </div>
       </details>
-      <!-- FIND A PERSON. Eric, 2026-08-27: "These are organized by firm but is there a way to
-           search for an agent? For instance, I met an agent in Tulsa named Megan but I don't know
-           her agency name." A firm-grouped list cannot answer that, and it has NO ROW AT ALL for
-           somebody with no firm -- a population the CE import made large. Same details/shut-by-
-           default shape as Tidy up and Never quoted, and loaded only when opened. -->
+      <!-- EVERY BROKER, ONE ROW EACH. Eric, 2026-08-27: "what we desperately need is a list of just
+           brokers with their name, agency name, email, and state. That way it's easy to see who we
+           have and assign agencies to them. And we could filter or sort by those who don't have
+           agencies. Because what I don't want is to open an agency name, see that there's no
+           agents, and add an agent when we already have a record of that agent separately - we
+           just need the firm name attached. I don't want to create duplicates."
+           It started as a search box for "I met an agent in Tulsa named Megan"; the list is the
+           same data with the refusal to browse taken off and a firm picker on every row. -->
       <details style="margin:0 0 10px" ontoggle="if(this.open)loadPeopleSearch()">
         <summary style="cursor:pointer;font-size:13.5px;color:#1a5c3a;font-weight:600">
-          Find a person &mdash; by name or email, including the ones with no firm</summary>
+          Brokers &mdash; every person, their firm, email and state</summary>
         <div style="margin-top:10px">
           <p class="sub" style="margin:0 0 8px">Everything else on this page is organized by firm.
-            <strong>This is the one place to look somebody up when you remember the person and not
-            the agency</strong> &mdash; and the only place a person with no firm on file appears at
-            all. Anybody marked <em>do not contact</em> or <em>deceased</em> is never in these
-            results; their record is still on their firm's panel, which is where the reason is
-            kept. <strong>Browsing the no-firm list shows only people nobody has taken off it</strong>
-            &mdash; searching by name finds them whatever their status, because a search is for
-            somebody you already have in mind.</p>
+            <strong>This is the flat list</strong> &mdash; one row per person, whether or not we
+            know where they work &mdash; and the only place somebody with no firm on file appears
+            at all. <strong>Set <em>Firm: none on file</em> and work down the list:</strong> start
+            typing a firm beside a name and it offers the ones we already have, so nobody gets a
+            second record and no firm gets a second spelling. Anybody marked <em>do not contact</em>
+            or <em>deceased</em> is never in these results; their record is still on their firm's
+            panel, which is where the reason is kept. <strong>Browsing hides people somebody has
+            already taken off the list</strong> &mdash; searching by name finds them anyway, because
+            a search is for somebody you already have in mind.
+            <strong>State is the firm's</strong>, so it is blank until the firm is.</p>
           <div class="mfilters">
             <input id="psQ" placeholder="Name or email" oninput="peopleSearchSoon()"
-                   style="min-width:240px;padding:5px 8px;border:1px solid #c8d2de;border-radius:5px;font-size:13px">
+                   style="min-width:200px;padding:5px 8px;border:1px solid #c8d2de;border-radius:5px;font-size:13px">
+            <span class="muted" style="font-size:13px">Firm:</span>
+            <select id="psFirm" onchange="loadPeopleSearch(0)">
+              <option value="any">Any</option>
+              <option value="none">None on file</option>
+              <option value="has">Has one</option>
+            </select>
+            <span class="muted" style="font-size:13px">State:</span>
+            <select id="psState" onchange="loadPeopleSearch(0)"><option value="">Any</option></select>
+            <span class="muted" style="font-size:13px">Source:</span>
+            <select id="psSource" onchange="loadPeopleSearch(0)"><option value="">Any</option></select>
+            <span class="muted" style="font-size:13px">Sort:</span>
+            <select id="psSort" onchange="loadPeopleSearch(0)">
+              <option value="quotes">Most quotes</option>
+              <option value="name">Name</option>
+              <option value="firm">Firm</option>
+              <option value="state">State</option>
+              <option value="email">Email</option>
+            </select>
             <label class="muted" style="font-size:13px">
-              <input id="psNoFirm" type="checkbox" onchange="loadPeopleSearch()"> no firm on file</label>
+              <input id="psOff" type="checkbox" onchange="loadPeopleSearch(0)"> include people taken off</label>
             <span class="muted" id="psCount" style="margin-left:auto;font-size:13px"></span>
           </div>
-          <div id="psBox"><p class="muted">Type a name, or tick <em>no firm on file</em>.</p></div>
+          <div id="psBox"><p class="muted">Loading...</p></div>
+          <div id="psPager" style="margin-top:8px"></div>
         </div>
       </details>
       <details style="margin:0 0 14px">
@@ -7219,7 +7522,10 @@ ${abyAdminNav('/admin/brokers')}
  var firmDisp = [], firmSrc = [], firmSrcLabel = {}, firmPeopleId = '';
  // 'firm' or 'search' -- see savePerson. Two lists render the same controls, and a save
  // from one must not refetch the other.
- var personListMode = 'firm', psTimer = null, psSeq = 0;
+ var personListMode = 'firm', psTimer = null, psSeq = 0, psOffset = 0;
+ // The firm picker keeps its state PER ROW, keyed on the person id -- there are up to 300 of them
+ // on screen and a single shared cursor would move the highlight in somebody else's dropdown.
+ var fpTimer = {}, fpSeq = {}, fpHits = {}, fpCursor = {};
 
  function personInput(pid, field, value, width, placeholder){
    return '<input value="' + esc(value || '') + '"'
@@ -7271,23 +7577,52 @@ ${abyAdminNav('/admin/brokers')}
  // quietly stop agreeing about what a disposition is -- and this admin has that scar already.
  function peopleSearchSoon(){
    if (psTimer) clearTimeout(psTimer);
-   psTimer = setTimeout(loadPeopleSearch, 250);
+   // A new search term is a new question, so it goes back to the first page. Staying on page 7
+   // of the old answer is how a list reads as empty when it is not.
+   psTimer = setTimeout(function(){ loadPeopleSearch(0); }, 250);
  }
 
- async function loadPeopleSearch(){
+ // Populated once from the first response. ⛔ REBUILT ONLY WHEN EMPTY, or re-rendering the options
+ // would drop the choice somebody just made and quietly widen their filter.
+ function psFillOptions(d){
+   var sel = document.getElementById('psState');
+   if (sel && sel.options.length <= 1){
+     var sts = d.states || [];
+     for (var i = 0; i < sts.length; i++){
+       var o = document.createElement('option');
+       o.value = sts[i].state;
+       o.textContent = sts[i].state + ' (' + sts[i].n + ')';
+       sel.appendChild(o);
+     }
+   }
+   var ss = document.getElementById('psSource');
+   if (ss && ss.options.length <= 1){
+     var srcs = d.sources || [];
+     for (var j = 0; j < srcs.length; j++){
+       var o2 = document.createElement('option');
+       o2.value = srcs[j];
+       o2.textContent = (d.sourceLabels || {})[srcs[j]] || srcs[j];
+       ss.appendChild(o2);
+     }
+   }
+ }
+
+ async function loadPeopleSearch(offset){
    var box = document.getElementById('psBox');
    if (!box) return;
    personListMode = 'search';
+   psOffset = (typeof offset === 'number') ? offset : psOffset;
    var term = (document.getElementById('psQ').value || '').trim();
-   var noFirm = document.getElementById('psNoFirm').checked;
-   if (!term && !noFirm){
-     box.innerHTML = '<p class="muted">Type a name, or tick <em>no firm on file</em>.</p>';
-     document.getElementById('psCount').textContent = '';
-     return;
-   }
    var p = [];
    if (term) p.push('q=' + encodeURIComponent(term));
-   if (noFirm) p.push('no_firm=1');
+   p.push('firm=' + encodeURIComponent(document.getElementById('psFirm').value));
+   var stv = document.getElementById('psState').value;
+   if (stv) p.push('state=' + encodeURIComponent(stv));
+   var sv = document.getElementById('psSource').value;
+   if (sv) p.push('source=' + encodeURIComponent(sv));
+   p.push('sort=' + encodeURIComponent(document.getElementById('psSort').value));
+   if (document.getElementById('psOff').checked) p.push('include_off=1');
+   if (psOffset) p.push('offset=' + psOffset);
    var mine = ++psSeq;
    box.innerHTML = '<p class="muted">Looking...</p>';
    var r = await fetch('/api/admin/crm/persons?' + p.join('&'));
@@ -7299,52 +7634,251 @@ ${abyAdminNav('/admin/brokers')}
    if (d.error){
      box.innerHTML = '<p style="color:#a12622">Could not search: ' + esc(d.error) + '</p>';
      document.getElementById('psCount').textContent = '';
+     document.getElementById('psPager').innerHTML = '';
      return;
    }
+   psFillOptions(d);
    firmDisp = d.dispositions || [];
    firmSrc = d.sources || [];
    firmSrcLabel = d.sourceLabels || {};
    var rows = d.people || [];
-   document.getElementById('psCount').textContent =
-     rows.length + (d.capped ? ' shown of more' : (rows.length === 1 ? ' person' : ' people'));
+   var total = Number(d.total || 0);
+   // ⭐ THE TOTAL, NOT THE PAGE. "300 shown of more" cannot tell 301 from 4,961, and this is a list
+   // somebody is working THROUGH -- the number that matters is how many are left.
+   document.getElementById('psCount').textContent = total
+     ? ((psOffset + 1) + '-' + (psOffset + rows.length) + ' of ' + total)
+     : '0 people';
    if (!rows.length){
      box.innerHTML = '<p class="muted">Nobody matches that. '
        + 'Anybody marked do not contact or deceased is never in these results.</p>';
+     document.getElementById('psPager').innerHTML = '';
      return;
    }
-   var h = '<table class="grid"><thead><tr><th>NAME</th><th>FIRM</th><th>EMAIL</th><th>PHONE</th>'
-         + '<th>CITY</th><th>SOURCE</th><th>STATUS</th><th style="text-align:right">QUOTES</th>'
-         + '</tr></thead><tbody>';
+   // ⚠️ THE COLGROUP IS NOT DECORATION. table.grid is table-layout:fixed, so with no widths
+   // declared every column gets an equal ninth -- and an email address does not fit in a ninth,
+   // so EMAIL, the column Eric asked for by name, rendered as "sen1957@ya...".
+   var h = '<table class="grid">'
+         + '<colgroup><col style="width:13%"><col style="width:16%"><col style="width:19%">'
+         + '<col style="width:5%"><col style="width:10%"><col style="width:8%">'
+         + '<col style="width:11%"><col style="width:10%"><col style="width:8%"></colgroup>'
+         + '<thead><tr><th>NAME</th><th>FIRM</th><th>EMAIL</th>'
+         + '<th>STATE</th><th>PHONE</th><th>CITY</th><th>SOURCE</th><th>STATUS</th>'
+         + '<th style="text-align:right">QUOTES</th></tr></thead><tbody>';
    for (var i = 0; i < rows.length; i++){
      var x = rows[i], pid = x.person_id;
-     // ⭐ THE FIRM IS A LINK TO THE PANEL, so a search lands where the rest of the CRM lives
-     // rather than being a dead end. "No firm on file" is a STATE we accept, not a blank cell --
-     // it is the thing somebody would go and find out, and it is why this list exists.
+     // ⭐ THE FIRM IS A LINK TO THE PANEL when we have one, so the list lands where the rest of the
+     // CRM lives rather than being a dead end -- and a PICKER when we do not, because "no firm on
+     // file" is the one thing on this row somebody came here to fix.
      var firm = x.agency_id
        ? '<a href="?firm=' + encodeURIComponent(x.agency_id) + '">' + esc(x.agency_name || '(unnamed)') + '</a>'
-         + (x.agency_state ? ' <span class="muted">' + esc(x.agency_state) + '</span>' : '')
-       : '<span class="muted">no firm on file</span>';
+         + ' <button onclick="firmPickOpen(' + "'" + pid + "'" + ')" title="Move them to a different firm" '
+         + 'style="border:0;background:none;color:#8a97a8;cursor:pointer;font-size:12px;padding:0 2px">change</button>'
+       : firmPickBox(pid);
      h += '<tr><td>' + (esc(x.name || '') || '&mdash;') + '</td>'
-        + '<td>' + firm + '</td>'
-        + '<td>' + (x.email ? esc(x.email) : '<span class="muted">no email yet</span>') + '</td>'
-        + '<td>' + personInput(pid, 'phone', x.phone, '90px') + '</td>'
-        + '<td>' + personInput(pid, 'city', x.city, '90px') + '</td>'
+        + '<td class="firmcell" id="fp' + pid + '">' + firm + '</td>'
+        + '<td class="wrapcell">' + (x.email ? esc(x.email) : '<span class="muted">no email yet</span>') + '</td>'
+        + '<td>' + (x.agency_state ? esc(x.agency_state) : '<span class="muted">&mdash;</span>') + '</td>'
+        // ⚠️ WIDER THAN THE FIRM PANEL'S COPIES, DELIBERATELY. A phone number is 14 characters and
+        // the shared 90px control cut it to "(918) 637-49" -- readable on a panel you opened to
+        // edit one person, useless on a list somebody is SCANNING.
+        + '<td>' + personInput(pid, 'phone', x.phone, '118px') + '</td>'
+        + '<td>' + personInput(pid, 'city', x.city, '100px') + '</td>'
         + '<td>' + personSelect(pid, 'source', firmSrc, x.source, null, firmSrcLabel) + '</td>'
         + '<td>' + personSelect(pid, 'disposition', firmDisp, x.disposition, 'Active', null) + '</td>'
         + '<td style="text-align:right">' + (Number(x.quotes) || 0) + '</td></tr>';
      if (x.disposition){
        var since = x.disposition_at ? ' <span class="muted">since ' + esc(day(x.disposition_at)) + '</span>' : '';
-       h += '<tr><td></td><td colspan="7" style="padding-top:0">'
+       h += '<tr><td></td><td colspan="8" style="padding-top:0">'
           + personInput(pid, 'disposition_note', x.disposition_note, '100%', 'Why? (optional)')
           + since + '</td></tr>';
      }
    }
    h += '</tbody></table>';
-   // ⛔ A CAPPED LIST SAYS SO. The agency list truncated at 2,000 the moment the CE import passed
-   // it and said nothing, which reads as a complete answer.
-   if (d.capped) h += '<p class="muted" style="font-size:12.5px">Only the first ' + d.cap
-                    + ' are shown &mdash; there are more. Narrow the search.</p>';
    box.innerHTML = h;
+
+   // ⛔ A LIST THAT STOPS SAYS WHERE IT STOPPED. The agency list truncated at 2,000 the moment the
+   // CE import passed it and said nothing, which reads as a complete answer.
+   var pg = '';
+   if (psOffset > 0) pg += '<button onclick="loadPeopleSearch(' + Math.max(0, psOffset - d.cap) + ')" '
+     + 'style="padding:5px 12px;border:1px solid #c8d2de;border-radius:6px;background:#fff;cursor:pointer">Back</button> ';
+   if (d.capped) pg += '<button onclick="loadPeopleSearch(' + (psOffset + rows.length) + ')" '
+     + 'style="padding:5px 12px;border:1px solid #1a5c3a;border-radius:6px;background:#1a5c3a;color:#fff;cursor:pointer">Next '
+     + Math.min(d.cap, total - psOffset - rows.length) + '</button>';
+   document.getElementById('psPager').innerHTML = pg;
+ }
+
+ // ── ATTACH A BROKER TO A FIRM WE ALREADY HAVE ─────────────────────────────────────────────
+ //
+ // ⭐⭐ ERIC, 2026-08-27: "There isn't a way for it to do some sort of predictive text is there
+ // where if we start typing the firm name next to the broker's name it will suggest ones that we
+ // already have?" There is, and this is it.
+ //
+ // 🔴 IT CANNOT CREATE A FIRM, AND THAT IS THE POINT OF THE WHOLE CONTROL. His reason was "I don't
+ // want to create duplicates" -- so the only thing this can do is CHOOSE one of ours. A firm we do
+ // not have yet is added on the firm side, deliberately, where the name gets looked at.
+ //
+ // ⛔ A PLAIN datalist WAS NOT USED. It cannot show the quote and agent counts, which are the only
+ // things on screen that tell "Alliant" from "Alliant - DFW", and it hands back a STRING -- so the
+ // save would have to match a name back to a row and would land on the wrong one whenever two
+ // firms share a spelling. This posts an ID.
+ function firmPickBox(pid){
+   return '<div style="position:relative">'
+     + '<input id="fq' + pid + '" placeholder="Type a firm..." autocomplete="off" '
+     + 'oninput="firmPickSoon(' + "'" + pid + "'" + ')" '
+     + 'onkeydown="firmPickKey(event,' + "'" + pid + "'" + ')" '
+     // ⚠️ THE DELAY IS LOAD-BEARING. The suggestions are chosen on mousedown, which fires BEFORE
+     // blur; hiding them synchronously here would take the row away from under the click.
+     + 'onblur="firmPickBlur(' + "'" + pid + "'" + ')" '
+     + 'style="width:150px;padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px">'
+     + '<div id="fd' + pid + '" style="display:none;position:absolute;z-index:40;left:0;top:100%;'
+     + 'min-width:290px;background:#fff;border:1px solid #c8d2de;border-radius:6px;'
+     + 'box-shadow:0 6px 18px rgba(18,38,63,.14);max-height:260px;overflow:auto"></div></div>';
+ }
+
+ // Turn a filled firm cell back into a picker, so a wrong one can be corrected where it is wrong.
+ // ⭐ AND OFFER "no firm" HERE, because it is the UNDO. Attaching the wrong firm in a list somebody
+ // is working down fast is not a rare event, and without this the only way back is to attach a
+ // DIFFERENT wrong firm -- there is no route to blank, which is where they legitimately were.
+ function firmPickOpen(pid){
+   var cell = document.getElementById('fp' + pid);
+   if (!cell) return;
+   cell.innerHTML = firmPickBox(pid)
+     + '<button onclick="firmPickChoose(' + "'" + pid + "','')" + '" '
+     + 'style="border:0;background:none;color:#8a97a8;cursor:pointer;font-size:11.5px;padding:2px 0">'
+     + 'no firm</button>';
+   var el = document.getElementById('fq' + pid);
+   if (el) el.focus();
+ }
+
+ function firmPickBlur(pid){
+   setTimeout(function(){
+     var drop = document.getElementById('fd' + pid);
+     if (drop) drop.style.display = 'none';
+   }, 180);
+ }
+
+ function firmPickSoon(pid){
+   if (fpTimer[pid]) clearTimeout(fpTimer[pid]);
+   fpTimer[pid] = setTimeout(function(){ firmPickLoad(pid); }, 200);
+ }
+
+ async function firmPickLoad(pid){
+   var el = document.getElementById('fq' + pid);
+   var drop = document.getElementById('fd' + pid);
+   if (!el || !drop) return;
+   var t = (el.value || '').trim();
+   if (t.length < 2){ drop.style.display = 'none'; drop.innerHTML = ''; return; }
+   var mine = (fpSeq[pid] = (fpSeq[pid] || 0) + 1);
+   var r = await fetch('/api/admin/crm/firm-suggest?q=' + encodeURIComponent(t));
+   var d = await r.json().catch(function(){ return {}; });
+   if (mine !== fpSeq[pid]) return;
+   // 🔴 AN ERROR IS NOT "NO SUCH FIRM". That sentence is the one that talks somebody into adding a
+   // firm we already have, which is the single thing this control exists to prevent.
+   if (d.error){
+     drop.style.display = 'block';
+     drop.innerHTML = '<div style="padding:8px 10px;color:#a12622;font-size:13px">'
+       + 'Could not look that up: ' + esc(d.error) + '. Do not add a firm on the strength of this.</div>';
+     return;
+   }
+   var fs = d.firms || [];
+   fpHits[pid] = fs;
+   fpCursor[pid] = -1;
+   if (!fs.length){
+     drop.style.display = 'block';
+     drop.innerHTML = '<div style="padding:8px 10px;color:#5b6b7f;font-size:13px">'
+       + 'No firm of ours matches that. <strong>Check a shorter piece of the name</strong> before '
+       + 'concluding we do not have them &mdash; a new firm is added on the firm list, not here.</div>';
+     return;
+   }
+   var h = '';
+   for (var i = 0; i < fs.length; i++){
+     var f = fs[i];
+     var bits = [];
+     if (Number(f.quotes)) bits.push(f.quotes + (Number(f.quotes) === 1 ? ' quote' : ' quotes'));
+     if (Number(f.agents)) bits.push(f.agents + (Number(f.agents) === 1 ? ' agent' : ' agents'));
+     // A holding row's quotes and people are on its offices, so it counts zero of both and would
+     // otherwise read as a firm with nothing behind it. Say what it actually is.
+     if (Number(f.offices)) bits.push(f.offices + (Number(f.offices) === 1 ? ' office' : ' offices'));
+     if (f.parent_name) bits.push('part of ' + esc(f.parent_name));
+     if (f.city || f.state) bits.push(esc([f.city, f.state].filter(Boolean).join(', ')));
+     // ⭐ SAY WHICH SPELLING MATCHED. Somebody who typed the old name and is shown the survivor
+     // has to be told why, or the suggestion looks like a firm they have never heard of.
+     var via = f.matched_as
+       ? '<div style="font-size:11.5px;color:#8a6d1f">matched &ldquo;' + esc(f.matched_as) + '&rdquo;</div>' : '';
+     h += '<div onmousedown="firmPickChoose(' + "'" + pid + "','" + f.id + "'" + ')" '
+        + 'style="padding:7px 10px;cursor:pointer;border-bottom:1px solid #eef2f6" '
+        + 'onmouseover="this.style.background=' + "'#f2f7f4'" + '" '
+        + 'onmouseout="this.style.background=' + "''" + '">'
+        + '<div style="font-size:13.5px">' + esc(f.name) + '</div>' + via
+        + '<div class="muted" style="font-size:11.5px">' + (bits.join(' &middot; ') || 'nothing recorded yet') + '</div>'
+        + '</div>';
+   }
+   if (d.capped) h += '<div class="muted" style="padding:6px 10px;font-size:11.5px">'
+     + 'More match &mdash; type a little more.</div>';
+   drop.style.display = 'block';
+   drop.innerHTML = h;
+ }
+
+ // Arrow keys and Enter, because this is a list somebody works down with their hands on the
+ // keyboard. Escape shuts the suggestions without clearing what was typed.
+ function firmPickKey(ev, pid){
+   var fs = fpHits[pid] || [];
+   var drop = document.getElementById('fd' + pid);
+   if (ev.key === 'Escape'){ if (drop) drop.style.display = 'none'; return; }
+   if (!fs.length) return;
+   if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp'){
+     ev.preventDefault();
+     var n = fs.length;
+     fpCursor[pid] = ((fpCursor[pid] === undefined ? -1 : fpCursor[pid]) + (ev.key === 'ArrowDown' ? 1 : n - 1)) % n;
+     if (drop) for (var i = 0; i < drop.children.length; i++){
+       drop.children[i].style.background = (i === fpCursor[pid]) ? '#e7f1ea' : '';
+     }
+     return;
+   }
+   if (ev.key === 'Enter'){
+     ev.preventDefault();
+     var k = fpCursor[pid];
+     // ⛔ ENTER WITH NOTHING HIGHLIGHTED DOES NOTHING. Picking the first suggestion for somebody
+     // is how a broker ends up filed at a firm whose name merely starts the same way.
+     if (k >= 0 && fs[k]) firmPickChoose(pid, fs[k].id);
+   }
+ }
+
+ async function firmPickChoose(pid, agencyId){
+   var cell = document.getElementById('fp' + pid);
+   if (cell) cell.innerHTML = '<span class="muted">Saving...</span>';
+   var r = await fetch('/api/admin/crm/person-firm', {
+     method: 'POST', headers: {'Content-Type':'application/json'},
+     body: JSON.stringify({ id: pid, agency_id: agencyId }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok || d.error){
+     // 🔴 A REFUSED SAVE MUST NOT LOOK LIKE A SAVED ONE, and it must leave the control usable --
+     // a cell reading "Saving..." for ever is indistinguishable from a slow one.
+     if (cell) cell.innerHTML = '<span style="color:#a12622;font-size:12.5px">'
+       + esc(d.error || 'That did not save.') + '</span> ' + firmPickBox(pid);
+     return;
+   }
+   // ⭐ THE ROW IS PATCHED, NOT THE WHOLE LIST REFETCHED. Attaching a firm can move the person off
+   // the page they are on -- "none on file" is the filter this is used under -- and a list that
+   // reshuffles under your hands after every save is unusable for working down.
+   // ⚠️ The STATE cell is patched too, because state comes from the firm and it just changed.
+   if (cell){
+     cell.innerHTML = d.agency_id
+       ? ('<a href="?firm=' + encodeURIComponent(d.agency_id) + '">' + esc(d.agency_name) + '</a>'
+          + ' <span style="color:#1a5c3a;font-size:11.5px">saved</span>'
+          + (d.redirected_from
+             ? '<div style="font-size:11.5px;color:#8a6d1f">&ldquo;' + esc(d.redirected_from)
+               + '&rdquo; is the same firm</div>' : ''))
+       // Cleared. It goes back to a picker rather than to a dash, because somebody who has just
+       // undone a wrong firm is about to type the right one.
+       : firmPickBox(pid);
+     var row = cell.parentNode;
+     if (row && row.children && row.children[3]){
+       row.children[3].innerHTML = d.agency_state
+         ? esc(d.agency_state) : '<span class="muted">&mdash;</span>';
+     }
+   }
  }
 
  // ── ADD A PERSON, WITHOUT PRETENDING IT WAS AN EVENT ──────────────────────────────────────
