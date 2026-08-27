@@ -12262,7 +12262,13 @@ const MIGRATIONS = [
          "  owner TEXT," +
          "  updated_at TEXT" +
          ")",
-    table: "rfp_answer" },
+    // A REPRESENTATIVE COLUMN, and it is not decoration: the verifier probes table.column, so an
+    // entry with no column asks for "rfp_answer.undefined", which cannot exist. That made
+    // /api/migrate return ok:false on every single call since this table was added -- a health
+    // check that is permanently red is one nobody reads, which is the whole danger.
+    // updated_at is chosen because it is the LAST column in the CREATE TABLE above, so it also
+    // proves the statement was not truncated part way through.
+    table: "rfp_answer", column: "updated_at" },
   { sql: "CREATE INDEX IF NOT EXISTS rfp_answer_priority ON rfp_answer (priority, topic)",
     index: "rfp_answer_priority" },
   { sql: "CREATE INDEX IF NOT EXISTS rfp_answer_status ON rfp_answer (status)",
