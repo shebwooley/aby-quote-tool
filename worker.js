@@ -3157,6 +3157,16 @@ async function handleCrmPersonSearch(request, env) {
   const where = ["COALESCE(p.disposition,'') NOT IN ('" + SUPPRESSED.join("','") + "')"];
   const args = [];
   if (noFirm) where.push('p.agency_id IS NULL');
+  // A BROWSE AND A SEARCH ARE NOT THE SAME QUESTION, and this is where they part.
+  //
+  // BROWSING the no-firm people is a WORKING LIST -- "who could I call?" -- so it follows the same
+  // default as the firm list: nobody who has already been taken off. Somebody recorded as retired
+  // or as a wrong record is exactly who a call list must not put back in front of you.
+  //
+  // SEARCHING BY NAME IS A LOOKUP, and the opposite rule applies: you are after ONE person you
+  // already have in mind, and hiding them because somebody dispositioned them last year is how a
+  // search box earns the reputation of not working. So a term overrides this.
+  if (noFirm && !term) where.push("COALESCE(p.disposition,'') = ''");
   if (term) {
     // Name OR email, because a broker remembers one or the other and never knows which we hold.
     where.push('(lower(p.name) LIKE ? OR EXISTS (SELECT 1 FROM broker_directory d3 ' +
@@ -5048,7 +5058,9 @@ ${abyAdminNav('/admin/brokers')}
             the agency</strong> &mdash; and the only place a person with no firm on file appears at
             all. Anybody marked <em>do not contact</em> or <em>deceased</em> is never in these
             results; their record is still on their firm's panel, which is where the reason is
-            kept.</p>
+            kept. <strong>Browsing the no-firm list shows only people nobody has taken off it</strong>
+            &mdash; searching by name finds them whatever their status, because a search is for
+            somebody you already have in mind.</p>
           <div class="mfilters">
             <input id="psQ" placeholder="Name or email" oninput="peopleSearchSoon()"
                    style="min-width:240px;padding:5px 8px;border:1px solid #c8d2de;border-radius:5px;font-size:13px">
