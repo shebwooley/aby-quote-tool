@@ -64,7 +64,12 @@ const RETIRED = {
   // Everyone we track to that view's Never quoted filter. /admin/pipeline redirects rather than
   // 404s. The two endpoints went with it -- handleAdminAddProspects wrote into `brokers`, which
   // holds 6 rows on production and all 6 are leftover checker fixtures.
+  // 2026-08-26. The inline agent list on the Marketing view. Eric: "what are the arrows for
+  // anyway... maybe we should get rid of those." They opened a list the firm panel already shows,
+  // and the caret that opened them was what made every wrapped firm name misalign.
   "worker.js": [
+    "agentRows",
+    "toggleFirm",
     "adminPipelineHTML",
     "handleAdminPipeline",
     "handleAdminAddProspects",

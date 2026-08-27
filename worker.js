@@ -4547,6 +4547,16 @@ ${ADMIN_HEADER_CSS}
     instead of somewhere in the middle of a long page.
     A letter with no firms is DIMMED, never hidden -- a bar whose letters move around as you
     filter is harder to hit than the scrollbar it replaces. */
+ /* THE FIRM CELL. One block per row so a wrapped name lines up with its own first line. */
+ .firmcell{line-height:1.35}
+ /* ⛔ NOT UNDERLINED. Eric: "since every single agency will open when clicked, do we really need
+    them all underlined?" No -- when a whole column is links, underlining every one is noise on
+    1,552 rows. Weight and colour carry the affordance; the underline arrives on hover. */
+ .firmname{color:#12263f;font-weight:600;text-decoration:none}
+ .firmname:hover{color:#1a5c3a;text-decoration:underline}
+ .firmmeta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-top:2px}
+ .branches{font-size:11.5px;color:#1a5c3a;background:#e8f4ec;border-radius:9px;padding:1px 7px;font-weight:600}
+ .firmmeta .muted{font-size:11.5px}
  .azbar{display:flex;flex-wrap:wrap;gap:2px;margin:0 0 12px;align-items:center}
  .azbar button{border:1px solid transparent;background:none;border-radius:5px;cursor:pointer;
                font:600 12.5px ui-monospace,Consolas,monospace;color:#2f6f4f;padding:3px 7px;min-width:24px}
@@ -4729,7 +4739,7 @@ ${abyAdminNav('/admin/brokers')}
           <option value="all">Everything</option>
         </select>
         <select id="mTag" onchange="loadMkt()"><option value="">Any tag</option></select>
-        <input id="mFind" placeholder="Find a firm" oninput="paintMkt()"
+        <input id="mFind" placeholder="Find a firm, city or state" oninput="paintMkt()"
                style="padding:5px 8px;border:1px solid #c8d2de;border-radius:5px;font-size:13px">
         <span class="muted" id="mCount" style="margin-left:auto;font-size:13px"></span>
       </div>
@@ -6355,44 +6365,17 @@ ${abyAdminNav('/admin/brokers')}
  }
  var MKT_ALL = false;
 
- function agentRows(a){
-   var people = mktOpen[a.id];
-   if (people === undefined) return '<tr class="kid"><td></td><td colspan="10" class="muted">Loading...</td></tr>';
-   if (!people.length) return '<tr class="kid"><td></td><td colspan="10" class="muted">Nobody on file at this firm.</td></tr>';
-   var out = '';
-   for (var i = 0; i < people.length; i++){
-     var p = people[i];
-     // ⭐ "no email yet" is a STATE we chose to accept, not a missing value. A blank cell here would
-     // read as a broken row rather than as the next thing to go and find out.
-     out += '<tr class="kid"><td></td><td class="wrapcell" style="padding-left:26px">'
-          + (esc(p.name || '') || '<span class="muted">unnamed</span>')
-          + (Number(p.has_email) ? '' : ' <span class="muted" style="font-size:11.5px">no email yet</span>')
-          + '</td><td class="wrapcell" colspan="2">'
-          + (Number(p.has_email) ? esc(p.email) : '<span class="muted">&mdash;</span>')
-          + '</td><td class="wrapcell" colspan="2">' + (esc(p.phone || '') || '<span class="muted">&mdash;</span>')
-          + '</td><td class="c">' + (Number(p.quotes) || 0) + '</td><td colspan="4"></td></tr>';
-   }
-   return out;
- }
 
- async function toggleFirm(id){
-   if (mktOpen[id] !== undefined && !mktBusy[id]){ delete mktOpen[id]; paintMkt(); return; }
-   mktBusy[id] = 1; mktOpen[id] = undefined; paintMkt();
-   var r = await fetch('/api/admin/crm/people?agency_id=' + encodeURIComponent(id));
-   var d = await r.json().catch(function(){ return {}; });
-   // 🔴 AN ERROR IS NOT AN EMPTY FIRM. Three pages in this admin have rendered a failed query as a
-   // cheerful empty state; these must never look the same.
-   mktOpen[id] = d.error ? [] : (d.people || []);
-   delete mktBusy[id];
-   paintMkt();
- }
 
  function paintMkt(){
    renderAZ();
    paintStates();
    var find = (q('mFind').value || '').trim().toLowerCase();
    var rows = mktRows;
-   if (find) rows = rows.filter(function(x){ return String(x.name || '').toLowerCase().indexOf(find) !== -1; });
+   if (find) rows = rows.filter(function(x){
+     return (String(x.name || '') + ' ' + String(x.city || '') + ' ' + String(x.state || ''))
+              .toLowerCase().indexOf(find) !== -1;
+   });
    if (mktLetter) rows = rows.filter(function(x){ return letterOf(x.name) === mktLetter; });
 
    // The letter is NAMED in the count. A filtered list that does not say what is filtering it is
@@ -6422,12 +6405,14 @@ ${abyAdminNav('/admin/brokers')}
 
    var h = '<div style="overflow-x:auto">'
          + '<table class="grid" style="min-width:1080px"><colgroup>'
-         + '<col style="width:30px"><col><col style="width:96px">'
+         + '<col style="width:30px"><col><col style="width:40px">'
          + '<col style="width:58px"><col style="width:58px"><col style="width:58px">'
          + '<col style="width:124px"><col style="width:84px"><col style="width:92px">'
          + '<col style="width:120px"><col style="width:82px"></colgroup><thead><tr>'
          + '<th><input type="checkbox" onclick="selAll(this)"></th>'
-         + '<th>Firm</th><th>Where</th><th class="c">Agents</th><th class="c">Quotes</th>'
+         // Eric, 2026-08-26: "get rid of the city in the main view and just show state". The city
+         // is still SEARCHABLE and still on the firm panel -- it left the grid, not the record.
+         + '<th>Firm</th><th>St</th><th class="c">Agents</th><th class="c">Quotes</th>'
          // ⭐⭐ SALES SITS BESIDE QUOTES BECAUSE THE PAIR IS THE POINT. Quotes alone says who ASKS;
          // it takes both to see who BUYS, and this is the page you decide who to call from.
          + '<th class="c">Sales</th><th>Status</th>'
@@ -6435,30 +6420,36 @@ ${abyAdminNav('/admin/brokers')}
          + '</tr></thead><tbody>';
 
    function firmRow(a, depth){
-     var where = a.metro ? esc(a.metro) : (a.city ? esc(a.city) : '');
-     if (a.state) where += (where ? ', ' : '') + esc(a.state);
-     if (!where) where = '<span class="muted">&mdash;</span>';
+     // ⭐ THE CELL IS THE STATE, AND THE CITY IS THE TOOLTIP. Dropping a fact off a screen and
+     // dropping it out of reach are different things; this does the first and not the second.
+     var where = a.state ? esc(a.state) : '<span class="muted">&mdash;</span>';
+     var whereTip = [a.metro || a.city, a.state].filter(Boolean).join(', ');
      var tags = '';
      for (var k = 0; k < a.tags.length && k < 4; k++) tags += '<span class="tag">' + esc(a.tags[k].label) + '</span>';
      if (a.tags.length > 4) tags += '<span class="muted">+' + (a.tags.length - 4) + '</span>';
-     var open = mktOpen[a.id] !== undefined;
-     // ⭐ The caret only appears where there is something under it. A control that expands to
-     // nothing teaches people to stop pressing it.
-     var caret = Number(a.agents) > 0
-       ? '<a href="#" onclick="toggleFirm(' + "'" + a.id + "'" + ');return false" '
-         + 'style="text-decoration:none;font-size:11px;color:#5b6b7f;margin-right:5px">'
-         + (open ? '&#9660;' : '&#9654;') + '</a>'
-       : '<span style="display:inline-block;width:16px"></span>';
+     // ⭐ BRANCHES ARE COUNTED IN WORDS. The caret that used to sit here said only "there is
+     // something below"; a count says how much, and it does not have to be pressed to say it.
+     var kidCount = (kids[a.id] || []).length;
+     var branches = kidCount
+       ? '<span class="branches">' + kidCount + (kidCount === 1 ? ' branch' : ' branches') + '</span>'
+       : '';
      var out = '<tr>'
         + '<td><input type="checkbox" ' + (mktSel[a.id] ? 'checked ' : '') + 'onclick="selOne(this,' + "'" + a.id + "'" + ')"></td>'
-        + '<td class="wrapcell"' + (depth ? ' style="padding-left:18px"' : '') + '>' + caret
-        // ⭐ THE NAME IS THE LINK. Eric: "I would prefer that the agency name be linked where it
-        // opens when you click it." A separate open link was a second thing to aim at for no reason.
-        + '<a href="?firm=' + encodeURIComponent(a.id) + '" onclick="openFirm(' + "'" + a.id + "'" + ');return false">'
-        + (depth ? '' : '<strong>') + esc(a.name) + (depth ? '' : '</strong>') + '</a>'
-        + (depth ? ' <span class="muted" style="font-size:11.5px">branch</span>' : '')
-        + (a.needs_review ? '<span class="rev" title="' + esc(a.needs_review) + '">check</span>' : '') + '</td>'
-        + '<td>' + where + '</td>'
+        // 🔴 ONE BLOCK, NOT THREE INLINE THINGS. The name is its own element with its own left
+        // edge, so a name that wraps lines up with itself. That is the whole fix for the ragged
+        // column in Eric's screenshot -- the badges sit BELOW the name rather than after it.
+        + '<td class="firmcell"' + (depth ? ' style="padding-left:20px"' : '') + '>'
+        + '<a class="firmname" href="?firm=' + encodeURIComponent(a.id) + '" onclick="openFirm('
+        + "'" + a.id + "'" + ');return false">' + esc(a.name) + '</a>'
+        + ((branches || depth || a.needs_review)
+            ? '<div class="firmmeta">'
+              + branches
+              + (depth ? '<span class="muted">branch</span>' : '')
+              + (a.needs_review ? '<span class="rev" title="' + esc(a.needs_review) + '">check the name</span>' : '')
+              + '</div>'
+            : '')
+        + '</td>'
+        + '<td' + (whereTip ? ' title="' + esc(whereTip) + '"' : '') + '>' + where + '</td>'
         + '<td class="c">' + (a.agents || '<span class="muted">0</span>') + '</td>'
         + '<td class="c">' + (a.quotes ? a.quotes : '<span class="never">never</span>') + '</td>'
         // ⚠️ NO SALES and NEVER QUOTED are different facts and must not print the same way. A firm
@@ -6470,7 +6461,6 @@ ${abyAdminNav('/admin/brokers')}
         + '<td class="wrapcell">' + (tags || '<span class="muted">&mdash;</span>') + '</td>'
         + '<td class="date">' + (a.last_contact ? day(a.last_contact) : '<span class="muted">&mdash;</span>') + '</td>'
         + '</tr>';
-     if (open) out += agentRows(a);
      var kl = kids[a.id] || [];
      for (var m = 0; m < kl.length; m++) out += firmRow(kl[m], (depth || 0) + 1);
      return out;
