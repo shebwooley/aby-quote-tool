@@ -198,6 +198,40 @@ const RULES = [
       && /source:\s*'event'/.test(f.worker),
   },
   {
+    name: "every field the person endpoint accepts has a control that reaches it",
+    why: "people.disposition, .disposition_note and .disposition_at were migrated onto the table"
+       + " on 2026-08-26 and NOTHING IN THE WORKER READ OR WROTE ANY OF THEM -- three columns,"
+       + " zero readers, zero writers. So 'retired', which Eric asked for by name the same"
+       + " evening, was in the vocabulary and unselectable anywhere. A value nobody can choose"
+       + " reads as a missing FEATURE rather than a missing button, which is why this is a"
+       + " reachability rule and not a schema one.",
+    // ⭐⭐ THIS DERIVES THE FIELD LIST FROM THE HANDLER ITSELF rather than hard-coding it, so
+    // ADDING a field to the endpoint without giving it a control reddens too. A rule listing the
+    // fields by hand would only ever guard the ones somebody remembered to list -- and the whole
+    // defect being guarded is a field nobody remembered.
+    holds: (f) => {
+      const block = (f.worker.match(/async function handleCrmPersonField[\s\S]*?\n\}/) || [''])[0];
+      if (!block) return false;
+      const fields = [...block.matchAll(/^\s{4}([a-z_]+):\s*\(v\)/gm)].map((m) => m[1]);
+      if (fields.length < 5) return false;
+      // The control has to name the field at a CALL SITE -- personInput(pid, 'city', ...) --
+      // never merely somewhere in the file, or the handler's own allow-list would satisfy it.
+      return fields.every((k) =>
+        new RegExp("person(?:Input|Select)\\(pid, '" + k + "'").test(f.worker));
+    },
+  },
+  {
+    name: "the person dropdown is built from the server's vocabulary, not a copy in the page",
+    why: "DISPOSITIONS gained 'retired' on Eric's word. A hand-written list in the page would go"
+       + " on offering yesterday's options while the endpoint accepted today's, and the two would"
+       + " only disagree for the one value somebody had just asked for. The page therefore renders"
+       + " whatever the server sends, and the server sends DISPOSITIONS itself.",
+    holds: (f) => /dispositions:\s*DISPOSITIONS/.test(f.worker)
+      && /firmDisp\s*=\s*d\.dispositions/.test(f.worker)
+      && /personSelect\(pid, 'disposition', firmDisp/.test(f.worker)
+      && /'retired'/.test(f.worker),
+  },
+  {
     name: "bulk apply is reachable from the rows themselves",
     why: "Eric asked for tick-the-rows-pick-a-tag-apply. The bar only appears once something is"
        + " selected, so the checkbox is its only door.",
@@ -666,6 +700,21 @@ const SABOTAGES = [
     // being told somebody works somewhere is recorded as having met them at an event.
     why: "a hand-added person is stamped as having come from an event",
     apply: (f) => ({ ...f, worker: f.worker.replace(/source: 'hand_added'/g, "source: 'event'") }),
+  },
+  {
+    // ⭐ THE ENDPOINT KEEPS ACCEPTING THE FIELD AND ONLY THE CONTROL GOES. That is the exact
+    // state this rule exists for and the exact state the CRM was in for a day: a write path
+    // fully built, validated, stamped -- and reachable from nothing.
+    why: "the person's disposition control is removed while the endpoint still accepts it",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /personSelect\(pid, 'disposition', firmDisp/g, "personSelect(pid, 'nothing', firmDisp") }),
+  },
+  {
+    // The subtler half: the page stops asking the server what the options are and keeps its own
+    // list. Everything still works, and the one value Eric just asked for is missing.
+    why: "the page keeps its own copy of the disposition list instead of the server's",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /firmDisp = d\.dispositions \|\| \[\];/g, "firmDisp = ['not_interested'];") }),
   },
   {
     why: "the marketing switch is removed from the page",

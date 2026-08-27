@@ -74,6 +74,7 @@ export default {
     if (path === '/api/admin/crm/delete' && method === 'POST') return withAuth(request, env, () => handleCrmDelete(request, env));
     if (path === '/api/admin/crm/person'  && method === 'GET')  return withAuth(request, env, () => handleCrmPerson(request, env));
     if (path === '/api/admin/crm/link'    && method === 'POST') return withAuth(request, env, () => handleCrmLinkPerson(request, env));
+    if (path === '/api/admin/crm/person-field' && method === 'POST') return withAuth(request, env, () => handleCrmPersonField(request, env));
     if (path === '/api/admin/crm/suggest' && method === 'GET')  return withAuth(request, env, () => handleCrmSuggestPeople(request, env));
     if (path === '/api/admin/rfp/library'     && method === 'GET')  return withAuth(request, env, () => handleRfpLibrary(request, env));
     if (path === '/api/admin/rfp/answer'      && method === 'POST') return withAuth(request, env, () => handleRfpAnswerSave(request, env));
@@ -3032,6 +3033,28 @@ const DISPOSITIONS = ['out_of_business', 'no_group_products', 'not_interested', 
 // is where the record is kept and where somebody looks to find out why.
 const SUPPRESSED = ['do_not_contact', 'deceased'];
 
+// WHERE A PERSON CAME FROM, AND IT IS A WIDER LIST THAN AN IMPORT MAY CLAIM.
+//
+// CRM_SOURCES is what an IMPORT is allowed to assert -- three values, because an importer should
+// not be able to invent a provenance. This is what a HUMAN may correct it to, and it has to cover
+// every value already in the register or the correction screen could not describe what is there.
+//
+// Eric, 2026-08-27, asking for exactly this: "some of the people we're going to import are
+// actually the ones who have requested some of the quotes that we've already recorded, so they'll
+// need to be ABY Brokers as the source, but I won't know that right away."
+//
+// SOURCE IS SET ONCE AT FIRST CONTACT, which is what makes a correction screen necessary rather
+// than optional: the field records where we MET somebody, so the only way it ever changes is a
+// person looking at the record and knowing better. Measured in production 2026-08-27:
+// cce_attendee 2,647 - web_research 1,672 - purchased_ok_doi 499 - aby_broker 140 - event 1.
+const PERSON_SOURCES = ['aby_broker', 'cce_attendee', 'web_research', 'purchased_ok_doi',
+                        'event', 'hand_added', 'quotes', 'import'];
+const SOURCE_LABEL = {
+  aby_broker: 'ABY Broker', cce_attendee: 'CCE Attendee', web_research: 'Web research',
+  purchased_ok_doi: 'Purchased (OK DOI)', event: 'Event', hand_added: 'Added by hand',
+  quotes: 'Seen on a quote', import: 'Imported',
+};
+
 // How many firms the agency list will return. ⚠️ It is fetched as CAP + 1 so the handler can tell
 // "exactly this many" from "more than this", and the page says which. Raising it is not the fix
 // on its own -- saying so is.
@@ -3095,6 +3118,75 @@ async function handleCrmAgencyField(request, env) {
   return jsonResp({ ok: true, field, value, metro: field === 'city' ? metroFor(value, body.state) : undefined });
 }
 
+
+/**
+ * ONE FIELD ON ONE PERSON. The mirror of handleCrmAgencyField, and deliberately its twin.
+ *
+ * WHY IT HAD TO EXIST, 2026-08-27: people.disposition, people.disposition_note and
+ * people.disposition_at had been migrated onto the table and NOTHING IN THE WORKER READ OR WROTE
+ * ANY OF THEM. Three columns, zero readers, zero writers. So "retired" -- which Eric asked for by
+ * name and which shipped into DISPOSITIONS the same evening -- was in the vocabulary and could not
+ * be chosen anywhere, which reads as a missing feature rather than a missing button.
+ *
+ * A DISPOSITION ON A PERSON IS NOT A DISPOSITION ON THEIR FIRM, and that is the whole point.
+ * The comment above DISPOSITIONS says it: a firm goes out of business, a person retires or dies or
+ * moves on, and the FIRM is unaffected. Before this, recording that one agent retired could only
+ * have been done by marking their agency retired -- which would have taken the whole firm off the
+ * marketing list on the strength of one person leaving.
+ *
+ * A CLOSED LIST OF COLUMNS, never a name from the request -- same rule, same reason.
+ */
+async function handleCrmPersonField(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const raw = String(body.id || body.person_id || body.email || '').trim();
+  if (!raw) return jsonResp({ error: 'Which person?' }, 400);
+  // An ADDRESS is resolved to the person; it is never the key. Same helper the read side uses, so
+  // the two cannot drift about what "this person" means.
+  const resolved = await crmResolvePerson(env, raw);
+  if (!resolved.id) return jsonResp({ error: resolved.why }, 400);
+  const id = resolved.id;
+
+  const allowed = {
+    // NO name HERE, ON PURPOSE. Every field this sets has a control on the firm panel, and a
+    // field with no caller is the exact defect this handler was written to fix -- shipping one
+    // in the same change would be comic. Renaming a human is also a different act from
+    // correcting their city: it is how two records quietly become one person's, and there is no
+    // screen asking for it.
+    phone: (v) => String(v || '').trim().slice(0, 40),
+    city: (v) => String(v || '').trim().slice(0, 80) || null,
+    source: (v) => {
+      const t = String(v || '').trim().toLowerCase();
+      return (t === '' || PERSON_SOURCES.includes(t)) ? t || null : undefined;
+    },
+    disposition: (v) => {
+      const d = String(v || '').trim().toLowerCase();
+      // Blank puts them back on the list, which has to stay possible: somebody recorded as retired
+      // who turns out to be working is a correction, not a new record.
+      return (d === '' || DISPOSITIONS.includes(d)) ? d || null : undefined;
+    },
+    disposition_note: (v) => String(v || '').trim().slice(0, 500) || null,
+  };
+
+  const field = String(body.field || '').trim();
+  if (!Object.prototype.hasOwnProperty.call(allowed, field)) {
+    return jsonResp({ error: 'That is not a field this sets.' }, 400);
+  }
+  const value = allowed[field](body.value);
+  if (value === undefined) return jsonResp({ error: 'That value is not one of the allowed ones.' }, 400);
+
+  // SETTING A DISPOSITION STAMPS WHEN, and CLEARING IT CLEARS THE STAMP. "Retired" recorded in
+  // 2024 is a different fact from "retired" last week, and a date left behind on somebody who is
+  // back on the list is a claim about a decision that has been withdrawn.
+  const now = new Date().toISOString();
+  const stamp = (field === 'disposition');
+  const sql = stamp
+    ? 'UPDATE people SET disposition = ?, disposition_at = ?, updated_at = ? WHERE id = ?'
+    : 'UPDATE people SET ' + field + ' = ?, updated_at = ? WHERE id = ?';
+  const binds = stamp ? [value, value ? now : null, now, id] : [value, now, id];
+  const r = await env.DB.prepare(sql).bind(...binds).run();
+  if (!r || !r.meta || !r.meta.changes) return jsonResp({ error: 'No such person.' }, 404);
+  return jsonResp({ ok: true, id, field, value });
+}
 
 /**
  * Find or create an agency by name, safely under concurrency.
@@ -3639,19 +3731,29 @@ async function handleCrmAgencyPeople(request, env) {
       // people: broker_directory is keyed on an ADDRESS and has no city of its own. Without the
       // join, every agent we hold by email would show a blank city while the phone-only ones
       // showed theirs -- a column that looks broken rather than one that is simply not known yet.
+      // THE PERSON ID IS CARRIED ON BOTH ARMS, and without it nothing on this panel could be
+      // edited: the emailed arm is keyed on an ADDRESS, so the row had no handle on the human
+      // behind it. The disposition rides along for the same reason the city does -- it lives on
+      // the PERSON, and a row that cannot show it cannot let anybody set it.
       "SELECT d.name AS name, d.email AS email, d.phone AS phone, d.quote_count AS quotes, " +
-      "       1 AS has_email, COALESCE(pd.city,'') AS city, COALESCE(d.source,'quotes') AS source " +
+      "       1 AS has_email, COALESCE(pd.city,'') AS city, COALESCE(d.source,'quotes') AS source, " +
+      "       d.person_id AS person_id, COALESCE(pd.disposition,'') AS disposition, " +
+      "       COALESCE(pd.disposition_note,'') AS disposition_note, pd.disposition_at AS disposition_at " +
       'FROM broker_directory d LEFT JOIN people pd ON pd.id = d.person_id ' +
       'WHERE d.agency_id = ? ' +
       'UNION ALL ' +
       "SELECT p.name AS name, '' AS email, COALESCE(p.phone,'') AS phone, 0 AS quotes, " +
-      "       0 AS has_email, COALESCE(p.city,'') AS city, COALESCE(p.source,'import') AS source " +
+      "       0 AS has_email, COALESCE(p.city,'') AS city, COALESCE(p.source,'import') AS source, " +
+      "       p.id AS person_id, COALESCE(p.disposition,'') AS disposition, " +
+      "       COALESCE(p.disposition_note,'') AS disposition_note, p.disposition_at AS disposition_at " +
       'FROM people p WHERE p.agency_id = ? ' +
       '  AND NOT EXISTS (SELECT 1 FROM broker_directory d2 WHERE d2.person_id = p.id) ' +
       'ORDER BY has_email DESC, quotes DESC, name COLLATE NOCASE'
     ).bind(id, id).all();
     const rows = r.results || [];
-    return jsonResp({ people: rows, matched: rows.length });
+    return jsonResp({ people: rows, matched: rows.length,
+                      dispositions: DISPOSITIONS, sources: PERSON_SOURCES,
+                      sourceLabels: SOURCE_LABEL });
   } catch (err) {
     // 🔴 AN ERROR IS NOT AN EMPTY FIRM. The two must never render the same way -- this admin has
     // confused them before (TRAPS #253, #264).
@@ -6916,6 +7018,7 @@ ${abyAdminNav('/admin/brokers')}
  async function loadFirmPeople(id){
    var box = document.getElementById('firmPeople');
    if (!box) return;
+   firmPeopleId = id;   // so a saved disposition can refetch the list it changed the shape of
    var r = await fetch('/api/admin/crm/people?agency_id=' + encodeURIComponent(id));
    var d = await r.json().catch(function(){ return {}; });
    if (d.error){ box.innerHTML = '<p class="muted">Could not load these: ' + esc(d.error) + '</p>'; return; }
@@ -6924,23 +7027,103 @@ ${abyAdminNav('/admin/brokers')}
                                     + addPersonForm(id); return; }
    var noEmail = 0;
    for (var i = 0; i < rows.length; i++){ if (!Number(rows[i].has_email)) noEmail++; }
+   // The vocabulary comes from the SERVER, never from a copy kept here. DISPOSITIONS gained
+   // "retired" on Eric's word and a hand-written list in the page would have gone on offering
+   // yesterday's options while the endpoint accepted today's.
+   firmDisp = d.dispositions || [];
+   firmSrc = d.sources || [];
+   firmSrcLabel = d.sourceLabels || {};
    var h = '<table class="grid"><thead><tr><th>NAME</th><th>EMAIL</th><th>PHONE</th><th>CITY</th>'
-         + '<th style="text-align:right">QUOTES</th></tr></thead><tbody>';
+         + '<th>SOURCE</th><th>STATUS</th><th style="text-align:right">QUOTES</th></tr></thead><tbody>';
    for (var j = 0; j < rows.length; j++){
      var x = rows[j];
+     var pid = x.person_id || '';
+     // ⛔ A ROW WITH NO PERSON ID GETS NO CONTROLS, AND SAYS SO. An address that was never
+     // linked to a person has nothing to write to, and rendering a live-looking dropdown over it
+     // would silently drop whatever somebody chose.
+     var editable = !!pid;
      // ⭐ "No email yet" is a STATE we chose to accept, not a missing value. Saying so stops it
      // reading as a broken row, and it is the thing somebody would go and find out.
      h += '<tr><td>' + (esc(x.name || '') || '&mdash;') + '</td>'
         + '<td>' + (Number(x.has_email) ? esc(x.email) : '<span class="muted">no email yet</span>') + '</td>'
-        + '<td>' + (esc(x.phone || '') || '&mdash;') + '</td>'
-        + '<td>' + (esc(x.city || '') || '&mdash;') + '</td>'
+        + '<td>' + (editable ? personInput(pid, 'phone', x.phone, '90px') : (esc(x.phone || '') || '&mdash;')) + '</td>'
+        + '<td>' + (editable ? personInput(pid, 'city', x.city, '90px') : (esc(x.city || '') || '&mdash;')) + '</td>'
+        + '<td>' + (editable ? personSelect(pid, 'source', firmSrc, x.source, null, firmSrcLabel)
+                             : '<span class="muted">' + esc(x.source || '') + '</span>') + '</td>'
+        + '<td>' + (editable ? personSelect(pid, 'disposition', firmDisp, x.disposition, 'Active', null)
+                             : '<span class="muted">&mdash;</span>') + '</td>'
         + '<td style="text-align:right">' + (Number(x.quotes) || 0) + '</td></tr>';
+     // The REASON sits under the row that carries it, and only when there is a status to explain.
+     // A note box on every row would be five hundred empty inputs on a firm like Higginbotham.
+     if (editable && x.disposition){
+       var since = x.disposition_at ? ' <span class="muted">since ' + esc(day(x.disposition_at)) + '</span>' : '';
+       h += '<tr><td></td><td colspan="6" style="padding-top:0">'
+          + personInput(pid, 'disposition_note', x.disposition_note, '100%', 'Why? (optional)')
+          + since + '</td></tr>';
+     }
    }
    h += '</tbody></table>';
+   if (rows.length && !rows[0].person_id) h += '<p class="muted" style="font-size:12.5px">'
+      + 'Some of these have no person record yet, so they cannot be edited here.</p>';
    if (noEmail) h += '<p class="muted" style="font-size:12.5px;margin-top:6px">'
                   + noEmail + ' of these ' + (noEmail === 1 ? 'has' : 'have')
                   + ' no email address yet and can only be reached by phone.</p>';
    box.innerHTML = h + addPersonForm(id);
+ }
+
+ // ── EDITING ONE PERSON, FROM THE FIRM PANEL ────────────────────────────────
+ //
+ // 🔴 people.disposition, .disposition_note and .disposition_at were migrated onto the table and
+ // NOTHING READ OR WROTE ANY OF THEM. So "retired" -- which Eric asked for by name, and which
+ // shipped into DISPOSITIONS the same evening -- was in the vocabulary and unselectable anywhere.
+ // A value nobody can choose reads as a missing FEATURE, not a missing button.
+ //
+ // ⭐ THE DISPOSITION IS ON THE PERSON, NOT THE FIRM, AND THAT IS THE POINT. Before this, the only
+ // way to record that one agent had retired was to mark their AGENCY retired -- which takes the
+ // whole firm off the marketing list because one person left.
+ //
+ // ⭐ SOURCE IS EDITABLE HERE FOR A REASON ERIC GAVE: "some of the people we're going to import
+ // are actually the ones who have requested some of the quotes that we've already recorded, so
+ // they'll need to be ABY Brokers as the source, but I won't know that right away." Source is set
+ // ONCE at first contact, so correcting it by hand is the only way it can ever change.
+ var firmDisp = [], firmSrc = [], firmSrcLabel = {}, firmPeopleId = '';
+
+ function personInput(pid, field, value, width, placeholder){
+   return '<input value="' + esc(value || '') + '"'
+        + (placeholder ? ' placeholder="' + esc(placeholder) + '"' : '')
+        + ' onchange="savePerson(this, ' + JSON.stringify(pid) + ', ' + JSON.stringify(field) + ')"'
+        + ' style="width:' + width + ';padding:4px 6px;border:1px solid #c8d2de;border-radius:4px;font-size:12.5px">';
+ }
+
+ function personSelect(pid, field, values, current, blankLabel, labels){
+   var o = '<option value="">' + esc(blankLabel || '\u2014') + '</option>';
+   for (var i = 0; i < values.length; i++){
+     var v = values[i];
+     var label = (labels && labels[v]) ? labels[v] : (DISP_LABEL[v] || v);
+     o += '<option value="' + esc(v) + '"' + (current === v ? ' selected' : '') + '>' + esc(label) + '</option>';
+   }
+   return '<select onchange="savePerson(this, ' + JSON.stringify(pid) + ', ' + JSON.stringify(field) + ')"'
+        + ' style="padding:4px 6px;border:1px solid #c8d2de;border-radius:4px;font-size:12.5px">' + o + '</select>';
+ }
+
+ // ⛔ THE LIST IS REFETCHED AFTER A DISPOSITION, NOT PATCHED IN MEMORY -- the same rule the firm
+ // panel already follows, and for a sharper reason here: setting one lays out a note row under it
+ // and clearing one takes that row away, so the table's SHAPE changes, not just a cell.
+ async function savePerson(el, pid, field){
+   var box = document.getElementById('firmPeople');
+   var r = await fetch('/api/admin/crm/person-field', {
+     method: 'POST', headers: {'Content-Type':'application/json'},
+     body: JSON.stringify({ id: pid, field: field, value: el.value }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok){
+     // 🔴 A REFUSED SAVE MUST NOT LOOK LIKE A SAVED ONE. The control keeps whatever was typed, so
+     // leaving it alone would show the new value sitting in a field that never took it.
+     if (box) box.insertAdjacentHTML('afterbegin',
+       '<p class="muted" style="color:#a11">That did not save: ' + esc(d.error || 'unknown error') + '</p>');
+     return;
+   }
+   if (field === 'disposition') loadFirmPeople(firmPeopleId);
  }
 
  // ── ADD A PERSON, WITHOUT PRETENDING IT WAS AN EVENT ──────────────────────────────────────
