@@ -259,6 +259,29 @@ const RULES = [
       && /handleCrmPersonFirm/.test(f.worker),
   },
   {
+    name: "a note written on a PERSON can be read back on a screen",
+    why: "crm_events has accepted a note on a person since the CRM was built and /api/admin/crm"
+       + " serves them when asked -- but for four days the ONLY caller in the whole page asked for"
+       + " entity_type=agency, so every note anybody wrote on a human went into the database and off"
+       + " the screen. Found 2026-08-27 by writing one Eric asked for and then looking for it: the"
+       + " write reported ok:true and written:1, and all of that was true.",
+    // Both halves. A count on the row that opens nothing is a badge; a panel nothing announces is
+    // a screen nobody finds.
+    holds: (f) => /fetch\('\/api\/admin\/crm\?entity_type=person&entity_id='/.test(f.worker)
+      && /function notesToggle\(/.test(f.worker)
+      && /function noteButton\(/.test(f.worker)
+      && /noteButton\(pid, Number\(x\.notes\)/.test(f.worker)
+      && /AS notes, /.test(f.worker),
+  },
+  {
+    name: "a note can be written on a person from the same screen that shows them",
+    why: "Reading them back is half of it. Eric's own use is a fact he learns while working down"
+       + " the list -- 'she works in partnership with Navigation Financial' -- and a panel that can"
+       + " only display is one he has to leave to use.",
+    holds: (f) => /function noteSave\(/.test(f.worker)
+      && /kind: 'note', body: text, entities: \[\{ type: 'person', id: pid \}\]/.test(f.worker),
+  },
+  {
     name: "attaching a broker to a firm writes where that person's firm is actually read from",
     why: "handleCrmImport records the link on the ADDRESS row and clears people.agency_id whenever"
        + " somebody has an email, deliberately -- and the firm panel counts an addressed person"
@@ -778,6 +801,20 @@ const SABOTAGES = [
     why: "the person search stops asking the server anything",
     apply: (f) => ({ ...f, worker: f.worker.replace(
       /fetch\('\/api\/admin\/crm\/persons\?'/g, "fetch('/api/admin/crm/nothing?'") }),
+  },
+  {
+    // The exact regression this pair of rules exists for: the panel still opens, and asks the
+    // AGENCY timeline for a person's id -- which answers 200 with an empty list, for ever.
+    why: "the person's notes are fetched from the agency timeline, so they read as none",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /fetch\('\/api\/admin\/crm\?entity_type=person&entity_id='/g,
+      "fetch('/api/admin/crm?entity_type=agency&entity_id='") }),
+  },
+  {
+    // The note count is dropped from the row, so a person with notes looks like a person without.
+    why: "the row stops saying whether a person has any notes",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /noteButton\(pid, Number\(x\.notes\) \|\| 0\)/g, "''") }),
   },
   {
     // The picker renders and offers firms; only the SAVE goes. This is the shape that looks most

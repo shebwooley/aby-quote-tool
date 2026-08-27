@@ -3257,6 +3257,14 @@ async function handleCrmPersonSearch(request, env) {
       "       COALESCE(a.state,'') AS agency_state, COALESCE(a.city,'') AS agency_city, " +
       '       (SELECT MIN(d.email) FROM broker_directory d WHERE d.person_id = p.id) AS email, ' +
       '       (SELECT COUNT(*) FROM broker_directory d6 WHERE d6.person_id = p.id) AS addresses, ' +
+      // 🔴🔴 A NOTE ON A PERSON WAS STORED AND SHOWN NOWHERE. crm_events has taken person notes
+      // since the CRM was built and handleCrmList will serve them -- but the ONLY caller in the
+      // whole page asks for entity_type=agency, so every note anybody ever wrote on a human went
+      // into the database and off the screen. Found 2026-08-27 by writing one Eric asked for and
+      // then looking for it. ⭐ The COUNT rides on the row so a note announces itself; the note
+      // itself is fetched when somebody opens it.
+      "       (SELECT COUNT(*) FROM crm_events e WHERE e.entity_type = 'person' " +
+      "          AND e.entity_id = p.id AND e.kind = 'note') AS notes, " +
       '       (SELECT COALESCE(SUM(d2.quote_count),0) FROM broker_directory d2 WHERE d2.person_id = p.id) AS quotes ' +
       'FROM people p JOIN pa ON pa.pid = p.id LEFT JOIN agencies a ON a.id = pa.aid ' +
       'WHERE ' + where.join(' AND ') + ' ' +
@@ -5180,6 +5188,16 @@ ${ADMIN_HEADER_CSS}
     ⛔ Do NOT fix this by widening the rule above: table.grid is table-layout:fixed and the
     ellipsis is Eric's own fix for the agency column eating every other column's width. */
  table.grid td.firmcell{overflow:visible}
+ /* 🔴 A SELECT SIZES ITSELF TO ITS LONGEST OPTION, NOT TO ITS COLUMN. Under table-layout:fixed
+    that means the control renders wider than the cell and the cell clips it mid-word -- the
+    source dropdown wanted 148px in a 107px column and read "CCE Attende". Measured, not guessed:
+    the real viewport here is 1062 CSS pixels, not the 1180 the layout is capped at. */
+ table.grid select{max-width:100%}
+ /* ▶️ AND THE RULE THIS PROJECT ALREADY WROTE DOWN (TRAPS #226): a container that can be narrower
+    than its content must SCROLL, not clip. Hiding the overflow is only safe when you can PROVE the
+    content fits, and a table whose widths come from broker-typed firm names can never prove it. */
+ .gridscroll{overflow-x:auto}
+ .gridscroll table.grid{min-width:940px}
  .c{text-align:center;font-variant-numeric:tabular-nums}
  th.c{text-align:center}
  .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
@@ -7657,13 +7675,18 @@ ${abyAdminNav('/admin/brokers')}
    // ⚠️ THE COLGROUP IS NOT DECORATION. table.grid is table-layout:fixed, so with no widths
    // declared every column gets an equal ninth -- and an email address does not fit in a ninth,
    // so EMAIL, the column Eric asked for by name, rendered as "sen1957@ya...".
-   var h = '<table class="grid">'
+   // ⛔ NO PHONE COLUMN, DELIBERATELY. Eric asked for "name, agency name, email, and state"; phone
+   // and city came along from the search box this grew out of. At the real 1062px viewport ten
+   // columns cannot all be read, and phone is the one this job never uses -- it is still editable
+   // on the firm panel, where somebody is looking at ONE person rather than scanning three hundred.
+   // ⭐ CITY STAYS, because for somebody with no firm it is the only thing that places them.
+   var h = '<div class="gridscroll"><table class="grid">'
          + '<colgroup><col style="width:13%"><col style="width:16%"><col style="width:19%">'
-         + '<col style="width:5%"><col style="width:10%"><col style="width:8%">'
-         + '<col style="width:11%"><col style="width:10%"><col style="width:8%"></colgroup>'
+         + '<col style="width:5%"><col style="width:9%"><col style="width:13%">'
+         + '<col style="width:11%"><col style="width:7%"><col style="width:7%"></colgroup>'
          + '<thead><tr><th>NAME</th><th>FIRM</th><th>EMAIL</th>'
-         + '<th>STATE</th><th>PHONE</th><th>CITY</th><th>SOURCE</th><th>STATUS</th>'
-         + '<th style="text-align:right">QUOTES</th></tr></thead><tbody>';
+         + '<th>STATE</th><th>CITY</th><th>SOURCE</th><th>STATUS</th>'
+         + '<th style="text-align:right">QUOTES</th><th>NOTES</th></tr></thead><tbody>';
    for (var i = 0; i < rows.length; i++){
      var x = rows[i], pid = x.person_id;
      // ⭐ THE FIRM IS A LINK TO THE PANEL when we have one, so the list lands where the rest of the
@@ -7678,14 +7701,15 @@ ${abyAdminNav('/admin/brokers')}
         + '<td class="firmcell" id="fp' + pid + '">' + firm + '</td>'
         + '<td class="wrapcell">' + (x.email ? esc(x.email) : '<span class="muted">no email yet</span>') + '</td>'
         + '<td>' + (x.agency_state ? esc(x.agency_state) : '<span class="muted">&mdash;</span>') + '</td>'
-        // ⚠️ WIDER THAN THE FIRM PANEL'S COPIES, DELIBERATELY. A phone number is 14 characters and
-        // the shared 90px control cut it to "(918) 637-49" -- readable on a panel you opened to
-        // edit one person, useless on a list somebody is SCANNING.
-        + '<td>' + personInput(pid, 'phone', x.phone, '118px') + '</td>'
-        + '<td>' + personInput(pid, 'city', x.city, '100px') + '</td>'
+        + '<td>' + personInput(pid, 'city', x.city, '100%') + '</td>'
         + '<td>' + personSelect(pid, 'source', firmSrc, x.source, null, firmSrcLabel) + '</td>'
         + '<td>' + personSelect(pid, 'disposition', firmDisp, x.disposition, 'Active', null) + '</td>'
-        + '<td style="text-align:right">' + (Number(x.quotes) || 0) + '</td></tr>';
+        + '<td style="text-align:right">' + (Number(x.quotes) || 0) + '</td>'
+        // ⭐ THE COUNT IS THE WHOLE POINT OF THE COLUMN. A note nobody can see they have is the
+        // same as no note -- which is exactly what person notes were until today.
+        + '<td>' + noteButton(pid, Number(x.notes) || 0) + '</td></tr>';
+     h += '<tr id="pn' + pid + '" style="display:none"><td></td>'
+        + '<td colspan="8" class="wrapcell" style="padding-top:0"></td></tr>';
      if (x.disposition){
        var since = x.disposition_at ? ' <span class="muted">since ' + esc(day(x.disposition_at)) + '</span>' : '';
        h += '<tr><td></td><td colspan="8" style="padding-top:0">'
@@ -7693,7 +7717,7 @@ ${abyAdminNav('/admin/brokers')}
           + since + '</td></tr>';
      }
    }
-   h += '</tbody></table>';
+   h += '</tbody></table></div>';
    box.innerHTML = h;
 
    // ⛔ A LIST THAT STOPS SAYS WHERE IT STOPPED. The agency list truncated at 2,000 the moment the
@@ -7705,6 +7729,97 @@ ${abyAdminNav('/admin/brokers')}
      + 'style="padding:5px 12px;border:1px solid #1a5c3a;border-radius:6px;background:#1a5c3a;color:#fff;cursor:pointer">Next '
      + Math.min(d.cap, total - psOffset - rows.length) + '</button>';
    document.getElementById('psPager').innerHTML = pg;
+ }
+
+ // ── NOTES ON A PERSON ─────────────────────────────────────────────────────────────────────
+ //
+ // 🔴🔴 THEY WERE BEING STORED AND SHOWN NOWHERE, AND NOTHING ANYWHERE SAID SO. crm_events has
+ // accepted a note on a person since the CRM was built, and /api/admin/crm serves them back when
+ // asked -- but the ONLY caller anywhere in this page asked for entity_type=agency. So every note
+ // ever written on a human went into the database and off the screen.
+ //
+ // ⭐ FOUND THE ONLY WAY THIS KIND OF THING IS FOUND: by writing a real one Eric asked for
+ // ("just add a note to her record that she works in partnership with Navigation Financial") and
+ // then going to look at it. The write reported ok:true and written:1, which was all true.
+ //
+ // ⛔ A NOTE IS AN EVENT, NOT A FIELD. It carries the date the thing happened and it accumulates;
+ // it is not an editable cell, which is why this is a panel rather than another input on the row.
+ function noteButton(pid, n){
+   return '<button id="nb' + pid + '" onclick="notesToggle(' + "'" + pid + "'" + ')" '
+     + 'style="border:1px solid ' + (n ? '#1a5c3a' : '#c8d2de') + ';background:' + (n ? '#eef5f0' : '#fff')
+     + ';color:' + (n ? '#1a5c3a' : '#8a97a8') + ';border-radius:5px;padding:3px 9px;cursor:pointer;font-size:12px">'
+     + (n ? n + (n === 1 ? ' note' : ' notes') : '+ note') + '</button>';
+ }
+
+ async function notesToggle(pid){
+   var row = document.getElementById('pn' + pid);
+   if (!row) return;
+   if (row.style.display !== 'none'){ row.style.display = 'none'; return; }
+   row.style.display = '';
+   var cell = row.children[1];
+   cell.innerHTML = '<span class="muted">Looking...</span>';
+   var r = await fetch('/api/admin/crm?entity_type=person&entity_id=' + encodeURIComponent(pid));
+   var d = await r.json().catch(function(){ return {}; });
+   // 🔴 AN ERROR IS NOT "no notes". Those are opposite facts and this admin has confused them
+   // before -- and here the wrong one invites somebody to write a note that already exists.
+   if (d.error){
+     cell.innerHTML = '<span style="color:#a12622;font-size:12.5px">Could not read the notes: '
+       + esc(d.error) + '</span>';
+     return;
+   }
+   var evs = (d.events || []).filter(function(e){ return e.kind === 'note'; });
+   var h = '';
+   for (var i = 0; i < evs.length; i++){
+     h += '<div style="margin:0 0 6px"><span class="muted" style="font-size:11.5px">'
+        + esc(day(evs[i].happened_at)) + '</span> ' + esc(evs[i].body || '') + '</div>';
+   }
+   if (!evs.length) h += '<div class="muted" style="font-size:12.5px;margin-bottom:6px">'
+     + 'Nothing recorded about this person yet.</div>';
+   h += '<div style="display:flex;gap:6px;align-items:center">'
+      + '<input id="nn' + pid + '" placeholder="What do we know about them?" '
+      + 'onkeydown="if(event.key===' + "'Enter'" + ')noteSave(' + "'" + pid + "'" + ')" '
+      + 'style="flex:1 1 320px;padding:6px 8px;border:1px solid #c8d2de;border-radius:5px;font-size:13px">'
+      + '<button onclick="noteSave(' + "'" + pid + "'" + ')" '
+      + 'style="background:#1a5c3a;color:#fff;border:1px solid #1a5c3a;border-radius:5px;'
+      + 'padding:6px 14px;cursor:pointer;font-weight:600">Add</button>'
+      + '<span class="muted" id="nm' + pid + '" style="font-size:12px"></span></div>';
+   cell.innerHTML = h;
+ }
+
+ async function noteSave(pid){
+   var el = document.getElementById('nn' + pid);
+   var msg = document.getElementById('nm' + pid);
+   var text = (el && el.value || '').trim();
+   if (!text){ if (msg) msg.textContent = 'A note needs some text.'; return; }
+   if (msg) msg.textContent = 'Saving...';
+   // ⭐ THE SAME ENDPOINT THE FIRM PANEL'S NOTE BOX USES. A second way to write a note is a second
+   // place for the rules about dates and entity resolution to drift apart.
+   var r = await fetch('/api/admin/crm', {
+     method: 'POST', headers: {'Content-Type':'application/json'},
+     body: JSON.stringify({ kind: 'note', body: text, entities: [{ type: 'person', id: pid }] }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   // ⛔ A REFUSAL COMES BACK WITH A 200 IN failed[], so checking r.ok alone would print "Saved"
+   // over a note that was not. Same shape as the add-a-person form's refused[] check.
+   var bad = (d.detail && d.detail.failed && d.detail.failed[0]);
+   if (!r.ok || d.error || bad){
+     if (msg) msg.textContent = 'Not saved: ' + ((bad && bad.why) || d.error || 'unknown error');
+     return;
+   }
+   el.value = '';
+   // Re-read rather than patch: the panel shows what the SERVER holds, so a note that did not
+   // land cannot appear on screen as though it had.
+   await notesToggle(pid);   // shut
+   await notesToggle(pid);   // and open again, freshly loaded
+   // ⚠️ The button's count came from the LIST query and is now one behind. Recount from what the
+   // panel actually rendered, so the button and the panel cannot disagree about how many there are.
+   var btn = document.getElementById('nb' + pid);
+   var panel = document.getElementById('pn' + pid);
+   if (btn && panel){
+     var n = panel.querySelectorAll('div[style*="margin:0 0 6px"]').length;
+     btn.textContent = n ? (n + (n === 1 ? ' note' : ' notes')) : '+ note';
+     btn.style.borderColor = '#1a5c3a'; btn.style.background = '#eef5f0'; btn.style.color = '#1a5c3a';
+   }
  }
 
  // ── ATTACH A BROKER TO A FIRM WE ALREADY HAVE ─────────────────────────────────────────────

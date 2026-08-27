@@ -406,6 +406,28 @@ two places is how two places end up disagreeing.
 interested); **searching by name finds them anyway**, because a search is for one person you
 already have in mind. *Do not contact* and *deceased* are never in these results at all.
 
+### Notes on a person — and the 3,298 that were invisible
+
+**The NOTES column on the broker list opens what we know about somebody**, and lets you add to it.
+A note carries the date the thing happened and they accumulate; it is not a field you overwrite.
+
+🔴 **They were being stored and shown nowhere.** Notes on a *person* have been accepted since the
+CRM was built, and the endpoint would serve them — but the only screen that ever asked for a
+timeline asked for a *firm's*. **So every note anybody wrote on a human went into the database and
+off the screen.** Found 2026-08-27 by writing one Eric asked for and then going to look at it.
+
+⭐ **What that turned up is worth more than the fix: 3,298 notes on 2,173 people.** Most of them are
+the provenance from the web-research import and they answer two questions that are otherwise
+nowhere:
+
+- **their job title and what they sell** — *"Senior Benefits Consultant | Group"*, *"Life & Health
+  Insurance Agent | Group, Individual, Medicare"*
+- **where the record came from**, as a link you can open — an agency team page, a NABIP chapter
+  board, healthcare.gov's *Find Local Help* (1,662 of them), the Oklahoma DOI list
+
+**1,125 people have more than one.** ⚠️ **So before deciding a prospect is a stranger, open their
+notes** — we often already know what they do and where we found them.
+
 ### Where a firm is
 
 **Open a firm and type its city and state.** They start empty.
