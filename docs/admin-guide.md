@@ -478,6 +478,32 @@ pair stops being offered.
 *Brady Lenz* with nothing to place either of them could genuinely be two people — so those are
 marked and sorted last.
 
+### A firm's logo
+
+**Open a firm on Brokers & Agencies and use the *Logo* box on its panel.** One upload, and every
+quote that firm runs is co-branded from then on — including the shared link an employer opens from
+their inbox.
+
+🔴 **Until 2026-08-27 no firm had a logo and none could get one.** Eric: *"we ran a quote through
+the ABY admin area a while ago and uploaded a broker logo and it did not show up on the quote when
+clicking the link."* **Four separate things were missing**, and any one of them alone was enough:
+
+| | |
+|---|---|
+| the file attached **during a quote** was never saved | it renders once and dies with the page |
+| the **shared quote** carried no logo field | so a saved one could not have reached it |
+| **0 of 2,364 firms had a logo** | the only way to set one needed a broker login, and no broker has ever registered |
+| there was **no route that serves one** | the `/api/agency-logo` in the notes belongs to the BenefitLab dashboard, on another host |
+
+⭐ **The logo belongs to the FIRM, not to a quote.** That is the whole reason to ask once. Set it on
+the panel and it is theirs.
+
+⚠️ **A logo attached inside the quote form is still a one-off** — it brands the document you
+download at that moment and is not kept. **Set it on the firm's panel to make it stick.**
+
+⛔ **Under 300KB, and a real image file.** The image lives in the record, not in a file store, so
+the size is a hard limit rather than a guideline.
+
 ### Where a firm is
 
 **Open a firm and type its city and state.** They start empty.
