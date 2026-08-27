@@ -2565,7 +2565,7 @@ async function handleCrmAgencies(request, env) {
     "     s AS (SELECT lower(trim(agency)) k, COUNT(*) sales FROM aby_sales " +
     "           WHERE trim(COALESCE(agency,'')) <> '' GROUP BY 1) " +
     'SELECT a.id, a.name, a.city, a.state, a.priority, a.assigned_rep, a.needs_review, ' +
-    '       a.disposition, a.disposition_note, a.disposition_at, ' +
+    '       a.disposition, a.disposition_note, a.disposition_at, a.website, ' +
     '       a.relationship, a.parent_id, a.relationship_note, pa.name AS parent_name, ' +
     // Carried so the firm panel can show that a name is settled, and the row can say so too.
     '       a.name_confirmed_at, ' +
@@ -4549,6 +4549,8 @@ ${ADMIN_HEADER_CSS}
     filter is harder to hit than the scrollbar it replaces. */
  /* THE FIRM CELL. One block per row so a wrapped name lines up with its own first line. */
  .firmcell{line-height:1.35}
+ .site{font-size:12.5px;color:#1a5c3a;text-decoration:none;margin-left:4px}
+ .site:hover{text-decoration:underline}
  /* ⛔ NOT UNDERLINED. Eric: "since every single agency will open when clicked, do we really need
     them all underlined?" No -- when a whole column is links, underlining every one is noise on
     1,552 rows. Weight and colour carry the affordance; the underline arrives on hover. */
@@ -6564,7 +6566,19 @@ ${abyAdminNav('/admin/brokers')}
          + '<input id="fCity" placeholder="City" value="' + esc(a.city || '') + '" style="padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
          + '<input id="fState" placeholder="TX" maxlength="2" size="3" value="' + esc(a.state || '') + '" style="padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
          + '<button onclick="saveWhere(' + "'" + id + "'" + ')">Save location</button>'
-         + '<span class="muted">' + (a.metro ? esc(a.metro) : '') + '</span></div>'
+         + '<span class="muted">' + (a.metro ? esc(a.metro) : '') + '</span>'
+         // Eric, 2026-08-26: "perhaps to the right of location, we could add the website when
+         // known?" 830 of 1,453 firms have one and not one was typed by a person: the web list
+         // carries a Website column, and a Tulsa firm IS its email domain.
+         // ⛔ SHOWN ONLY WHEN THERE IS ONE. An empty slot on 623 rows would be a promise the
+         // record cannot keep, and a link that goes nowhere is worse than no link on a screen
+         // somebody is calling from.
+         // ⚠️ rel=noopener because target=_blank hands the new tab a handle on this one.
+         + (a.website
+             ? ' <a class="site" href="' + esc(a.website) + '" target="_blank" rel="noopener">'
+               + esc(String(a.website).replace(/^https?:[/][/]/, '').replace(/^www[.]/, '')) + '</a>'
+             : '')
+         + '</div>'
          + dispHTML(a)
          // \u2b50\u2b50 THE NAME IS EDITABLE HERE, AND UNTIL 2026-08-24 IT WAS NOT EDITABLE ANYWHERE.
          // A firm could be tagged, noted, aliased and marked acquired from this panel, but its name
@@ -12410,6 +12424,10 @@ const MIGRATIONS = [
   // ⚠️  and  already HAD a source column and 0 of 288 rows used it.
   //  had none.
   { sql: "ALTER TABLE agencies ADD COLUMN source TEXT", table: "agencies", column: "source" },
+  // Eric, 2026-08-26: "when you expand, perhaps to the right of location, we could add the website
+  // when known? That would be helpful." The web prospecting list carries one for 572 firms, and a
+  // Tulsa firm IS its email domain, so most rows can answer this without anybody typing.
+  { sql: "ALTER TABLE agencies ADD COLUMN website TEXT", table: "agencies", column: "website" },
   { sql: "CREATE INDEX IF NOT EXISTS people_source ON people (source)", index: "people_source" },
 
   // ── TO-DOS GROW A TIME, A KIND, AN ORDER AND A COMPLETION RECORD (Eric, 2026-08-26) ────────
