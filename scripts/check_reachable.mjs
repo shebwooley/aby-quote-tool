@@ -321,6 +321,31 @@ const RULES = [
       && /fromServer = true;/.test(f.app)
       && /if \(fromServer && typeof state\.agencyLogoPath === 'string'/.test(f.app),
   },
+    {
+    name: "a signature records WHICH QUOTE it was for, and the proposal is openable from it",
+    why: "Eric, 2026-08-26: 'we receive the proposal link with the original quote and the"
+       + " employer's info.' The commitment's only link was quote_number, which the code's own"
+       + " comment says is NOT unique. This is also what answers 'no price is captured' -- the"
+       + " commitment records which quote rather than copying prices, and /q/<token> renders that"
+       + " quote from its STORED pricing, so an old link never re-prices at today's rates.",
+    holds: (f) => /name="quoteId" id="quoteIdField"/.test(f.renderer)
+      && /quoteIdField/.test(f.app)
+      && /UPDATE commitments SET quote_id = \?, share_token = \? WHERE id = \?/.test(f.worker)
+      && /Open the signed proposal/.test(f.worker),
+  },
+  {
+    name: "signing never replaces a share token a client already holds",
+    why: "A link already sent to an employer must keep working. Minting unconditionally would"
+       + " kill every outstanding proposal link the moment somebody signed -- and the person who"
+       + " signed is exactly the one most likely to have shared theirs.",
+    holds: (f) => {
+      const i = f.worker.indexOf('could not link the signed proposal');
+      if (i === -1) return false;
+      const body = f.worker.slice(Math.max(0, i - 2200), i);
+      return /if \(!token\) \{/.test(body)
+        && /share_token = \? WHERE id = \? AND share_token IS NULL/.test(body);
+    },
+  },
   {
     name: "two records of one human can be found and merged from a screen",
     why: "F-423. The firm duplicate finder looks for duplicate FIRMS and structurally cannot see"
@@ -916,6 +941,18 @@ const SABOTAGES = [
       /fetch\('\/api\/admin\/crm\/persons\?'/g, "fetch('/api/admin/crm/nothing?'") }),
   },
   {
+    // The signature saves and the link is never recorded, which is the state F-416 describes.
+    why: "a signature stops recording which quote it was for",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /UPDATE commitments SET quote_id = \?, share_token = \? WHERE id = \?/g,
+      'SELECT 1 WHERE 0 -- no longer linked') }),
+  },
+  {
+    // Minting unconditionally, which kills every proposal link already in a client's inbox.
+    why: "signing mints a new share token even when the quote already has one",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/if \(!token\) \{/g, 'if (true) {') }),
+  },
+  {
     // The name fallback goes, so resolution works only for quotes carrying an agency_id -- which
     // is 2 of the 6 ever shared, and not Eric's.
     why: "the shared quote resolves its logo by agency_id only, losing the name fallback",
@@ -1057,6 +1094,10 @@ function load() {
     app: read("assets/js/app.js"),
     hook: read("save-hook.js"),
     worker: read("worker.js"),
+    // ADDED 2026-08-27. The authorization form an employer signs is BUILT HERE, so a rule about
+    // what that form carries has to be able to read it -- otherwise the only thing under test is
+    // the half of the round trip that lives in app.js.
+    renderer: read("assets/js/lib/renderer.js"),
     // ADDED 2026-08-26. Two rules compare worker.js against the tool's OWN data files rather than
     // against a list restated in here -- a restated list is a third copy and rots faster than
     // either of the two it is meant to police.

@@ -1272,6 +1272,15 @@ async function handleSaveCommitment(request, env, ctx) {
     acceptedPrint  = '',
     acceptedSign   = '',
     products       = [],
+    // ── WHICH QUOTE WAS SIGNED (F-416) ──────────────────────────────────────────────────────
+    // ⭐⭐ ERIC, 2026-08-26: "Would it be possible instead for it to actually update the proposal
+    // when the employer signs it so we receive the proposal link with the original quote and the
+    // employer's info?" ⛔ Until now the ONLY link back was `quoteNumber`, and the comment on
+    // clientId above says plainly that string is not unique -- so "which quote is this signature
+    // for?" could only be answered through a key that could collide.
+    // ⚠️ Either may be absent and that is expected: an OLD downloaded document carries neither.
+    quoteId        = '',
+    shareToken     = '',
   } = body;
 
   try {
@@ -1309,6 +1318,54 @@ async function handleSaveCommitment(request, env, ctx) {
       ).bind(now, quoteNumber).run();
     } catch (err) {
       console.error('commitment: could not update quote status:', err);
+    }
+
+    // ①b THE SIGNED PROPOSAL BECOMES OPENABLE (F-416). Eric asked for the proposal LINK to come
+    // back with the signature, and the plumbing was already there: /q/<token> renders a saved
+    // quote from its STORED pricing, so an old link never re-prices at today's rates.
+    //
+    // ⭐⭐ THIS IS WHAT ANSWERS "no price is captured". The commitment does not copy prices --
+    // duplicating them would create a second set of numbers that can disagree with the quote.
+    // It records WHICH QUOTE, and the quote already holds what was quoted.
+    //
+    // ⭐ RESOLVED BY ID, THEN BY TOKEN, THEN BY NUMBER -- most specific first. An old downloaded
+    // document carries only the number, and it should still link where it can.
+    // ⚠️ A token is MINTED only if the quote has none; an existing one is never replaced, or
+    // every link already sent to a client would die the moment somebody signed.
+    try {
+      let qRow = null;
+      if (quoteId) {
+        qRow = await env.DB.prepare('SELECT id, share_token FROM quotes WHERE id = ?')
+          .bind(String(quoteId)).first();
+      }
+      if (!qRow && shareToken) {
+        qRow = await env.DB.prepare('SELECT id, share_token FROM quotes WHERE share_token = ?')
+          .bind(String(shareToken)).first();
+      }
+      if (!qRow && quoteNumber && quoteNumber !== 'UNKNOWN') {
+        qRow = await env.DB.prepare(
+          'SELECT id, share_token FROM quotes WHERE quote_number = ? ORDER BY created_at DESC LIMIT 1'
+        ).bind(quoteNumber).first();
+      }
+      if (qRow) {
+        let token = qRow.share_token;
+        if (!token) {
+          token = newShareToken();
+          // Guarded, exactly as the share endpoint is: a concurrent mint must not overwrite.
+          await env.DB.prepare(
+            'UPDATE quotes SET share_token = ? WHERE id = ? AND share_token IS NULL'
+          ).bind(token, qRow.id).run();
+          const again = await env.DB.prepare('SELECT share_token FROM quotes WHERE id = ?')
+            .bind(qRow.id).first();
+          token = (again && again.share_token) || token;
+        }
+        await env.DB.prepare(
+          'UPDATE commitments SET quote_id = ?, share_token = ? WHERE id = ?'
+        ).bind(qRow.id, token, id).run();
+      }
+    } catch (err) {
+      // The signature is already recorded. A missing link is a worse commitment, not a lost one.
+      console.error('commitment: could not link the signed proposal:', err);
     }
 
     // ② Tell ABY. Until 2026-08-18 a signed authorization emailed NOBODY -- it landed in the
@@ -14764,6 +14821,20 @@ const MIGRATIONS = [
   //
   // ⚠️ SAME SHAPE AS #259 (the Owner column reached through `brokers` and read as unpopulated
   // data) -- ASK WHAT FRACTION OF ROWS CAN TRAVERSE A JOIN BEFORE BUILDING A FEATURE ON IT.
+  // ── WHICH QUOTE A SIGNATURE BELONGS TO (F-416) ──────────────────────────────────────────
+  //
+  // ⭐⭐ ERIC, 2026-08-26: "we receive the proposal link with the original quote and the
+  // employer's info." The commitment's only link was `quote_number`, which the code's own
+  // comment says is NOT UNIQUE -- so the strongest buying signal in the system pointed at its
+  // quote through a key that could collide.
+  // ⛔ THE PRICES ARE NOT COPIED HERE, DELIBERATELY. /q/<token> renders the quote from its
+  // STORED pricing, so the link shows what was actually quoted; copying the numbers onto the
+  // commitment would create a second set that can disagree with the first.
+  { sql: "ALTER TABLE commitments ADD COLUMN quote_id TEXT",
+    table: "commitments", column: "quote_id" },
+  { sql: "ALTER TABLE commitments ADD COLUMN share_token TEXT",
+    table: "commitments", column: "share_token" },
+
   { sql: "ALTER TABLE people ADD COLUMN referred_by_partner TEXT",
     table: "people", column: "referred_by_partner" },
   { sql: "ALTER TABLE people ADD COLUMN referred_by_contact TEXT",
@@ -17027,6 +17098,20 @@ async function loadCommitments() {
         td(c.start_date || '') +
         td(productNames) +
         '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top;white-space:nowrap">' +
+          // ⭐⭐ THE SIGNED PROPOSAL ITSELF (F-416). Eric asked for the proposal LINK to come back
+          // with the signature -- "so we receive the proposal link with the original quote and the
+          // employer's info." This is what answers "no price is captured": the commitment does not
+          // copy prices, it records WHICH QUOTE, and /q/<token> renders that quote from its STORED
+          // pricing. ⛔ Copying the numbers onto the commitment would create a second set that can
+          // disagree with the first.
+          // ⚠️ ABSENT ON OLD ROWS AND THAT IS HONEST -- rows signed before this shipped carry no
+          // token, and a dead link would be worse than none.
+          (c.share_token
+            ? '<a href="/q/' + encodeURIComponent(c.share_token) + '" target="_blank" rel="noopener" '
+              + 'style="display:inline-block;padding:5px 10px;background:#fff;color:#1a5c3a;'
+              + 'border:1px solid #1a5c3a;border-radius:4px;font-size:12px;text-decoration:none;'
+              + 'margin-right:6px">Open the signed proposal</a>'
+            : '') +
           '<button class="dl-btn" data-cid="' + c.id + '" style="padding:5px 10px;background:#1a5c3a;color:white;border:none;border-radius:4px;font-size:12px;cursor:pointer;margin-right:6px">&#11091; Download</button>' +
           '<button class="del-cmt-btn" data-cid="' + c.id + '" style="padding:5px 10px;background:white;color:#c0392b;border:1px solid #f5b8b8;border-radius:4px;font-size:12px;cursor:pointer">Delete ✕</button>' +
         '</td>' +

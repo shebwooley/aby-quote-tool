@@ -84,7 +84,14 @@
     'function abySign(v){v=(v||"").trim();var p=document.getElementById("printPreview"),s=document.getElementById("signPreview");if(p)p.textContent=v;if(s)s.textContent=v;}',
     'function abyElectedProducts(){var list=[];document.querySelectorAll(".opt-row").forEach(function(row){var cb=row.querySelector(".opt-check");if(!cb||!cb.checked)return;var label=cb.getAttribute("data-label");var sel=row.querySelector(".opt-tier-select");if(sel)label+=": "+sel.value;list.push(label);});return list;}',
     'function abyInitSignDate(){var d=document.getElementById("signDate");if(d&&!d.value)d.valueAsDate=new Date();}',
-    'async function submitCommitment(e){e.preventDefault();var form=e.target;var products=abyElectedProducts();var msg=document.getElementById("commitMsg");if(products.length===0){msg.style.display="block";msg.style.color="#c00";msg.textContent="Please select at least one service to authorize.";return;}document.getElementById("productsField").value=JSON.stringify(products);var authSigner=(form.authSigner.value||"").trim();form.acceptedPrint.value=authSigner;form.acceptedSign.value=authSigner;var btn=document.getElementById("commitBtn");btn.disabled=true;btn.textContent="Submitting...";var payload={};new FormData(form).forEach(function(v,k){payload[k]=v;});try{payload.products=JSON.parse(payload.products||"[]");}catch(_){payload.products=products;}try{var res=await fetch("https://aby-quote-tool.eric-185.workers.dev/api/commitments",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(res.ok){msg.style.display="block";msg.style.color="#1a5c3a";msg.innerHTML="✓ Authorization received. ABY Benefits has been notified and will be in touch shortly. You may print or save this page for your records.";btn.style.display="none";window.print();}else{msg.style.display="block";msg.style.color="#c00";msg.textContent="Submission failed. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}catch(err){msg.style.display="block";msg.style.color="#c00";msg.textContent="Network error. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}'
+        // WHICH QUOTE WAS SIGNED, backfilled at SUBMIT time (F-416). The fields are rendered
+    // empty because the quote is drawn before save-hook.js has POSTed it; by the time an
+    // employer has typed their details and signed, the id is long since known.
+    // NO REGEX HERE, DELIBERATELY. This whole block is a STRING that is inlined into the
+    // downloaded document, and a backslash escape inside it is eaten before it ever
+    // becomes code -- which is TRAPS #224, and it would leave a pattern that silently
+    // matches nothing. indexOf and slice need no escaping.
+    'async function submitCommitment(e){e.preventDefault();var form=e.target;var qf=document.getElementById("quoteIdField");if(qf&&!qf.value&&window.__abySavedQuoteId)qf.value=window.__abySavedQuoteId;var tf=document.getElementById("shareTokenField");if(tf&&!tf.value){var pp=String(location.pathname||"");if(pp.indexOf("/q/")===0)tf.value=pp.slice(3).split("/")[0];}var products=abyElectedProducts();var msg=document.getElementById("commitMsg");if(products.length===0){msg.style.display="block";msg.style.color="#c00";msg.textContent="Please select at least one service to authorize.";return;}document.getElementById("productsField").value=JSON.stringify(products);var authSigner=(form.authSigner.value||"").trim();form.acceptedPrint.value=authSigner;form.acceptedSign.value=authSigner;var btn=document.getElementById("commitBtn");btn.disabled=true;btn.textContent="Submitting...";var payload={};new FormData(form).forEach(function(v,k){payload[k]=v;});try{payload.products=JSON.parse(payload.products||"[]");}catch(_){payload.products=products;}try{var res=await fetch("https://aby-quote-tool.eric-185.workers.dev/api/commitments",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(res.ok){msg.style.display="block";msg.style.color="#1a5c3a";msg.innerHTML="✓ Authorization received. ABY Benefits has been notified and will be in touch shortly. You may print or save this page for your records.";btn.style.display="none";window.print();}else{msg.style.display="block";msg.style.color="#c00";msg.textContent="Submission failed. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}catch(err){msg.style.display="block";msg.style.color="#c00";msg.textContent="Network error. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}'
   ].join('\n');
   // Define the authorization-page helpers in-app so the on-screen preview is interactive too.
   try { (0, eval)(ABY_COMMIT_JS); } catch (e) {}
@@ -735,6 +742,13 @@
       if (!id) return;
       btn.hidden = false;
       btn.onclick = function () { copyShareLink(id, btn); };
+      // ⭐ THE AUTHORIZATION FORM LEARNS THE QUOTE ID AT THE SAME MOMENT (F-416). The form is
+      // drawn before the save returns, so its hidden field starts empty -- and a broker who
+      // DOWNLOADS the document takes a copy of the form exactly as it stands. Filling it here is
+      // what makes the DOWNLOADED copy carry the id; submitCommitment's own backfill runs in the
+      // employer's browser and can never reach a file that was saved before it.
+      var qf = document.getElementById('quoteIdField');
+      if (qf && !qf.value) qf.value = String(id);
     }
     reveal(window.__abySavedQuoteId);
     document.addEventListener('aby:quote-saved', function (e) {

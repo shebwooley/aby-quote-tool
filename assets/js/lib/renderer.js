@@ -681,6 +681,20 @@ ABYQuote.renderer = (function () {
       '      <input type="hidden" name="clientId" value="' + esc(opts.clientId || '') + '">',
       '      <input type="hidden" name="brokerEmail" value="' + esc(form.brokerEmail || '') + '">',
       '      <input type="hidden" name="products" id="productsField" value="">',
+      // ── WHICH QUOTE WAS SIGNED (F-416) ────────────────────────────────────────────────
+      //
+      // ⭐⭐ ERIC, 2026-08-26: "Would it be possible instead for it to actually update the
+      // proposal when the employer signs it so we receive the proposal link with the original
+      // quote and the employer's info?" The commitment's only link to a quote was
+      // `quoteNumber` -- and the comment just above says that string is NOT UNIQUE.
+      //
+      // 🔴 THESE ARE EMPTY AT RENDER TIME ON PURPOSE, AND THAT IS NOT AN OVERSIGHT: the quote
+      // is rendered BEFORE save-hook.js has finished POSTing it, so there is no id yet. app.js
+      // fills them when the save returns, and again at submit if they are still blank.
+      // ⚠️ They must exist in the markup even so -- a broker who DOWNLOADS the document gets
+      // the form as it stood, and a field has to be there to have been filled.
+      '      <input type="hidden" name="quoteId" id="quoteIdField" value="">',
+      '      <input type="hidden" name="shareToken" id="shareTokenField" value="">',
       '      <div class="ack-group"><div class="ack-group-label">Employer Information</div><div class="ack-field-grid">',
       field('Employer Name', 'employerName', form.clientName || '', true),
       field('Address', 'address', ''),
