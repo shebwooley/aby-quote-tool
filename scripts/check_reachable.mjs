@@ -281,6 +281,27 @@ const RULES = [
       && /CONSUMER\.indexOf\(domain\) === -1/.test(f.worker),
   },
   {
+    name: "a firm's logo can be set by ABY staff, without that firm registering",
+    why: "F-428. Eric uploaded a logo for MMA - DFW during a quote and it never appeared on the"
+       + " shared link. One of the three causes was that 0 of 2,364 agencies had a logo at all:"
+       + " the only writer was /api/agency/settings, which needs a signed-in broker with"
+       + " role=admin, and `brokers` holds ZERO rows. ABY's own broker login does not exist yet"
+       + " (F-427), so staff have to be able to set a firm's branding for them.",
+    holds: (f) => /handleCrmAgencyLogo/.test(f.worker)
+      && /'\/api\/admin\/crm\/agency-logo'/.test(f.worker)
+      && /function saveLogo\(/.test(f.worker)
+      && /id="fLogo"/.test(f.worker)
+      && /fetch\('\/api\/admin\/crm\/agency-logo'/.test(f.worker),
+  },
+  {
+    name: "the logo preview is served by the route a quote would use, not from the row",
+    why: "Two reasons and both matter. The agency LIST would carry up to 400KB per firm across"
+       + " 2,364 of them if the image rode on the row. And reading it back through"
+       + " /api/agency-logo/<id> makes the preview a real test of the SERVING path -- a logo that"
+       + " shows on the panel is one that will show on a quote.",
+    holds: (f) => /src="\/api\/agency-logo\/' \+ encodeURIComponent\(id\)/.test(f.worker),
+  },
+  {
     name: "two records of one human can be found and merged from a screen",
     why: "F-423. The firm duplicate finder looks for duplicate FIRMS and structurally cannot see"
        + " two rows for one person inside a single correct firm -- 60 groups, 121 records, always"
@@ -873,6 +894,19 @@ const SABOTAGES = [
     why: "the person search stops asking the server anything",
     apply: (f) => ({ ...f, worker: f.worker.replace(
       /fetch\('\/api\/admin\/crm\/persons\?'/g, "fetch('/api/admin/crm/nothing?'") }),
+  },
+  {
+    // The endpoint survives; only the control goes. Staff are back to having no way to set a logo,
+    // which is the state F-428 records.
+    why: "the firm panel loses its logo upload",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/id="fLogo"/g, 'id="fLogoGone"') }),
+  },
+  {
+    // The preview goes back to reading the row, which both bloats the list and stops testing the
+    // route a quote actually uses.
+    why: "the logo preview reads a data URL off the row instead of the serving route",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /src="\/api\/agency-logo\/' \+ encodeURIComponent\(id\)/g, "src=\"' + (a.logoDataUrl || '')") }),
   },
   {
     // The finder still runs; only the door goes. 60 groups computed and nobody able to open them.

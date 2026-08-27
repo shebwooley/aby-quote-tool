@@ -87,6 +87,14 @@ export default {
     if (path === '/api/admin/crm/agencies'     && method === 'GET')  return withAuth(request, env, () => handleCrmAgencies(request, env));
     if (path === '/api/admin/crm/relationship' && method === 'POST') return withAuth(request, env, () => handleCrmRelationship(request, env));
     if (path === '/api/admin/crm/agency'       && method === 'POST') return withAuth(request, env, () => handleCrmAgencyField(request, env));
+    // A firm's logo, set by ABY staff rather than by a broker who has not registered (F-428).
+    if (path === '/api/admin/crm/agency-logo'  && method === 'POST') return withAuth(request, env, () => handleCrmAgencyLogo(request, env));
+    // ⭐ AND THE PUBLIC READ, WHICH IS DELIBERATELY NOT BEHIND withAuth: a quote is opened from an
+    // employer's inbox with no session, so a gated logo would be a broken image for every client
+    // who ever sees the document. Image bytes or an identical empty 404 -- see handleAbyAgencyLogo.
+    if (path.startsWith('/api/agency-logo/') && method === 'GET') {
+      return handleAbyAgencyLogo(request, env, path.slice('/api/agency-logo/'.length));
+    }
     if (path === '/api/admin/crm/import'       && method === 'POST') return withAuth(request, env, () => handleCrmImport(request, env));
     // A staged bulk load. The rows sit in cce_staging; these two only MOVE them, and every row
     // still goes through /api/admin/crm/import, which is the one place the identity rules live.
@@ -3069,6 +3077,131 @@ const SOURCE_LABEL = {
 // "exactly this many" from "more than this", and the page says which. Raising it is not the fix
 // on its own -- saying so is.
 const AGENCY_LIST_CAP = 5000;
+
+/**
+ * SET A FIRM'S LOGO FROM THE ABY ADMIN, without that firm ever registering (F-428).
+ *
+ * 🔴🔴 THE LOGO WAS UNREACHABLE FROM BOTH DIRECTIONS AND ERIC FOUND IT ON A REAL QUOTE: he
+ * uploaded one for MMA - DFW during the quote process and it did not appear on the shared link.
+ * Measured 2026-08-27, three independent causes and any one is enough:
+ *   ① the file attached during a quote is never SAVED -- getFormValues() in save-hook.js does not
+ *     collect it and `quotes` has no logo column, so it renders once and dies with the page;
+ *   ② the shared-quote payload carries no logo field, so a saved one could not reach the page;
+ *   ③ **0 of 2,364 agencies had a logo**, because the only writer was /api/agency/settings, which
+ *     requires a signed-in broker with role=admin -- and `brokers` holds ZERO ROWS.
+ *
+ * ⭐⭐ THIS FIXES ③, AND IT IS THE ONE THAT UNBLOCKS THE OTHER TWO. Eric, 2026-08-27, deciding the
+ * shape: "ABY keeps its own separate broker login... a lot of brokers will not know who benefitlab
+ * is." That login does not exist yet and the front door is not built -- so ABY staff must be able
+ * to set a firm's branding for them, today, from the screen they already use.
+ *
+ * ⛔ THE LOGO BELONGS TO THE AGENCY, NOT THE QUOTE. One upload then serves every quote that firm
+ * runs, which is the whole point of asking once.
+ *
+ * 🔴 AND A FOURTH CAUSE, FOUND ONLY BY TESTING THE WHOLE PATH: THIS WORKER HAD NO ROUTE THAT
+ * SERVES AN AGENCY LOGO. The one the notes describe, /api/agency-logo/<id>, belongs to the
+ * BENEFITLAB DASHBOARD -- a different host and a different database (Supabase broker_state). ABY
+ * only ever CONSUMED it, through the allow-listed brokerLogoUrl on a rerun. I wrote a comment here
+ * claiming it already served this, on the strength of the notes, and the save-then-fetch test came
+ * back 404. ⭐ The write succeeded and the read had nowhere to go -- which is this flag's own
+ * failure mode, arriving one layer down. See handleAbyAgencyLogo below.
+ *
+ * ⚠️ SAME VALIDATION AS THE BROKER-SIDE WRITER, deliberately: a data: image URL of an allowed type
+ * and under MAX_LOGO_CHARS. Two writers into one column that disagree about what is acceptable is
+ * how a row lands that one screen will render and the other refuses.
+ */
+async function handleCrmAgencyLogo(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const id = String(body.id || '').trim();
+  if (!id) return jsonResp({ error: 'Which agency?' }, 400);
+
+  const logo = String(body.logoDataUrl || '');
+  // ⭐ AN EMPTY STRING IS A REAL INSTRUCTION -- remove the logo -- and is not the same as a bad one.
+  if (logo) {
+    if (!/^data:image\/(png|jpeg|jpg|gif|webp|svg\+xml);base64,/.test(logo)) {
+      return jsonResp({ error: 'That does not look like an image file.' }, 400);
+    }
+    if (logo.length > MAX_LOGO_CHARS) {
+      return jsonResp({ error: 'That image is too large -- please use one under 300KB.' }, 400);
+    }
+  }
+
+  const a = await env.DB.prepare('SELECT id, name FROM agencies WHERE id = ?').bind(id).first();
+  if (!a) return jsonResp({ error: 'No such firm.' }, 404);
+
+  const r = await env.DB.prepare('UPDATE agencies SET logo_data_url = ? WHERE id = ?')
+    .bind(logo || null, id).run();
+  if (!r || !r.meta || !r.meta.changes) return jsonResp({ error: 'That did not save.' }, 500);
+
+  // ⭐ THE SIZE IS REPORTED BACK so the screen can prove the write rather than assert it. A logo
+  // that "saved" and is not there is exactly the failure this whole flag is about.
+  return jsonResp({ ok: true, id, name: a.name, bytes: logo.length, cleared: !logo });
+}
+
+/**
+ * SERVE A FIRM'S LOGO AS IMAGE BYTES. Public and unauthenticated, on purpose (F-428).
+ *
+ * ⭐⭐ WHY IT MUST BE PUBLIC: a quote is downloaded and opened from an employer's inbox, with no
+ * session. If the logo needed a login it would render for the broker and be a broken image for
+ * every client who ever opens the document -- which is the audience the branding is for.
+ *
+ * 🔴 THIS DID NOT EXIST UNTIL 2026-08-27, AND ITS ABSENCE WAS INVISIBLE. The notes describe an
+ * /api/agency-logo/<id> route, but that one is the BENEFITLAB DASHBOARD's, reading Supabase
+ * broker_state on another host. ABY only ever consumed it as an allow-listed URL on a rerun. So a
+ * logo saved into ABY's own agencies table had nothing to serve it.
+ *
+ * ⛔ THE SAFETY RULES ARE COPIED DELIBERATELY FROM THE DASHBOARD'S VERSION, and each is
+ * load-bearing -- a future session must not tidy any of them away:
+ *   · IMAGE BYTES OR NOTHING. It never returns JSON, so it cannot become a data endpoint.
+ *   · EVERY FAILURE IS AN IDENTICAL EMPTY 404 -- missing id, unknown id, no logo, malformed row.
+ *     Otherwise it answers "does this firm exist?" to anyone who asks, and the firm list is
+ *     commercially sensitive.
+ *   · A NON-UUID IS REFUSED BEFORE THE DATABASE IS TOUCHED.
+ *   · ONLY image/* IS SERVED, taken from the stored prefix and re-validated, never echoed.
+ *   · nosniff, and a cache that is deliberately NOT immutable, so a replaced logo appears.
+ */
+const LOGO_TYPE_RE = /^data:(image\/(?:png|jpeg|jpg|gif|webp|svg\+xml));base64,([A-Za-z0-9+/=\s]+)$/;
+
+async function handleAbyAgencyLogo(request, env, id) {
+  // ⛔ ONE REFUSAL, USED EVERYWHERE BELOW. Two different failure responses is how this becomes a
+  // way to ask which firms exist.
+  const no = () => new Response(null, { status: 404 });
+
+  const key = String(id || '').trim();
+  if (!/^[0-9a-fA-F-]{36}$/.test(key)) return no();
+
+  let row;
+  try {
+    row = await env.DB.prepare('SELECT logo_data_url FROM agencies WHERE id = ?').bind(key).first();
+  } catch (err) {
+    return no();
+  }
+  const raw = String((row && row.logo_data_url) || '');
+  const m = raw.match(LOGO_TYPE_RE);
+  if (!m) return no();
+
+  let bytes;
+  try {
+    const bin = atob(m[2].replace(/\s+/g, ''));
+    bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+  } catch (err) {
+    return no();
+  }
+  if (!bytes.length) return no();
+
+  return new Response(bytes, {
+    status: 200,
+    headers: {
+      // The type comes from the matched group, so it can only ever be one of the six allowed.
+      'Content-Type': m[1],
+      'X-Content-Type-Options': 'nosniff',
+      // ⚠️ NOT immutable. A firm that replaces its logo must see the new one; an hour of staleness
+      // is the trade, and a downloaded quote re-fetches on open.
+      'Cache-Control': 'public, max-age=3600',
+    },
+  });
+}
 
 async function handleCrmAgencyField(request, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
@@ -7864,6 +7997,26 @@ ${abyAdminNav('/admin/brokers')}
          + '<input id="fState" placeholder="TX" maxlength="2" size="3" value="' + esc(a.state || '') + '" style="padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
          + '<button onclick="saveWhere(' + "'" + id + "'" + ')">Save location</button>'
          + '<span class="muted">' + (a.metro ? esc(a.metro) : '') + '</span>'
+         // ⭐⭐ THE FIRM'S LOGO, SET BY ABY STAFF (F-428). Eric uploaded one for MMA - DFW during a
+         // quote and it never appeared on the shared link, because the only writer for this column
+         // needed a signed-in broker and that table holds zero rows -- so 0 of 2,364 firms had one.
+         // ⛔ It lives on the FIRM, not the quote: asked once, then every quote that firm runs
+         // carries it.
+         + '<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#5f6b76">'
+         + 'Logo <input type="file" id="fLogo" accept="image/*" onchange="saveLogo(' + "'" + id + "'" + ')" '
+         + 'style="max-width:190px;font-size:12px"></label>'
+         // ⛔ THE PREVIEW READS /api/agency-logo/<id>, NOT A data: URL ON THE ROW. Putting the image
+         // itself in the agency LIST payload would add up to 400KB per firm across 2,364 of them --
+         // the list is already the heaviest thing on this page. ⭐ And it is the better test: this
+         // is the exact route a quote will use, so a logo that shows here is one that will show
+         // there. A broken preview means the SERVING is broken, which is what to know.
+         // ⚠️ The cache-buster is load-bearing: without it a just-replaced logo shows the old one.
+         + '<img id="fLogoPrev" alt="" onerror="this.style.display=' + "'none'" + '" '
+         + 'src="/api/agency-logo/' + encodeURIComponent(id) + '?t=' + Date.now() + '" '
+         + 'style="max-height:34px;max-width:130px;border:1px solid #e4eaf0;border-radius:4px;'
+         + 'padding:2px;background:#fff">'
+         + '<button onclick="clearLogo(' + "'" + id + "'" + ')" style="font-size:12px;padding:3px 9px">Remove</button>'
+         + '<span class="muted" id="fLogoMsg" style="font-size:12px"></span>'
          // Eric, 2026-08-26: "perhaps to the right of location, we could add the website when
          // known?" 830 of 1,453 firms have one and not one was typed by a person: the web list
          // carries a Website column, and a Tulsa firm IS its email domain.
@@ -8013,6 +8166,53 @@ ${abyAdminNav('/admin/brokers')}
    // from the current view, and a row that stays on screen after you took it off the list is the
    // clearest possible way to make somebody do it twice.
    await loadMkt();
+   openFirm(id);
+ }
+
+ // ── A FIRM'S LOGO (F-428) ─────────────────────────────────────────────────────────────────
+ //
+ // ⭐ THE FILE IS READ IN THE BROWSER AND SENT AS A data: URL, exactly as the broker-side upload
+ // does. The tool has no object storage, so the image lives in the row -- which is why the server
+ // caps it and why this reports the size back.
+ async function saveLogo(id){
+   var input = q('fLogo');
+   var msg = q('fLogoMsg');
+   var file = input && input.files && input.files[0];
+   if (!file) return;
+   // ⚠️ CHECKED HERE TOO, so somebody picking a 4MB photo is told before it is base64-encoded and
+   // posted. The server still refuses it -- this is the courtesy, not the guard.
+   if (file.size > 300 * 1024){
+     msg.textContent = 'That image is ' + Math.round(file.size / 1024) + 'KB. Please use one under 300KB.';
+     return;
+   }
+   msg.textContent = 'Reading...';
+   var rd = new FileReader();
+   rd.onerror = function(){ msg.textContent = 'That file could not be read.'; };
+   rd.onload = async function(){
+     msg.textContent = 'Saving...';
+     var r = await fetch('/api/admin/crm/agency-logo', {
+       method: 'POST', headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ id: id, logoDataUrl: rd.result }),
+     });
+     var d = await r.json().catch(function(){ return {}; });
+     // 🔴 A REFUSED UPLOAD MUST NOT LOOK LIKE A SAVED ONE. This whole flag exists because a logo
+     // appeared to be accepted and was not stored anywhere.
+     if (!r.ok || d.error){ msg.textContent = d.error || 'That did not save.'; return; }
+     msg.textContent = 'Saved.';
+     openFirm(id);   // re-read, so the preview shows what the SERVER holds, not what was picked
+   };
+   rd.readAsDataURL(file);
+ }
+
+ async function clearLogo(id){
+   var msg = q('fLogoMsg');
+   msg.textContent = 'Removing...';
+   var r = await fetch('/api/admin/crm/agency-logo', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ id: id, logoDataUrl: '' }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok || d.error){ msg.textContent = d.error || 'That did not save.'; return; }
    openFirm(id);
  }
 
