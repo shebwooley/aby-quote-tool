@@ -2644,11 +2644,24 @@ async function handleCrmAgencies(request, env) {
     'LEFT JOIN agencies pa ON pa.id = a.parent_id ' +
     'LEFT JOIN q ON q.k = lower(trim(a.name)) ' +
     'LEFT JOIN s ON s.k = lower(trim(a.name)) ' +
-    'WHERE ' + where.join(' AND ') + ' ORDER BY a.name LIMIT 2000';
+    // ── A CAP IS A PROMISE ABOUT THE SIZE OF THE DATA, AND THE CE IMPORT BROKE IT ─────────────
+    //
+    // This read LIMIT 2000 and was invisible while the register held 1,564 firms. The CE load took
+    // it to 2,365 in one evening, so the list silently stopped at 2,000 and 365 firms were in the
+    // table and on no screen -- with the count beside it reading "2000 of 2000 firms", which is
+    // the worst part: a truncated figure presented as a total is quotable.
+    //
+    // ⛔ THE NUMBER IS NOT THE FIX. Raising it buys time and nothing else, so the response now
+    // carries `capped` and the page SAYS SO. A list that quietly drops rows is indistinguishable
+    // from one that has lost them.
+    'WHERE ' + where.join(' AND ') + ' ORDER BY a.name LIMIT ' + (AGENCY_LIST_CAP + 1);
 
   try {
     const r = await env.DB.prepare(sql).bind(...args).all();
     let rows = r.results || [];
+    // One row over the cap means there are more; report it rather than trimming in silence.
+    const capped = rows.length > AGENCY_LIST_CAP;
+    if (capped) rows = rows.slice(0, AGENCY_LIST_CAP);
 
     // Every tag on every agency, once.
     const te = await env.DB.prepare(
@@ -2698,8 +2711,15 @@ async function handleCrmAgencies(request, env) {
       matched: rows.length,
       // ⭐ REPORTED SO THE SCREEN CAN SAY WHAT IT IS HIDING. A filtered page that does not say it is
       // filtered is the same defect as an empty page that says everything is done.
+      capped: capped,
+      cap: AGENCY_LIST_CAP,
       excludedAcquired: await countAcquired(env),
       excludedCompound: await countCompound(env),
+      // ⭐ THE ALIASES WERE HIDDEN AND UNCOUNTED. The page said it was hiding the acquired names
+      // and the compound ones -- 52 rows -- while actually hiding 152, because 99 aliases went
+      // unmentioned. Eric spotted the arithmetic not adding up ("1,412 at the top, 1,341 at the
+      // bottom") and it took a measurement to explain a screen that should have explained itself.
+      excludedAlias: await countAliases(env),
     });
   } catch (err) {
     // 🔴 A THROWN QUERY MUST NOT RENDER AS "no agencies". The error reaches the screen.
@@ -2709,6 +2729,15 @@ async function handleCrmAgencies(request, env) {
 
 // ⛔ A LIST THAT QUIETLY DROPS ROWS IS INDISTINGUISHABLE FROM ONE THAT LOST THEM. Both numbers
 // are printed, so the reader knows the list is shorter than the table on purpose.
+async function countAliases(env) {
+  try {
+    const r = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM agencies WHERE COALESCE(relationship,'') = 'alias'"
+    ).first();
+    return (r && r.n) || 0;
+  } catch { return 0; }
+}
+
 async function countCompound(env) {
   try {
     const r = await env.DB.prepare(
@@ -3002,6 +3031,11 @@ const DISPOSITIONS = ['out_of_business', 'no_group_products', 'not_interested', 
 // able to put a dead person back into an outreach list. Both stay visible on the firm panel, which
 // is where the record is kept and where somebody looks to find out why.
 const SUPPRESSED = ['do_not_contact', 'deceased'];
+
+// How many firms the agency list will return. ⚠️ It is fetched as CAP + 1 so the handler can tell
+// "exactly this many" from "more than this", and the page says which. Raising it is not the fix
+// on its own -- saying so is.
+const AGENCY_LIST_CAP = 5000;
 
 async function handleCrmAgencyField(request, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
@@ -5949,7 +5983,9 @@ ${abyAdminNav('/admin/brokers')}
    q('mktSub').textContent = 'Every firm we could work, including the ones that have never quoted.'
      + (d.excludedAcquired ? ' ' + d.excludedAcquired + ' acquired names are hidden, because nobody can call them.' : '')
      + (d.excludedCompound ? ' ' + d.excludedCompound + ' rows whose name is two firms at once ("MMA; MHBT") are hidden too'
-                           + ' \u2014 they came out of the quote log and are not firms anybody answers to.' : '');
+                           + ' \u2014 they came out of the quote log and are not firms anybody answers to.' : '')
+     + (d.excludedAlias ? ' ' + d.excludedAlias + ' are alternate spellings of a firm already on the list.' : '')
+     + (d.capped ? ' \u26a0\ufe0f Only the first ' + d.cap + ' are shown \u2014 there are more.' : '');
    await loadTags();
    // ⚠️ THE URL WINS OVER THE DEFAULT RENDER, and only once the rows are here. openFirm reads
    // mktRows, so asking for a firm before this point finds nothing and does nothing at all.
