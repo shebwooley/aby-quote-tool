@@ -85,7 +85,15 @@ def main():
         "WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1) "
         "SELECT a.id, a.name, COALESCE(q.quotes,0) quotes, COALESCE(a.state,'') st "
         "FROM agencies a LEFT JOIN q ON q.k = lower(trim(a.name)) "
-        "WHERE (SELECT COUNT(*) FROM agencies c WHERE c.parent_id = a.id) > 0 "
+        # 🔴 A REAL SUBSIDIARY, NOT ANY CHILD. Eric, 2026-08-26, on Patriot - Benefits
+        # Texas: "I do not need DFW added to it because there is no subsidiary of Benefits Texas."
+        # Its only child is "Patriot (Benefits Texas)" -- an ALIAS, a spelling of ITSELF. A firm
+        # with spelling variants is not a holding company, and counting any child at all made this
+        # rule flag 69 firms that need nothing doing to them: 81 candidates, 12 real.
+        # ⭐ THE TEST IS WHETHER SOMETHING BELOW IT IS A DIFFERENT FIRM -- a division or an
+        # acquisition. An alias is the same firm spelled another way.
+        "WHERE (SELECT COUNT(*) FROM agencies c WHERE c.parent_id = a.id "
+        "        AND COALESCE(c.relationship,'') IN ('division','succeeded')) > 0 "
         "  AND COALESCE(q.quotes,0) > 0 "
         "  AND a.name NOT LIKE '% - %' "
         "  AND COALESCE(a.state,'') IN ('','TX')" + where_only +
