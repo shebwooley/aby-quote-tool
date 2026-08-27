@@ -12471,6 +12471,43 @@ const MIGRATIONS = [
   { sql: "ALTER TABLE agencies ADD COLUMN website TEXT", table: "agencies", column: "website" },
   { sql: "CREATE INDEX IF NOT EXISTS people_source ON people (source)", index: "people_source" },
 
+  // ── THE BROKERS AND AGENCIES PAGE TOOK 23 SECONDS, AND EVERY JOIN IS ON AN EXPRESSION ──────
+  //
+  // Eric, 2026-08-27, and he had been staring at it: "the f-ing list is gone." It was not gone.
+  // /api/admin/stats was taking 22,957ms, so every card on the Performance view sat on
+  // "Loading..." until it returned -- and switching view or losing patience before then meant the
+  // lists simply never appeared. An empty-looking screen and a slow one are the same screen.
+  //
+  // MEASURED, NOT GUESSED: the byAgent query alone read 21,438,704 ROWS out of a table holding
+  // 6,170 quotes -- about 3,475 rows scanned per quote. The cause is that every join in these
+  // handlers matches on a COMPUTED value, of the shape
+  //     lower(trim(a.name)) = lower(trim(q.broker_agency))
+  // and an ordinary column index cannot answer that, so each join full-scans the other table once
+  // per row, six times over.
+  //
+  // SQLite indexes an EXPRESSION perfectly well, and this repo already leans on that:
+  // brokers_email_unique is ON brokers (lower(trim(email))). These six give the other hot joins
+  // the same treatment.
+  //
+  // AFTER: byAgent 7,011ms -> 41.79ms, and 21,438,704 rows read -> 40,709. The whole endpoint went
+  // 22,957ms -> ~700ms and returned the IDENTICAL 647 agents and 538 agencies. So this changes how
+  // the answer is reached and never what the answer is, which is what made it safe to ship.
+  //
+  // DO NOT DROP THESE TO TIDY UP. An index is invisible on every screen and in every test until
+  // the day somebody wonders why a page hangs, which is exactly how this one was found.
+  { sql: "CREATE INDEX IF NOT EXISTS agencies_lower_name ON agencies (lower(trim(name)))",
+    index: "agencies_lower_name" },
+  { sql: "CREATE INDEX IF NOT EXISTS agencies_parent ON agencies (parent_id)",
+    index: "agencies_parent" },
+  { sql: "CREATE INDEX IF NOT EXISTS quotes_lower_broker_agency ON quotes (lower(trim(broker_agency)))",
+    index: "quotes_lower_broker_agency" },
+  { sql: "CREATE INDEX IF NOT EXISTS quotes_lower_broker_email ON quotes (lower(trim(broker_email)))",
+    index: "quotes_lower_broker_email" },
+  { sql: "CREATE INDEX IF NOT EXISTS quotes_lower_broker_name ON quotes (lower(trim(broker_name)))",
+    index: "quotes_lower_broker_name" },
+  { sql: "CREATE INDEX IF NOT EXISTS broker_directory_lower_email ON broker_directory (lower(trim(email)))",
+    index: "broker_directory_lower_email" },
+
   // ── TO-DOS GROW A TIME, A KIND, AN ORDER AND A COMPLETION RECORD (Eric, 2026-08-26) ────────
   //
   // "Is there a way to edit To-Dos, to mark them as done but actually have a record of what was
