@@ -3156,7 +3156,7 @@ async function handleCrmPersonSearch(request, env) {
 
   const where = ["COALESCE(p.disposition,'') NOT IN ('" + SUPPRESSED.join("','") + "')"];
   const args = [];
-  if (noFirm) where.push('p.agency_id IS NULL');
+  if (noFirm) where.push('pa.aid IS NULL');
   // A BROWSE AND A SEARCH ARE NOT THE SAME QUESTION, and this is where they part.
   //
   // BROWSING the no-firm people is a WORKING LIST -- "who could I call?" -- so it follows the same
@@ -3176,15 +3176,30 @@ async function handleCrmPersonSearch(request, env) {
 
   try {
     const r = await env.DB.prepare(
+      // 🔴🔴 A PERSON'S FIRM IS NOT ALWAYS ON THEIR PERSON ROW, AND ASSUMING IT WAS PUT 140 REAL
+      // PEOPLE UNDER "no firm on file" WHO HAVE ONE.
+      //
+      // handleCrmImport does this ON PURPOSE and says so: when somebody held only by name and firm
+      // later gains an email address, the agency link moves to their broker_directory row and
+      // people.agency_id is set NULL, "because keeping it on people too would be the same fact
+      // twice." That is a defensible normalisation -- and it means the ONLY correct reading of
+      // "which firm is this person at" is the person row OR their address, never the first alone.
+      //
+      // ⛔ THE FIX IS NOT TO BACKFILL THE COLUMN. That would fight a written, deliberate decision
+      // and put the same fact in two places, which is exactly what the import avoided.
+      "WITH pa AS (SELECT p2.id AS pid, COALESCE(p2.agency_id, " +
+      '              (SELECT MIN(d4.agency_id) FROM broker_directory d4 ' +
+      '                WHERE d4.person_id = p2.id AND d4.agency_id IS NOT NULL)) AS aid ' +
+      '            FROM people p2) ' +
       'SELECT p.id AS person_id, p.name AS name, ' +
       "       COALESCE(p.city,'') AS city, COALESCE(p.phone,'') AS phone, " +
       "       COALESCE(p.source,'') AS source, COALESCE(p.disposition,'') AS disposition, " +
       "       COALESCE(p.disposition_note,'') AS disposition_note, p.disposition_at AS disposition_at, " +
-      "       p.agency_id AS agency_id, COALESCE(a.name,'') AS agency_name, " +
+      "       pa.aid AS agency_id, COALESCE(a.name,'') AS agency_name, " +
       "       COALESCE(a.state,'') AS agency_state, " +
       '       (SELECT MIN(d.email) FROM broker_directory d WHERE d.person_id = p.id) AS email, ' +
       '       (SELECT COALESCE(SUM(d2.quote_count),0) FROM broker_directory d2 WHERE d2.person_id = p.id) AS quotes ' +
-      'FROM people p LEFT JOIN agencies a ON a.id = p.agency_id ' +
+      'FROM people p JOIN pa ON pa.pid = p.id LEFT JOIN agencies a ON a.id = pa.aid ' +
       'WHERE ' + where.join(' AND ') + ' ' +
       'ORDER BY quotes DESC, p.name COLLATE NOCASE ' +
       'LIMIT ?'
