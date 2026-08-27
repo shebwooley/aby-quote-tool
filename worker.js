@@ -81,6 +81,10 @@ export default {
     if (path === '/api/admin/crm/relationship' && method === 'POST') return withAuth(request, env, () => handleCrmRelationship(request, env));
     if (path === '/api/admin/crm/agency'       && method === 'POST') return withAuth(request, env, () => handleCrmAgencyField(request, env));
     if (path === '/api/admin/crm/import'       && method === 'POST') return withAuth(request, env, () => handleCrmImport(request, env));
+    // A staged bulk load. The rows sit in cce_staging; these two only MOVE them, and every row
+    // still goes through /api/admin/crm/import, which is the one place the identity rules live.
+    if (path === '/api/admin/crm/staged'       && method === 'GET')  return withAuth(request, env, () => handleCrmStagedNext(request, env));
+    if (path === '/api/admin/crm/staged-done'  && method === 'POST') return withAuth(request, env, () => handleCrmStagedDone(request, env));
     if (path === '/api/admin/crm/agency-dupes' && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyDupes(request, env));
     if (path === '/api/admin/crm/people'       && method === 'GET')  return withAuth(request, env, () => handleCrmAgencyPeople(request, env));
     if (path === '/api/admin/crm/never-quoted' && method === 'GET')  return withAuth(request, env, () => handleCrmNeverQuoted(request, env));
@@ -3549,6 +3553,49 @@ async function handleAgencyPersonUpdate(request, env) {
 // The UNION is the point: a person with an address comes from broker_directory, a person we hold by
 // name and firm comes from people, and the screen must not care which. has_email lets the page say
 // what is missing rather than rendering a blank cell that reads as a bug.
+// ── A STAGED BULK LOAD, AND WHY IT IS SHAPED THIS WAY ─────────────────────────────────────────
+//
+// The CE list is 2,677 people. They have to reach handleCrmImport, because that is the ONLY place
+// that knows the identity rules -- email is the key, otherwise name plus firm, and a name matching
+// more than one person is refused rather than guessed. Re-implementing any of that in a loader
+// would be the second copy this project keeps getting bitten by.
+//
+// ⛔ SO THE ROWS ARE NOT IMPORTED HERE. They are staged in cce_staging by one wrangler call that
+// reads the file off disk, and these two handlers only hand them out and mark them done. The
+// import itself still runs through the same endpoint an operator's paste uses.
+//
+// ⚠️ done IS SET AFTER THE IMPORT SUCCEEDS, NEVER BEFORE. Marking on read would skip a batch whose
+// import then failed, and the loss would be silent -- the row would simply never arrive and no
+// count would say so.
+async function handleCrmStagedNext(request, env) {
+  const u = new URL(request.url);
+  const limit = Math.min(Math.max(parseInt(u.searchParams.get('limit'), 10) || 40, 1), 100);
+  try {
+    const r = await env.DB.prepare(
+      'SELECT n, name, email, phone, city, agency FROM cce_staging WHERE done = 0 ORDER BY n LIMIT ?'
+    ).bind(limit).all();
+    const left = await env.DB.prepare('SELECT COUNT(*) AS n FROM cce_staging WHERE done = 0').first();
+    return jsonResp({ rows: r.results || [], remaining: (left && left.n) || 0 });
+  } catch (err) {
+    return jsonResp({ error: String((err && err.message) || err) }, 500);
+  }
+}
+
+async function handleCrmStagedDone(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const ns = (Array.isArray(body.ns) ? body.ns : []).map(Number).filter((x) => Number.isFinite(x));
+  if (!ns.length) return jsonResp({ error: 'Nothing to mark.' }, 400);
+  try {
+    const marks = ns.map(() => '?').join(',');
+    const r = await env.DB.prepare('UPDATE cce_staging SET done = 1 WHERE n IN (' + marks + ')')
+      .bind(...ns).run();
+    // Report what came BACK, not that no error came back.
+    return jsonResp({ marked: (r && r.meta && r.meta.changes) || 0, asked: ns.length });
+  } catch (err) {
+    return jsonResp({ error: String((err && err.message) || err) }, 500);
+  }
+}
+
 async function handleCrmAgencyPeople(request, env) {
   const id = (new URL(request.url).searchParams.get('agency_id') || '').trim();
   if (!id) return jsonResp({ error: 'Which firm?' }, 400);
