@@ -33,6 +33,19 @@
   // three: an uploaded file wins, then the BenefitLab hand-off, then this.
   var accountLogoDataUrl = null;
 
+  // The name the BROKER'S FIRM wants a client to read, when it differs from the one ABY files
+  // them under (F-429). Eric: "we might call an agency MMA-DFW but they may want it to say MMA
+  // or Marsh on the quote."
+  //
+  // ⭐⭐ A SEPARATE VALUE FROM THE FORM FIELD, AND THAT IS THE WHOLE POINT. The brokerAgency INPUT
+  // keeps our own name, because that is the string a saved quote stores and twenty joins on the
+  // server match a firm on. This one is read only when the document is drawn. Putting the display
+  // name into the input would have been simpler and would have written it into the next quote.
+  //
+  // 🔴 SERVER-SET ONLY, exactly like agencyLogoPath. It is applied under the same `fromServer`
+  // guard, so a crafted ?rerun= link cannot put a firm's name of its choosing on an ABY document.
+  var carriedAgencyDisplay = null;
+
   /**
    * Is this a broker logo URL we are willing to put in the quote's <img src>?
    *
@@ -632,6 +645,10 @@
         };
         probe.src = reader.result;
       };
+      // ⚠️ SET BEFORE THE ASYNC BRANCH, NOT INSIDE IT. Both probe callbacks draw the document,
+      // and attaching it on only one of them would mean a firm's chosen name appeared on a quote
+      // with no logo and vanished on a quote with one -- the kind of difference nobody reproduces.
+      if (carriedAgencyDisplay) form.brokerAgencyDisplay = carriedAgencyDisplay;
       reader.readAsDataURL(brokerLogoFile);
     } else {
       // ⭐ AN UPLOADED FILE WINS OVER THE CARRIED URL, and that order is deliberate: the broker
@@ -642,6 +659,7 @@
       // saved on the broker's ABY account. Each is a statement of intent; the narrower one wins.
       if (carriedBrokerLogoUrl) form.brokerLogoUrl = carriedBrokerLogoUrl;
       else if (accountLogoDataUrl) form.brokerLogoDataUrl = accountLogoDataUrl;
+      if (carriedAgencyDisplay) form.brokerAgencyDisplay = carriedAgencyDisplay;
       renderQuote(form);
     }
   }
@@ -1250,6 +1268,16 @@
     if (fromServer && typeof state.agencyLogoPath === 'string'
         && /^\/api\/agency-logo\/[0-9a-fA-F-]{36}$/.test(state.agencyLogoPath)) {
       carriedBrokerLogoUrl = state.agencyLogoPath;
+    }
+
+    // ⭐ THE FIRM'S OWN PREFERRED NAME (F-429), on the same terms as the logo path above: server
+    // only. ⛔ NOT applied to the brokerAgency input -- the input holds the name that gets SAVED,
+    // and this is only ever the name that gets PRINTED.
+    // ⚠️ Length-capped here as well as at the point it is set, because a value arriving over the
+    // wire is not the same thing as a value this browser wrote.
+    if (fromServer && typeof state.brokerAgencyDisplay === 'string'
+        && state.brokerAgencyDisplay.trim() && state.brokerAgencyDisplay.length <= 120) {
+      carriedAgencyDisplay = state.brokerAgencyDisplay.trim();
     }
 
     // Basic text fields

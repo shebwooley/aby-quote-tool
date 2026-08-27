@@ -1071,6 +1071,49 @@ async function serveSharedQuote(token, env, request) {
     // A logo is decoration. It must never be the reason a client cannot open their quote.
   }
 
+  // -- THE NAME THIS FIRM WANTS THEIR CLIENT TO READ (F-429) --------------------------------
+  //
+  // ERIC, 2026-08-27: "we might call an agency MMA-DFW but they may want it to say MMA or Marsh
+  // on the quote. Is it possible for us to have a friendly name for us and then a quoting name
+  // based on what they want for the quotes?"
+  //
+  // THE SUBSTITUTION HAPPENS HERE, AT RENDER, AND NOWHERE NEAR STORAGE. quotes.broker_agency
+  // still holds -- and this page still received -- the name WE file them under, because twenty
+  // places in this file join quotes to firms on exactly that string. This adds a SECOND field
+  // that only the document reads. Overwriting shared.brokerAgency instead would have been one
+  // line shorter and would have put a display name into the value a re-run saves back.
+  //
+  // THE SAME TWO KEYS AS THE LOGO, IN THE SAME ORDER, AND FOR THE SAME MEASURED REASON: only 2
+  // of the 6 quotes ever shared carry an agency_id, and Eric's own MMA - DFW quote is one of the
+  // four that do not. Resolving by id alone would miss the quote that prompted the request.
+  //
+  // NOT SENT WHEN IT MATCHES. A field equal to the one beside it is a chance for two values to
+  // drift apart on screen, and the renderer already falls back correctly when it is absent.
+  try {
+    let quoting = '';
+    const wantedId = String(q.agency_id || '').trim();
+    if (wantedId) {
+      const byId = await env.DB.prepare(
+        "SELECT quoting_name FROM agencies WHERE id = ?"
+      ).bind(wantedId).first();
+      quoting = String((byId && byId.quoting_name) || '').trim();
+    }
+    if (!quoting && String(q.broker_agency || '').trim()) {
+      const byName = await env.DB.prepare(
+        "SELECT quoting_name FROM agencies WHERE lower(trim(name)) = ? " +
+        "  AND COALESCE(quoting_name,'') <> '' ORDER BY id LIMIT 1"
+      ).bind(String(q.broker_agency).trim().toLowerCase()).first();
+      quoting = String((byName && byName.quoting_name) || '').trim();
+    }
+    if (quoting && quoting !== String(q.broker_agency || '').trim()) {
+      shared.brokerAgencyDisplay = quoting;
+    }
+  } catch (e) {
+    // A firm that has never been asked what they want to be called is the common case, and a
+    // failure here must read as that case -- the document falls back to our own name, which is
+    // what it printed before this existed. It must never be why a client cannot open a quote.
+  }
+
   const res = await env.ASSETS.fetch(new Request(new URL('/', url), request));
   let html = await res.text();
   // Neutralise the one sequence that can end a script element early: a client name containing
@@ -2801,6 +2844,10 @@ async function handleCrmAgencies(request, env) {
     '       a.relationship, a.parent_id, a.relationship_note, pa.name AS parent_name, ' +
     // Carried so the firm panel can show that a name is settled, and the row can say so too.
     '       a.name_confirmed_at, ' +
+    // ⭐ THE NAME THIS FIRM WANTS ON A CLIENT'S QUOTE (F-429), carried so the panel can show and
+    // edit it. ⛔ NOTHING ON THIS SCREEN COUNTS BY IT -- the Quotes and Sales columns beside it
+    // join on a.name, and they must keep doing so.
+    '       a.quoting_name, ' +
     // ── A PARENT TOTALS ITS BRANCHES (Eric, 2026-08-26) ──────────────────────────────────
     //
     // "Why on Patriot Growth Insurance Services does it not show the total of the branches below
@@ -3437,6 +3484,24 @@ async function handleCrmAgencyField(request, env) {
       return (d === '' || DISPOSITIONS.includes(d)) ? d || null : undefined;
     },
     disposition_note: (v) => String(v || '').trim().slice(0, 500) || null,
+    // ⭐⭐ WHAT THIS FIRM WANTS A CLIENT TO READ (F-429). Eric: "we might call an agency MMA-DFW
+    // but they may want it to say MMA or Marsh on the quote."
+    // 🔴 SETTING IT CHANGES NOTHING ABOUT COUNTING. Every quote still stores, and every screen
+    // still joins on, the name in the row above. This is read at RENDER time and nowhere else.
+    // ⛔ BLANK IS A REAL ANSWER and means "use our name" -- the common case, and the one a firm
+    // returns to when they stop caring. It is not the same as never having been asked, but a
+    // second column to record that distinction would be a field nobody fills in.
+    // ⚠️ CONTROL CHARACTERS STRIPPED. This string is printed into a client-facing document, and
+    // an invisible character in a name is the defect that took two hours to find on 2026-08-27.
+    quoting_name: (v) => {
+      var raw = String(v == null ? '' : v), out = '';
+      for (var i2 = 0; i2 < raw.length; i2++) {
+        var c2 = raw.charCodeAt(i2);
+        out += (c2 < 32 || c2 === 127) ? ' ' : raw.charAt(i2);
+      }
+      const s2 = out.trim();
+      return s2.slice(0, 120) || null;
+    },
     city: (v) => String(v || '').trim().slice(0, 80) || null,
     state: (v) => {
       const s = String(v || '').trim().toUpperCase();
@@ -8258,6 +8323,26 @@ ${abyAdminNav('/admin/brokers')}
              : '<button onclick="confirmName(' + "'" + id + "'" + ')" style="font-size:12.5px">'
                + 'This name is right &mdash; stop suggesting changes</button>')
          + '</div>'
+         // ⭐⭐ THE NAME THEY WANT ON A QUOTE (F-429). Eric, 2026-08-27: "we might call an
+         // agency MMA-DFW but they may want it to say MMA or Marsh on the quote. Is it possible for
+         // us to have a friendly name for us and then a quoting name based on what they want?"
+         // ⛔ DIRECTLY UNDER OUR OWN NAME AND NOT IN A DETAILS BOX, because the whole point is
+         // that the two are read together -- a quoting name is only meaningful as a contrast with
+         // the name above it, and hidden behind a summary nobody would ever discover it exists.
+         // ⚠️ THE HELPER TEXT SAYS WHAT IT DOES NOT DO. Somebody setting this is entitled to
+         // know it will not move their quote counts, because the obvious fear -- "will this
+         // renaming lose their history?" -- is a reasonable one and the answer is no.
+         + '<div class="mfilters" style="align-items:center">'
+         + '<input id="fQuoting" placeholder="Name on their quotes (leave blank to use ours)" '
+         + 'value="' + esc(a.quoting_name || '') + '" style="flex:1;min-width:230px;padding:6px 9px;'
+         + 'border:1px solid #c8d2de;border-radius:5px">'
+         + '<button onclick="saveQuoting(' + "'" + id + "'" + ')">Save quoting name</button>'
+         + '<span class="muted" style="font-size:12.5px">'
+         + (a.quoting_name
+             ? 'Their clients see <strong>' + esc(a.quoting_name) + '</strong>. We still file them, '
+               + 'count them and quote-match them as ' + esc(a.name) + '.'
+             : 'Blank means their clients see ' + esc(a.name) + ', the same as us.')
+         + '</span></div>'
          + '<div class="mfilters"><input id="fNote" placeholder="What happened?" style="flex:1;padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
          + '<input id="fNoteDate" type="date" value="' + new Date().toISOString().slice(0, 10) + '">'
          + '<button onclick="addNote(' + "'" + id + "'" + ')">Add note</button></div>'
@@ -8437,6 +8522,23 @@ ${abyAdminNav('/admin/brokers')}
      if (!r.ok){ q('fMsg').textContent = d.error || 'That did not save.'; return; }
      for (var i = 0; i < mktRows.length; i++){ if (mktRows[i].id === id) mktRows[i][field] = el.value; }
    }
+   openFirm(id);
+ }
+
+ // ⭐ SET WHAT A CLIENT READS, WITHOUT TOUCHING WHAT WE COUNT (F-429). The twin of saveWhere,
+ // and deliberately a SEPARATE button from "Save the name": renaming a firm and changing what
+ // their clients call them are different decisions with different consequences, and one button
+ // doing both would make the safe one feel as risky as the other.
+ async function saveQuoting(id){
+   var el = q('fQuoting');
+   q('fMsg').textContent = 'Saving...';
+   var r = await fetch('/api/admin/crm/agency', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ id: id, field: 'quoting_name', value: el.value }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok){ q('fMsg').textContent = d.error || 'That did not save.'; return; }
+   for (var i = 0; i < mktRows.length; i++){ if (mktRows[i].id === id) mktRows[i].quoting_name = d.value; }
    openFirm(id);
  }
 
@@ -15025,6 +15127,23 @@ const MIGRATIONS = [
   // ⛔ The record is the point, so it must be able to say more than a timestamp: a call that
   // happened has an outcome, and that outcome is the reason anybody looks back at it.
   { sql: "ALTER TABLE aby_task ADD COLUMN done_note TEXT", table: "aby_task", column: "done_note" },
+
+  // ── THE NAME THE FIRM WANTS ON A QUOTE, WHICH IS NOT ALWAYS THE NAME WE FILE THEM UNDER (F-429) ─
+  //
+  // ⭐⭐ ERIC, 2026-08-27: "we might call an agency MMA-DFW but they may want it to say MMA or
+  // Marsh on the quote. Is it possible for us to have a friendly name for us and then a quoting
+  // name based on what they want for the quotes?"
+  //
+  // ⭐ THE TWO NAMES ANSWER DIFFERENT QUESTIONS, WHICH IS WHY ONE COLUMN CANNOT DO BOTH. Ours has
+  // to be unique, sortable, and able to tell MMA - DFW from MMA - STL. Theirs has to be what their
+  // client expects to read at the top of a proposal.
+  //
+  // 🔴🔴 DISPLAY ONLY, AND THAT IS THE WHOLE SAFETY ARGUMENT. TWENTY places in this file join
+  // quotes to firms by NAME -- quotes.broker_agency matched against agencies.name -- because a
+  // quote stores the agency as free text. Nothing reads this column to count, group, match or
+  // resolve anything. Point one join at it and MMA - DFW quotes go quiet with nothing turning red,
+  // which is the exact silent miscount TRAPS #259 already records.
+  { sql: "ALTER TABLE agencies ADD COLUMN quoting_name TEXT", table: "agencies", column: "quoting_name" },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column

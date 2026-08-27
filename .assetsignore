@@ -113,3 +113,22 @@ README.md
 # NOTE ON WHAT IS DELIBERATELY STILL PUBLISHED:
 #   index.html, july-2026.html, aby-logo.png, save-hook.js and everything under assets/.
 #   Those are the tool itself.
+
+# ── SCRATCH AND PROBE FILES ARE NOT PUBLIC ASSETS (2026-08-27) ────────────────────────────────
+#
+# 🔴🔴 THIS IS NOT HYPOTHETICAL. Testing F-429 wrote four probe files into this directory --
+# `.tok.txt`, `.probe.py` and two saved copies of real shared quote pages -- and the very next
+# `wrangler deploy` PUBLISHED ALL FOUR. `.tok.txt` held live share tokens. Every one returned
+# HTTP 200 on abyquotes.com before they were removed.
+#
+# ⛔ THE CAUSE IS STRUCTURAL, NOT CARELESSNESS: `assets.directory` is "." -- the REPO ROOT -- so
+# anything written beside the code is a public URL the moment somebody deploys. A working file in
+# the repo root is the normal thing to do in every other project.
+#
+# ⚠️ DOTFILES ARE NOT EXEMPT. A leading dot hides a file from `ls`, not from an HTTP GET.
+.tok.txt
+.probe.py
+.p_*.html
+*.probe.*
+scratch/
+tmp/

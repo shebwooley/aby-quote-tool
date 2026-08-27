@@ -64,7 +64,7 @@ ABYQuote.renderer = (function () {
       ? '<img class="broker-logo" src="' + esc(brokerLogoSrc) + '" alt="Broker logo">'
       : '';
     var parts = [];
-    if (form.brokerName || form.brokerAgency) parts.push('<div class="broker-name">' + esc([form.brokerName, form.brokerAgency].filter(Boolean).join(', ')) + '</div>');
+    if (form.brokerName || form.brokerAgency) parts.push('<div class="broker-name">' + esc([form.brokerName, agencyLabel(form)].filter(Boolean).join(', ')) + '</div>');
     var bc = [];
     if (form.brokerPhone) bc.push(esc(form.brokerPhone));
     if (form.brokerEmail) bc.push(esc(form.brokerEmail));
@@ -465,9 +465,28 @@ ABYQuote.renderer = (function () {
     ].join('\n');
   }
 
+  /**
+   * The firm's name AS THE CLIENT SHOULD READ IT (F-429).
+   *
+   * Eric, 2026-08-27: "we might call an agency MMA-DFW but they may want it to say MMA or Marsh
+   * on the quote. Is it possible for us to have a friendly name for us and then a quoting name
+   * based on what they want for the quotes?"
+   *
+   * ONE FUNCTION, USED BY BOTH PLACES A CLIENT SEES THE FIRM -- the letterhead and the contact
+   * card at the end. Two call sites reading two different fields is how a proposal ends up
+   * addressed from MMA at the top and MMA - DFW at the bottom.
+   *
+   * FALLS BACK TO THE NAME ON THE FORM, which is what every quote printed before this existed.
+   * Most firms have never been asked what they want to be called, and for them nothing changes.
+   */
+  function agencyLabel(form) {
+    return (form.brokerAgencyDisplay && String(form.brokerAgencyDisplay).trim())
+      || form.brokerAgency;
+  }
+
   function renderNextSteps(form) {
     var broker = [];
-    if (form.brokerName || form.brokerAgency) broker.push(esc([form.brokerName, form.brokerAgency].filter(Boolean).join(', ')));
+    if (form.brokerName || form.brokerAgency) broker.push(esc([form.brokerName, agencyLabel(form)].filter(Boolean).join(', ')));
     if (form.brokerPhone) broker.push(esc(form.brokerPhone));
     if (form.brokerEmail) broker.push(esc(form.brokerEmail));
     var rep = [];

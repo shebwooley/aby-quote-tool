@@ -312,6 +312,41 @@ const RULES = [
       && /agencyLogoPath/.test(f.app),
   },
   {
+    name: "a firm's QUOTING NAME can be set from the panel somebody is already looking at",
+    why: "Eric asked for it as a pair -- 'a friendly name for us and then a quoting name based on"
+       + " what they want for the quotes' -- and a pair is only meaningful read together. The"
+       + " control therefore sits directly under the name it contrasts with, not behind a"
+       + " summary, and the closed field list on the server has to accept it or the button lies.",
+    holds: (f) => /id="fQuoting"/.test(f.worker)
+      && /onclick="saveQuoting\(/.test(f.worker)
+      && /async function saveQuoting\(id\)\{/.test(f.worker)
+      && /field: 'quoting_name'/.test(f.worker)
+      && /quoting_name: \(v\) => \{/.test(f.worker)
+      && /a\.quoting_name, ' \+/.test(f.worker),
+  },
+  {
+    name: "the quoting name reaches the CLIENT's document and never the value a quote saves",
+    why: "TWENTY places in worker.js join quotes to firms on the agency NAME, because a quote"
+       + " stores it as free text. So the substitution has to happen at render and nowhere near"
+       + " storage: a separate payload field, a separate form property, and the brokerAgency INPUT"
+       + " left holding our own name. Overwriting the input would be shorter and would write a"
+       + " display name into the next quote, silently detaching that firm from its own history.",
+    holds: (f) => /shared\.brokerAgencyDisplay = quoting;/.test(f.worker)
+      && /carriedAgencyDisplay = state\.brokerAgencyDisplay\.trim\(\);/.test(f.app)
+      && /form\.brokerAgencyDisplay = carriedAgencyDisplay;/.test(f.app)
+      && /function agencyLabel\(form\)/.test(f.renderer)
+      // BOTH client-facing places, counted. One call site left reading the raw field is the
+      // half-a-feature this rule exists to catch.
+      && (f.renderer.match(/agencyLabel\(form\)/g) || []).length === 3,
+  },
+  {
+    name: "a crafted rerun link cannot put a firm's name of its choosing on an ABY document",
+    why: "The same threat model as the logo path: ?rerun= is a URL anyone can construct and send"
+       + " to anyone. A display name is read straight onto the letterhead of a document carrying"
+       + " ABY's fees and a signature page, so it is honoured only on the server branch.",
+    holds: (f) => /if \(fromServer && typeof state\.brokerAgencyDisplay === 'string'/.test(f.app),
+  },
+  {
     name: "the server-supplied logo path is never honoured from a crafted rerun link",
     why: "brokerLogoUrl is guarded by a HOST allow-list because it arrives in a rerun parameter"
        + " anyone can construct -- without it a crafted link would put an arbitrary image, and a"
@@ -959,6 +994,39 @@ const SABOTAGES = [
     apply: (f) => ({ ...f, worker: f.worker.replace(
       /lower\(trim\(name\)\) = \? AND COALESCE\(logo_data_url,''\) <> ''/g,
       "id = ? AND COALESCE(logo_data_url,'') <> ''") }),
+  },
+  {
+    // The control leaves the panel. Eric could still set a quoting name with SQL, which is the
+    // state the firm NAME itself was in until 2026-08-24 -- built, and reachable by nobody.
+    why: "the quoting name field is removed from the firm panel",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/id="fQuoting"/g, 'id="fQuotingGone"') }),
+  },
+  {
+    // The closed field list stops accepting it, so the button posts and the server refuses.
+    why: "the server stops accepting quoting_name as a settable field",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/quoting_name: \(v\) => \{/g,
+      'quoting_name_disabled: (v) => {') }),
+  },
+  {
+    // The document goes back to printing OUR name, which is the state before F-429.
+    why: "the shared quote stops resolving the firm's chosen name",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/shared\.brokerAgencyDisplay = quoting;/g,
+      'void quoting;') }),
+  },
+  {
+    // 🔴 THE ONE THAT MATTERS MOST: one call site reverted. The letterhead says what the firm
+    // asked for and the closing contact card says what WE call them, on the same page.
+    why: "one of the two client-facing places goes back to reading the raw agency field",
+    apply: (f) => ({ ...f, renderer: f.renderer.replace(
+      /broker\.push\(esc\(\[form\.brokerName, agencyLabel\(form\)\]/g,
+      'broker.push(esc([form.brokerName, form.brokerAgency]') }),
+  },
+  {
+    // The server-only guard goes, so a crafted rerun link could set the firm's printed name.
+    why: "the display name is honoured from a crafted rerun link, not just from the server",
+    apply: (f) => ({ ...f, app: f.app.replace(
+      /if \(fromServer && typeof state\.brokerAgencyDisplay === 'string'/g,
+      "if (typeof state.brokerAgencyDisplay === 'string'") }),
   },
   {
     // The server-only guard goes, so a crafted rerun link could set the image source.
