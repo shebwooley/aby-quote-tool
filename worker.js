@@ -340,7 +340,18 @@ async function handleSaveQuote(request, env, ctx) {
 
   // Attribution is decided on the SERVER from the session cookie, so a broker
   // cannot spoof it: a valid aby_admin session => 'ABY', otherwise 'broker'.
-  const ranBy = (await isAuthed(request, env)) ? 'ABY' : 'broker';
+  // TWO FACTS FROM ONE CALL, and they answer two different questions.
+  //   ran_by     -- WHICH LOGIN: ABY or a broker. The existing vocabulary, unchanged, because the
+  //                 quote-log filter, the origin badge and the roll-ups all read it.
+  //   ran_by_who -- WHICH PERSON, when it was an ABY login: eric, niels, or office.
+  // Eric, 2026-08-28: "any run through the system (through our login) to be attributed either to
+  // me or Niels once we have our individual logins as the person who ran them. And the ones run
+  // through a broker's login to say broker."
+  // A broker login stores an EMPTY who rather than the word broker: ran_by already says that, and
+  // repeating it in a second column is how the two start disagreeing.
+  const adminName = await adminWho(request, env);
+  const ranBy = adminName ? 'ABY' : 'broker';
+  const ranByWho = adminName || '';
   // Brokers are TX-locked on the server: only an ABY session may set a non-TX state.
   const stateCode = (ranBy === 'ABY') ? String(state || 'TX').toUpperCase().slice(0, 8) : 'TX';
   // The override is ABY-only; ignore anything a non-ABY caller tries to attach.
@@ -400,15 +411,15 @@ async function handleSaveQuote(request, env, ctx) {
           (id, quote_number, created_at, client_name, effective_date,
            broker_name, broker_agency, broker_phone, broker_email,
            rep_name, rep_phone, rep_email, commission_included, products,
-           ran_by, state, adjustment, adjustment_note, client_id, client_match_key, revision)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+           ran_by, ran_by_who, state, adjustment, adjustment_note, client_id, client_match_key, revision)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
       `).bind(
         id, quoteNumber, now, clientName, effectiveDate,
         brokerName, brokerAgency, brokerPhone, brokerEmail,
         repName, repPhone, repEmail,
         commissionIncluded ? 1 : 0,
         productsJson,
-        ranBy, stateCode, adjustmentJson, adjustmentNoteVal,
+        ranBy, ranByWho, stateCode, adjustmentJson, adjustmentNoteVal,
         String(clientId || ''),
         // WRITTEN HERE SO IT CANNOT ROT. `client_match_key` is normName(client_name) stored on the
         // row, which is what lets a quote be joined to a client IN SQL instead of pulling both
@@ -463,7 +474,7 @@ async function handleSaveQuote(request, env, ctx) {
           client_name = ?, client_match_key = ?, effective_date = ?,
           broker_name = ?, broker_agency = ?, broker_phone = ?, broker_email = ?,
           rep_name = ?, rep_phone = ?, rep_email = ?, commission_included = ?, products = ?,
-          ran_by = ?, state = ?, adjustment = ?, adjustment_note = ?,
+          ran_by = ?, ran_by_who = ?, state = ?, adjustment = ?, adjustment_note = ?,
           client_id = CASE WHEN ? <> '' THEN ? ELSE client_id END,
           revision = COALESCE(revision, 1) + 1
         WHERE quote_number = ?
@@ -473,7 +484,7 @@ async function handleSaveQuote(request, env, ctx) {
         repName, repPhone, repEmail,
         commissionIncluded ? 1 : 0,
         productsJson,
-        ranBy, stateCode, adjustmentJson, adjustmentNoteVal,
+        ranBy, ranByWho, stateCode, adjustmentJson, adjustmentNoteVal,
         String(clientId || ''), String(clientId || ''),
         quoteNumber
       ).run();
@@ -541,7 +552,7 @@ async function handleListQuotes(request, env) {
 
   const ranByFilter = (url.searchParams.get('ran_by') || '').trim();   // '', 'ABY', or 'broker'
   const stateFilter  = (url.searchParams.get('state')  || '').trim().toUpperCase();
-  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, COALESCE(state, 'TX') AS state, adjustment, adjustment_note, client_id, source_tag, notes, COALESCE(direct, 0) AS direct";
+  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, COALESCE(ran_by_who, '') AS ran_by_who, COALESCE(state, 'TX') AS state, adjustment, adjustment_note, client_id, source_tag, notes, COALESCE(direct, 0) AS direct";
 
   try {
     const where = [];
@@ -14179,6 +14190,10 @@ async function serveAbyTool(request, env) {
 // which cannot prove itself is indistinguishable from one that did not run.
 const MIGRATIONS = [
   { sql: "ALTER TABLE quotes ADD COLUMN ran_by TEXT",           table: "quotes", column: "ran_by" },
+  // WHICH PERSON ran it, when ran_by is ABY: eric, niels or office. Empty for a broker login.
+  // Added 2026-08-28 with the fix to isAuthed -- until that landed every ABY run said broker, so
+  // there was no identity to record in the first place.
+  { sql: "ALTER TABLE quotes ADD COLUMN ran_by_who TEXT",       table: "quotes", column: "ran_by_who" },
   { sql: "ALTER TABLE quotes ADD COLUMN state TEXT",            table: "quotes", column: "state" },
   { sql: "ALTER TABLE quotes ADD COLUMN adjustment TEXT",       table: "quotes", column: "adjustment" },
   { sql: "ALTER TABLE quotes ADD COLUMN adjustment_note TEXT",  table: "quotes", column: "adjustment_note" },
@@ -16379,6 +16394,19 @@ function originMatches(q, want) {
 // ever reads oddly the fix is to make the pair explicit (Broker, Broker via dashboard) rather than
 // to go back to naming the route. ⛔ The stored VALUE stays 'direct' -- filters, saved URLs, habits.
 const ORIGIN_LABEL = { ABY: 'ABY', dashboard: 'Dashboard', direct: 'Broker' };
+// The badge says WHO when an ABY login is named, and ABY when it is not.
+// ORIGIN_LABEL itself is untouched on purpose: it keys the filter dropdown and the roll-up counts,
+// and adding a person to it would silently create a new bucket in both (three names would split
+// what is meant to read as one ABY total). This is a LABEL, not a category.
+// 'office' is shown as ABY rather than as a name: it means a named person is not known, and
+// printing the word office on a client-facing log says less than ABY does.
+function originBadge(q) {
+  var who = (q.ran_by_who || '').trim();
+  if (originOf(q) === 'ABY' && who && who !== 'office') {
+    return who.charAt(0).toUpperCase() + who.slice(1);
+  }
+  return ORIGIN_LABEL[originOf(q)];
+}
 // Tinted, not solid. Eric: "the pill for ABY and Direct Link look weird."
 // ⭐ Kept as three DISTINCT tints rather than one neutral chip, because the whole point of the
 // three-way origin (L) is that they are different answers -- ABY ran it, a dashboard broker ran
@@ -16785,7 +16813,7 @@ function render() {
         '<span class="origin" style="' + ORIGIN_STYLE[originOf(q)] + '" title="' +
           (originOf(q) === 'dashboard' ? 'Handed over from the BenefitLab dashboard (carries a client id)'
            : originOf(q) === 'direct' ? 'Run on the shared link - broker typed their own details'
-           : 'Run by ABY from the admin') + '">' + ORIGIN_LABEL[originOf(q)] + '</span>' +
+           : 'Run by ABY from the admin') + '">' + originBadge(q) + '</span>' +
         (q.adjustment ? '<br><span style="font-size:.72rem;color:#b8860b" title="' + esc(q.adjustment_note || "") + '">price adjusted</span>' : '') +
       '</td>';
 
