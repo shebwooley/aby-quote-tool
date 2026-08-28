@@ -2908,9 +2908,29 @@ async function handleCrmAgencies(request, env) {
     // ⭐ BOTH KINDS OF PERSON ARE COUNTED. Somebody held by name and firm has no broker_directory
     // row by design, so counting only that table would have reported "0 agents" for a firm whose
     // whole team we had just imported -- the count quietly meaning "agents with an email".
-    '       ((SELECT COUNT(*) FROM broker_directory d WHERE d.agency_id = a.id) + ' +
-    '        (SELECT COUNT(*) FROM people p WHERE p.agency_id = a.id ' +
-    '           AND NOT EXISTS (SELECT 1 FROM broker_directory d2 WHERE d2.person_id = p.id))) AS agents, ' +
+    // A SUPPRESSED PERSON IS NOT AN AGENT YOU CAN CALL (F-421 / F-422, 2026-08-27).
+    //
+    // This count was every person at the firm, whatever their record said -- so a firm whose only
+    // named contact is DECEASED, or has asked not to be contacted, read "1 agent" and sat on the
+    // call list looking exactly like a firm with a live one.
+    //
+    // THE SAME TWO DISPOSITIONS THE FIRM LIST ALREADY HONOURS, and F-421 asked for it in those
+    // words: deceased and do_not_contact on a person must suppress them the way they do on a firm.
+    //
+    // `retired` IS NOT SUPPRESSED and deliberately still counts: a retired agent may still answer
+    // and may still refer, and hiding them would assert something nobody recorded. It is reported
+    // SEPARATELY, so a row can read "2 agents - 1 retired" instead of quietly dropping one.
+    //
+    // A directory row with NO person_id has no disposition to test, so it counts -- that is the
+    // pre-import shape and dropping it would silently shrink firms nobody has reviewed.
+    "       ((SELECT COUNT(*) FROM broker_directory d LEFT JOIN people pp ON pp.id = d.person_id " +
+    "          WHERE d.agency_id = a.id AND (d.person_id IS NULL OR COALESCE(pp.disposition,'') NOT IN ('" + SUPPRESSED.join("','") + "'))) + " +
+    "        (SELECT COUNT(*) FROM people p WHERE p.agency_id = a.id " +
+    "          AND COALESCE(p.disposition,'') NOT IN ('" + SUPPRESSED.join("','") + "') " +
+    "          AND NOT EXISTS (SELECT 1 FROM broker_directory d2 WHERE d2.person_id = p.id))) AS agents, " +
+    // What the count no longer says, said separately (F-422).
+    "       (SELECT COUNT(*) FROM people p WHERE p.agency_id = a.id " +
+    "          AND COALESCE(p.disposition,'') IN ('retired','deceased','do_not_contact')) AS agents_flagged, " +
     "       (SELECT COUNT(*) FROM crm_events e WHERE e.entity_type = 'agency' AND e.entity_id = a.id " +
     "          AND e.kind = 'note') AS notes, " +
     "       (SELECT MAX(e.happened_at) FROM crm_events e WHERE e.entity_type = 'agency' " +
@@ -6759,7 +6779,17 @@ ${abyAdminNav('/admin/brokers')}
             + '<span class="muted" style="font-size:11.5px"> / '+kept+' now</span>'
             : '<span class="muted">—</span>')+'</td>'
        + '<td class="c">'+convCell+'</td><td class="c">'+keptCell+'</td>'
-       + '<td class="c">'+(x.agents||0)+'</td>'
+       // ⭐ THE COUNT IS CALLABLE PEOPLE ONLY (F-421/F-422), so a firm whose contacts have all
+       // been marked deceased or do-not-contact now reads 0 rather than looking staffed.
+       // ⛔ A RETIRED CONTACT STILL COUNTS and is flagged beside the number instead of being
+       // hidden -- "3" and "3 · 1 retired" are different facts, and the second is the one that
+       // tells somebody the firm needs a new name before it is worth calling.
+       + '<td class="c">'+(x.agents||0)
+         + (Number(x.agents_flagged||0) > 0
+             ? '<span class="muted" style="font-size:11px" title="Contacts marked retired, deceased or do-not-contact">'
+               + ' · ' + x.agents_flagged + ' flagged</span>'
+             : '')
+         + '</td>'
        + '<td class="date">'+(x.last_quote?day(x.last_quote):'\u2014')+'</td>'
        + '<td>'+(x.agency_id?repSelect('agency',x.agency_id,x.rep):'<span class="muted">\u2014</span>')+'</td></tr>';
    }

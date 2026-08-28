@@ -312,6 +312,18 @@ const RULES = [
       && /agencyLogoPath/.test(f.app),
   },
   {
+    name: "a person's disposition is READ, not only written",
+    why: "F-421 shipped the write path and nothing consumed it: the firm list counted every person"
+       + " at a firm whatever their record said, so a firm whose only contact is DECEASED read"
+       + " '1 agent' and sat on the call list. F-421 asked for exactly this -- deceased and"
+       + " do_not_contact on a PERSON must suppress them the way they do on a FIRM."
+       + " A retired contact still counts and is flagged instead, because hiding them would assert"
+       + " something nobody recorded.",
+    holds: (f) => /AND \(d\.person_id IS NULL OR COALESCE\(pp\.disposition/.test(f.worker)
+      && /AS agents_flagged/.test(f.worker)
+      && /x\.agents_flagged/.test(f.worker),
+  },
+  {
     name: "a firm's WEBSITE can be TYPED, not only displayed",
     why: "The column shipped 2026-08-26 with a reader and no writer: the panel rendered a link and"
        + " 830 of 1,453 firms had one only because an import put it there. Eric supplied one on"
@@ -1005,6 +1017,17 @@ const SABOTAGES = [
     apply: (f) => ({ ...f, worker: f.worker.replace(
       /lower\(trim\(name\)\) = \? AND COALESCE\(logo_data_url,''\) <> ''/g,
       "id = ? AND COALESCE(logo_data_url,'') <> ''") }),
+  },
+  {
+    // Back to counting a deceased contact as a callable agent.
+    why: "the agent count stops honouring a person's disposition",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      /AND \(d\.person_id IS NULL OR COALESCE\(pp\.disposition/g, 'AND (1=1 OR COALESCE(pp.disposition') }),
+  },
+  {
+    // The count suppresses correctly and the screen never says a contact was flagged.
+    why: "the flagged-contacts marker is dropped from the row",
+    apply: (f) => ({ ...f, worker: f.worker.replace(/x\.agents_flagged/g, 'x.nothing_here') }),
   },
   {
     // Back to a column with a reader and no writer -- the state Eric hit on 2026-08-27.
