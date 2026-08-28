@@ -27,7 +27,7 @@ const ROOT = path.join(__dirname, "..");
 // products.js is browser code: it hangs everything off window. Give it a window and read it back,
 // rather than regex-parsing a nested structure and quietly missing a branch.
 function loadProducts() {
-  const src = fs.readFileSync(path.join(ROOT, "assets/js/data/products.js"), "utf8");
+  const src = fs.readFileSync(path.join(ROOT, "public/assets/js/data/products.js"), "utf8");
   const sandbox = { window: {} };
   sandbox.ABYQuote = sandbox.window.ABYQuote = {};
   vm.createContext(sandbox);

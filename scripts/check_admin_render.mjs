@@ -106,7 +106,7 @@ const RULES = [
        + " markup is the only way to know the loop actually ran -- a rule matching the source is"
        + " satisfied by the code that builds them existing, whether or not it produced anything.",
     holds: (p) => {
-      const products = readFileSync(join(ROOT, "assets/js/data/products.js"), "utf8");
+      const products = readFileSync(join(ROOT, "public/assets/js/data/products.js"), "utf8");
       const sold = (products.match(/^    id: '([A-Za-z0-9]+)',$/gm) || [])
         .map((x) => /'([A-Za-z0-9]+)'/.exec(x)[1]);
       if (!sold.length) return false;   // read nothing: unchecked, never a pass

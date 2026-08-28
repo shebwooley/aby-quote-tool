@@ -15,8 +15,22 @@
   // before Cloudflare's asset router can intercept them. Without this, any file
   // in the assets directory (e.g. admin.html) would be served directly, bypassing
   // withAuth() entirely.
+  // ⭐⭐ THE FRONT END LIVES IN ITS OWN DIRECTORY, AND THAT IS THE WHOLE POINT (F-365).
+  //
+  // 🔴 THIS USED TO BE "." -- THE REPO ROOT -- SO THE DEFAULT WAS PUBLISH-EVERYTHING AND
+  // `.assetsignore` was the only thing standing between a file and the internet. That is a DENY
+  // list, so a NEW file is public until somebody remembers to add it. It has failed twice:
+  //   · 2026-08-21, `.dev.vars` itself was served, and all three credentials had to be rotated.
+  //   · 2026-08-27, four probe files written beside the code were published by the next deploy,
+  //     one of them holding live share tokens. Every one returned HTTP 200.
+  //
+  // ⭐ WITH `public/`, THE DEFAULT INVERTS: a file is unreachable unless somebody deliberately puts
+  // it where the web can see it. `worker.js`, `.dev.vars`, `scripts/`, `docs/` and every future
+  // scratch file are outside it and cannot be served by an omission.
+  //
+  // ⛔ Do NOT point this back at "." to make a file reachable -- move the FILE into `public/`.
   "assets": {
-    "directory": ".",
+    "directory": "public",
     "binding": "ASSETS",
     "run_worker_first": true
   },

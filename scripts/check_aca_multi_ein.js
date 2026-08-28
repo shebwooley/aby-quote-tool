@@ -25,12 +25,12 @@ const vm = require("node:vm");
 
 const ROOT = path.join(__dirname, "..");
 const FILES = [
-  "assets/js/data/products.js",
-  "assets/js/data/pricing.js",
-  "assets/js/data/language.js",
-  "assets/js/lib/utils.js",
-  "assets/js/lib/engine.js",
-  "assets/js/lib/renderer.js",
+  "public/assets/js/data/products.js",
+  "public/assets/js/data/pricing.js",
+  "public/assets/js/data/language.js",
+  "public/assets/js/lib/utils.js",
+  "public/assets/js/lib/engine.js",
+  "public/assets/js/lib/renderer.js",
 ];
 
 function build(edit) {

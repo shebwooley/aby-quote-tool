@@ -1180,18 +1180,18 @@ const SABOTAGES = [
 
 function load() {
   return {
-    app: read("assets/js/app.js"),
-    hook: read("save-hook.js"),
+    app: read("public/assets/js/app.js"),
+    hook: read("public/save-hook.js"),
     worker: read("worker.js"),
     // ADDED 2026-08-27. The authorization form an employer signs is BUILT HERE, so a rule about
     // what that form carries has to be able to read it -- otherwise the only thing under test is
     // the half of the round trip that lives in app.js.
-    renderer: read("assets/js/lib/renderer.js"),
+    renderer: read("public/assets/js/lib/renderer.js"),
     // ADDED 2026-08-26. Two rules compare worker.js against the tool's OWN data files rather than
     // against a list restated in here -- a restated list is a third copy and rots faster than
     // either of the two it is meant to police.
-    products: read("assets/js/data/products.js"),
-    reps: read("assets/js/data/reps.js"),
+    products: read("public/assets/js/data/products.js"),
+    reps: read("public/assets/js/data/reps.js"),
   };
 }
 

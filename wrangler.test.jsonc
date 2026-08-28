@@ -6,7 +6,7 @@
 
   // 🔴 NO "assets" BINDING, AND THAT IS THE WHOLE POINT OF THIS FILE.
   //
-  // The real wrangler.jsonc sets assets.directory to "." so the worker can serve the front end.
+  // The real wrangler.jsonc sets assets.directory to "public" so the worker can serve the front end.
   // Under `wrangler dev` that makes the dev server WATCH THE ENTIRE REPOSITORY -- including the
   // .wrangler/state directory it writes to itself on every request. So it reloads forever, every
   // request hangs, and it reads exactly like a broken worker rather than like a config problem.

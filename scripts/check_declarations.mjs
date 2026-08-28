@@ -29,7 +29,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const FILES = ["worker.js", "save-hook.js"];
+const FILES = ["worker.js", "public/save-hook.js"];
 
 // Every shape a module-level name can be declared in. `class` is here for completeness even though
 // this file uses none today -- a guard that only knows the shapes currently in use goes blind the

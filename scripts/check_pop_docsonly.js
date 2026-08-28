@@ -26,12 +26,12 @@ const vm = require("node:vm");
 
 const ROOT = path.join(__dirname, "..");
 const FILES = [
-  "assets/js/data/products.js",
-  "assets/js/data/pricing.js",
-  "assets/js/data/language.js",
-  "assets/js/lib/utils.js",
-  "assets/js/lib/engine.js",
-  "assets/js/lib/renderer.js",
+  "public/assets/js/data/products.js",
+  "public/assets/js/data/pricing.js",
+  "public/assets/js/data/language.js",
+  "public/assets/js/lib/utils.js",
+  "public/assets/js/lib/engine.js",
+  "public/assets/js/lib/renderer.js",
 ];
 
 function build(edit) {
@@ -138,7 +138,7 @@ const RULES = [
     why: "pricing.js holds TWO POP blocks -- commissioned and noCommission -- with the same two"
        + " fees. One fix applied to one copy of a pattern is not applied to the pattern.",
     holds: (A) => {
-      const src = fs.readFileSync(path.join(ROOT, "assets/js/data/pricing.js"), "utf8");
+      const src = fs.readFileSync(path.join(ROOT, "public/assets/js/data/pricing.js"), "utf8");
       return (src.match(/needsTesting: true/g) || []).length === 4;
     },
   },

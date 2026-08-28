@@ -1,134 +1,23 @@
-# WHAT MUST NOT BE PUBLISHED TO abyquotes.com
+# ── WHAT NOT TO PUBLISH, INSIDE `public/` ONLY ────────────────────────────────────────────────
 #
-# 2026-08-21. `wrangler.jsonc` sets the static-asset directory to "." -- the whole repo -- so every
-# file here was being uploaded and SERVED PUBLICLY. Measured live before this file existed:
+# ⭐⭐ THIS FILE IS NOW A BACKSTOP, NOT THE DEFENCE (F-365, 2026-08-27).
 #
-#   /.dev.vars        200  <- ADMIN_PASSWORD, SESSION_SECRET and INTEGRATION_TOKEN, in the clear
-#   /worker.js        200  325KB, the entire server source
-#   /.git/config      200
-#   /.git/index       200
-#   /.git/objects/..  200  <- the whole repository, cloneable, including deleted history
-#   /schema.sql       200
+# `wrangler.jsonc` points `assets.directory` at `public/`, so ONLY what is inside that folder can
+# be served at all. Everything else in the repo -- `worker.js`, `.dev.vars`, `scripts/`, `docs/`,
+# `schema.sql`, and every scratch file anybody writes next to the code -- is unreachable by
+# CONSTRUCTION rather than by an entry here that somebody remembered to add.
 #
-# This file works like .gitignore and is read by wrangler at deploy time.
+# 🔴 THAT INVERSION IS THE FIX, AND IT WAS EARNED TWICE:
+#   · 2026-08-21 — `.dev.vars` was being served from the repo root. All three credentials rotated.
+#   · 2026-08-27 — four probe files written beside the code were published by the next deploy,
+#     one holding live share tokens. Every one returned HTTP 200 before they were noticed.
+#   Both were the same fault: a DENY list only covers names somebody thought of.
 #
-# RULES FOR EDITING IT:
-#   - Adding a pattern REMOVES a file from the public site. Safe direction.
-#   - Removing one PUBLISHES that file. Never do it to make something work without checking what
-#     else the pattern was holding back.
-#   - It only takes effect on `npx wrangler deploy`. Nothing here is enforced by a push.
+# ⛔ SO DO NOT ADD FILES HERE TO HIDE THEM. If it must not be public, it must not be in `public/`.
+# The only things that belong below are files that genuinely live inside the front end and still
+# should not be served.
 #
-# The real fix is to move the front-end into its own directory and point `assets.directory` at that,
-# so the default becomes "publish nothing" instead of "publish everything". This is the urgent stop.
+# 🔬 `node scripts/check_public_exposure.js` asks the LIVE SITE what it hands a stranger, and
+# carries a positive control so it cannot pass by taking the whole site down.
 
-# --- the repository itself -------------------------------------------------------------------
-.git
-.git/**
-.githooks
-.githooks/**
-.gitignore
-.assetsignore
-
-# --- secrets and local state -----------------------------------------------------------------
-# .dev.vars is wrangler's LOCAL secret file. It is not supposed to leave the machine.
-.dev.vars
-.dev.vars.*
-.env
-.env.*
-.wrangler
-.wrangler/**
-
-# --- server code -----------------------------------------------------------------------------
-# worker.js is the worker ENTRY POINT (`main`), not an asset. It does not need to be downloadable
-# and publishing it hands over every admin page, every query and every business rule.
-worker.js
-worker.js.map
-# A GLOB, NOT A FILENAME. wrangler.jsonc was listed here alone, and on 2026-08-23 a new
-# wrangler.test.jsonc -- added for the local test harness -- was served publicly with a 200
-# until somebody thought to curl it. The deny list must cover the NEXT one of these too.
-# The admin guide's SOURCE and its generated page body. Added 2026-08-23 with the guide
-# itself, rather than after somebody curled it -- which is how wrangler.test.jsonc was found
-# to be public earlier the same day. A NEW ROOT DIRECTORY IS PUBLISHED BY DEFAULT.
-# The guide names how ABY decides who to chase; it is reachable ONLY through /admin/guide.
-docs
-docs/**
-wrangler*.jsonc
-package.json
-package-lock.json
-node_modules
-node_modules/**
-
-# --- build, tooling and data -----------------------------------------------------------------
-scripts
-scripts/**
-schema.sql
-agencies.txt
-README.md
-*.md
-
-# --- the DEAD root-level duplicates ------------------------------------------------------------
-#
-# 2026-08-22. These were left published on 2026-08-21 with the note "work out which are dead and
-# remove them deliberately". That has now been done, BY MEASUREMENT rather than by reading:
-#
-#   - fetched the LIVE https://abyquotes.com/ and listed every src= and href= it emits.
-#     It loads assets/css/*, assets/js/*, assets/js/data/*, assets/js/lib/* -- and from the ROOT,
-#     exactly one file: save-hook.js.
-#   - july-2026.html, the only other page, references NO root-level script or stylesheet at all.
-#   - grepped every .html in the repo for a root-relative reference to any of the six. None.
-#
-# So these six are served to the public and loaded by nothing.
-#
-# WHY UN-PUBLISH RATHER THAN DELETE: un-publishing is one line and is undone by deleting one line,
-# and it closes the exposure now. Deleting them from the repo is a separate, larger decision --
-# it also removes the DECOY TRAP, where an edit to a root file changes nothing and reads as "the
-# edit did not work" rather than "the edit went somewhere nothing reads" -- and it is left for
-# Eric to approve rather than done unattended.
-#
-# 🔴 save-hook.js IS NOT IN THIS LIST AND MUST NOT BE ADDED. index.html loads it from the root.
-# ⚠️ reps.js is PUBLIC BY DESIGN, but the copy the page loads is assets/js/data/reps.js. The ROOT
-#    copy is a stale duplicate, so un-publishing it removes an out-of-date rep list, not the tool's.
-# 🔴🔴 THE LEADING SLASH IS LOAD-BEARING AND ITS ABSENCE TOOK THE TOOL DOWN.
-# .assetsignore is gitignore SYNTAX: a bare `app.js` matches AT ANY DEPTH, so it also matched
-# assets/js/app.js, assets/js/data/pricing.js, assets/js/data/reps.js, assets/js/lib/renderer.js,
-# assets/js/lib/utils.js and assets/css/quote.css. Deployed 2026-08-22 and every script on the
-# public quote tool went 404 -- the page still returned 200 and rendered, which is exactly what
-# this kind of outage looks like from the outside. `/app.js` anchors to the ROOT only.
-# ⭐ AND IT WAS FOUND IN ONE MINUTE ONLY BECAUSE THE VERIFICATION FETCHED THE ASSETS THE PAGE
-# ACTUALLY LOADS, NOT JUST "/" -- a 200 on the page says nothing about the scripts inside it.
-/app.js
-/pricing.js
-/renderer.js
-/utils.js
-/quote.css
-/reps.js
-
-# --- scratch output from the checkers ----------------------------------------------------------
-# scripts/check_worker_pages.mjs writes _s_<pageName>_0.js beside the repo root when it extracts a
-# page to parse it. They are gitignored, so they never reach GitHub -- but `assets.directory` is
-# "." and wrangler uploads the WORKING TREE, so running a checker immediately before a deploy
-# would publish them. Measured 404 today; listed so it stays that way by rule and not by luck.
-/_s_*.js
-
-# NOTE ON WHAT IS DELIBERATELY STILL PUBLISHED:
-#   index.html, july-2026.html, aby-logo.png, save-hook.js and everything under assets/.
-#   Those are the tool itself.
-
-# ── SCRATCH AND PROBE FILES ARE NOT PUBLIC ASSETS (2026-08-27) ────────────────────────────────
-#
-# 🔴🔴 THIS IS NOT HYPOTHETICAL. Testing F-429 wrote four probe files into this directory --
-# `.tok.txt`, `.probe.py` and two saved copies of real shared quote pages -- and the very next
-# `wrangler deploy` PUBLISHED ALL FOUR. `.tok.txt` held live share tokens. Every one returned
-# HTTP 200 on abyquotes.com before they were removed.
-#
-# ⛔ THE CAUSE IS STRUCTURAL, NOT CARELESSNESS: `assets.directory` is "." -- the REPO ROOT -- so
-# anything written beside the code is a public URL the moment somebody deploys. A working file in
-# the repo root is the normal thing to do in every other project.
-#
-# ⚠️ DOTFILES ARE NOT EXEMPT. A leading dot hides a file from `ls`, not from an HTTP GET.
-.tok.txt
-.probe.py
-.p_*.html
-*.probe.*
-scratch/
-tmp/
+# Nothing is currently excluded from `public/` -- everything in it is meant to be served.

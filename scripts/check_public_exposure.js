@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 /**
  * Is abyquotes.com publishing anything it should not?
  *
@@ -160,7 +161,27 @@ async function status(path) {
     console.log("⚠️ `git push` does not deploy this worker. `npx wrangler deploy` does, every time.");
     process.exit(1);
   }
+  // ⭐⭐ THE STRUCTURAL CHECK, AND IT IS WORTH MORE THAN EVERY PATH ABOVE (F-365, 2026-08-27).
+  //
+  // The list above can only ever catch a file somebody THOUGHT OF. What actually protects this
+  // tool is that `assets.directory` points at `public/`, so nothing outside that folder can be
+  // served at all. 🔴 REVERTING THAT ONE LINE TO "." SILENTLY RE-PUBLISHES THE WHOLE REPO --
+  // which is the state that leaked `.dev.vars` on 2026-08-21 and four probe files on 2026-08-27.
+  // ⛔ A path list cannot notice that; only reading the config can.
+  const cfg = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ 	]*\/\/.*$/gm, "");
+  const dir = (cfg.match(/"directory"\s*:\s*"([^"]*)"/) || [])[1];
+  if (dir !== "public") {
+    console.log("");
+    console.log(`🔴 assets.directory is ${JSON.stringify(dir)}, not "public".`);
+    console.log("   Anything sitting beside the code is then a public URL, and the ignore file is");
+    console.log("   the only thing standing in the way -- a DENY list, which has failed twice.");
+    console.log("   FIX: point it back at public/ and move the file you wanted served INTO it.");
+    process.exit(1);
+  }
   console.log("nothing sensitive is served, and the tool is still up.");
-  console.log("⚠️ This only checks the paths listed above. .assetsignore is a DENY list, so a NEW");
-  console.log("   sensitive file is public until someone adds it here and to the ignore file.");
+  console.log(`✅ assets.directory is "public", so a file is unreachable unless somebody PUT it`);
+  console.log("   there -- the default is deny, and no ignore entry has to be remembered.");
+  console.log("⚠️ The path list above still only covers names somebody thought of. It is now a");
+  console.log("   second line of defence rather than the only one.");
 })();

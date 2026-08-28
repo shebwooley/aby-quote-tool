@@ -18,7 +18,7 @@ import fs from 'fs';
 // and would be exactly the fixture-tidier-than-production trap this project has already hit.
 globalThis.window = globalThis;
 const load = (f) => new Function(fs.readFileSync(f, 'utf8'))();
-for (const f of ['assets/js/lib/utils.js', 'assets/js/data/language.js', 'assets/js/lib/renderer.js']) load(f);
+for (const f of ['public/assets/js/lib/utils.js', 'public/assets/js/data/language.js', 'public/assets/js/lib/renderer.js']) load(f);
 const R = globalThis.ABYQuote.renderer;
 
 const INTERNAL = 'MMA - DFW';
@@ -48,7 +48,7 @@ for (const bad of ['', '   ', null, undefined, 0, false]) {
 
 // 🔴 THE SELF-TEST: revert either call site and this must go RED. A checker that cannot fail is
 // a checker nobody can trust, and this project has shipped three of those.
-const src = fs.readFileSync('assets/js/lib/renderer.js', 'utf8');
+const src = fs.readFileSync('public/assets/js/lib/renderer.js', 'utf8');
 const sabotaged = src.replace('agencyLabel(form)].filter(Boolean).join(\', \')',
                               'form.brokerAgency].filter(Boolean).join(\', \')');
 check('SELF-TEST: the sabotage actually changed the source', sabotaged !== src);
