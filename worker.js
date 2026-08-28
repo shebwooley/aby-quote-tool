@@ -3679,18 +3679,44 @@ const RECENT_WINDOW = "datetime('now','-365 days')";
 // ⭐ THE FOUR MEASURES TRAVEL TOGETHER, so the referrals scoreboard and the broker list cannot
 // disagree about what a person produced. A caller that only wants the count simply ignores three
 // columns; a second CTE that computed "recent" its own way is how two screens start arguing.
+// What makes two quote ROWS the same QUOTE: same employer, same effective date, same products.
+// Deliberately NOT the quote number, because a commission flip mints a new one on purpose.
+const QUOTE_IDENTITY =
+  "COALESCE(NULLIF(client_match_key,''), lower(trim(COALESCE(client_name,'')))), " +
+  "COALESCE(effective_date,''), COALESCE(products,'')";
+
 const PERSON_QUOTES_CTE =
-  'qe AS (SELECT lower(trim(broker_email)) k, COUNT(*) n, ' +
-  '         SUM(CASE WHEN created_at >= ' + RECENT_WINDOW + ' THEN 1 ELSE 0 END) recent, ' +
-  "         SUM(CASE WHEN status = 'S' AND created_at >= " + RECENT_WINDOW + ' THEN 1 ELSE 0 END) sold_recent, ' +
-  '         COALESCE(SUM(first_year_value),0) value ' +
-  "       FROM quotes WHERE trim(COALESCE(broker_email,'')) <> '' GROUP BY 1), " +
-  'qn AS (SELECT lower(trim(broker_name)) nk, lower(trim(broker_agency)) ak, COUNT(*) n, ' +
-  '         SUM(CASE WHEN created_at >= ' + RECENT_WINDOW + ' THEN 1 ELSE 0 END) recent, ' +
-  "         SUM(CASE WHEN status = 'S' AND created_at >= " + RECENT_WINDOW + ' THEN 1 ELSE 0 END) sold_recent, ' +
-  '         COALESCE(SUM(first_year_value),0) value ' +
-  "       FROM quotes WHERE trim(COALESCE(broker_name,'')) <> '' " +
-  "         AND trim(COALESCE(broker_email,'')) = '' GROUP BY 1, 2), " +
+  // ONE QUOTE PRICED TWO WAYS IS ONE QUOTE. Eric, 2026-08-28: "yes c/nc should count once toward
+  // a broker." Flipping the commission checkbox mints a NEW quote number by design (F-339, Change
+  // D: the -C/-NC suffix names the rate book, so a flip is a different price, not a revision), and
+  // nothing downstream ever collapsed the pair again, so a broker's scoreboard counted it twice.
+  // Measured on the live table before this changed: it moves ONE group in fifteen years of data,
+  // Savannah Priddy Overton's three Dayrise rows, 3 to 1.
+  //
+  // THE KEY IS client + effective date + products, NOT the commission flag. Matching on the flag
+  // would catch only a tidy C/NC pair and would miss a plain re-run of the same quote, which is the
+  // third Dayrise row. Two genuinely different product sets for the same employer and date still
+  // count separately, which is why products is in the key.
+  //
+  // value uses MAX, not SUM: the same quote priced two ways is worth the larger of the two once.
+  // Summing them inflated first-year value by the whole non-commissioned copy.
+  'qe AS (SELECT k, COUNT(*) n, SUM(recent) recent, SUM(sold_recent) sold_recent, ' +
+  '         COALESCE(SUM(value),0) value FROM (' +
+  '         SELECT lower(trim(broker_email)) k, ' +
+  '           MAX(CASE WHEN created_at >= ' + RECENT_WINDOW + ' THEN 1 ELSE 0 END) recent, ' +
+  "           MAX(CASE WHEN status = 'S' AND created_at >= " + RECENT_WINDOW + ' THEN 1 ELSE 0 END) sold_recent, ' +
+  '           MAX(COALESCE(first_year_value,0)) value ' +
+  "         FROM quotes WHERE trim(COALESCE(broker_email,'')) <> '' " +
+  '         GROUP BY 1, ' + QUOTE_IDENTITY + ') GROUP BY 1), ' +
+  'qn AS (SELECT nk, ak, COUNT(*) n, SUM(recent) recent, SUM(sold_recent) sold_recent, ' +
+  '         COALESCE(SUM(value),0) value FROM (' +
+  '         SELECT lower(trim(broker_name)) nk, lower(trim(broker_agency)) ak, ' +
+  '           MAX(CASE WHEN created_at >= ' + RECENT_WINDOW + ' THEN 1 ELSE 0 END) recent, ' +
+  "           MAX(CASE WHEN status = 'S' AND created_at >= " + RECENT_WINDOW + ' THEN 1 ELSE 0 END) sold_recent, ' +
+  '           MAX(COALESCE(first_year_value,0)) value ' +
+  "         FROM quotes WHERE trim(COALESCE(broker_name,'')) <> '' " +
+  "           AND trim(COALESCE(broker_email,'')) = '' " +
+  '         GROUP BY 1, 2, ' + QUOTE_IDENTITY + ') GROUP BY 1, 2), ' +
   'uq AS (SELECT lower(trim(name)) k FROM people GROUP BY 1 HAVING COUNT(*) = 1), ' +
   'pa AS (SELECT p2.id AS pid, COALESCE(p2.agency_id, ' +
   '         (SELECT MIN(d4.agency_id) FROM broker_directory d4 ' +
