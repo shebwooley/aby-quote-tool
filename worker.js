@@ -11650,10 +11650,32 @@ function parseCookies(header) {
 // ─── ABY internal door ─────────────────────────────────────────────────────────
 
 // Boolean session check (does NOT block). Used to stamp ran_by on saves.
-async function isAuthed(request, env) {
+// WHO is signed in as ABY admin on this request, or null. Returns the NAME, never a boolean, for
+// the same reason tokenIdentity does: a caller that only wants "is this allowed" reads it as
+// truthy, and a caller that wants the name gets it from the same call, so the two cannot disagree.
+async function adminWho(request, env) {
   const cookies = parseCookies(request.headers.get('Cookie') || '');
   const token = cookies[COOKIE_NAME];
-  return !!(token && await verifyToken(token, env.ADMIN_PASSWORD));
+  if (!token) return null;
+  return await tokenIdentity(token, env);
+}
+
+// THIS CALL USED TO PASS env.ADMIN_PASSWORD AND IT WAS ALWAYS FALSE.
+// verifyToken was refactored to delegate to tokenIdentity(token, env) and now takes the whole ENV,
+// but this caller still handed it the password STRING. tokenIdentity then evaluated env[id.secret]
+// as "the-password"["ADMIN_PASSWORD"], which is undefined, so every identity hit its
+// "if (!secret) continue" and the loop returned null.
+//
+// THE VISIBLE COST, and it is the only reason anybody found out: quote attribution is decided by
+// this function, so EVERY quote an ABY admin ran was stamped ran_by = broker. Measured in
+// production 2026-08-28: both of that morning's quotes, run by Niels while signed in, said broker.
+// Eric spotted it in the quote log.
+//
+// The other caller is the SITE_LOCKED gate, which is dormant because the tool is unlocked. Had the
+// lock been on, this would have locked every ABY admin out of the whole tool instead, which is the
+// louder failure and would have been fixed the same hour.
+async function isAuthed(request, env) {
+  return !!(await adminWho(request, env));
 }
 
 // Paths that stay public even while SITE_LOCKED is true. Add more here as needed.
