@@ -1258,8 +1258,20 @@ async function sendEmail(env, { quoteNumber, clientName, effectiveDate, brokerNa
   </div>
 </body></html>`;
 
-  const repTo  = 'eric@comedyce.com';
-  const ccList = [];
+  // F-444, 2026-08-28. RECIPIENTS COME FROM NOTIFY_EMAILS, exactly as sendCommitmentEmail already
+  // reads them, so the two notifications cannot drift into having different audiences. This used to
+  // be a hardcoded eric@comedyce.com with an empty cc, which is why Niels never saw a quote come in.
+  //
+  // Eric asked for both ABY addresses to be added and confirmed his own stays on:
+  // "Yes let's keep eric@comedyce.com on the notification list."
+  // So the value to set is all three, comma separated:
+  //   eric@comedyce.com,eric@abybenefits.com,niels@abybenefits.com
+  //
+  // NOTHING CHANGES UNTIL THAT VARIABLE IS SET. Unset, this falls back to the single address that
+  // was hardcoded here before, so shipping the code ahead of the value is deliberate and safe.
+  const to = String(env.NOTIFY_EMAILS || 'eric@comedyce.com')
+    .split(',').map((x) => x.trim()).filter(Boolean);
+  if (!to.length) return;
 
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -1269,8 +1281,7 @@ async function sendEmail(env, { quoteNumber, clientName, effectiveDate, brokerNa
     },
     body: JSON.stringify({
       from:    `ABY Quote Tool <${fromEmail}>`,
-      to:      [repTo],
-      cc:      ccList,
+      to,
       subject,
       html,
     }),
