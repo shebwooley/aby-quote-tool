@@ -36,6 +36,39 @@ ABYQuote.engine = (function () {
     return { rates: pricing.commissioned[productId], usedFallback: true };
   }
 
+  // WHAT A FLAT BOTTOM TIER COSTS THE READER, AND WHY THIS EXISTS (F-448).
+  //
+  // Niels, via Eric 2026-08-28: "if there are fewer participants than the minimum billing, it just
+  // shows the $85 minimum without showing the PPPM... it should show the PPPM for the next tier up
+  // and say it's $85 per month minimum billing."
+  //
+  // He is describing a FLAT tier, not a minimum. Every tiered product opens with one -- measured
+  // 2026-08-28, all 24 product and rate-book combinations -- and a flat tier genuinely has no rate
+  // to print, so the estimate said only "$85.00 per month" and stopped. Nothing was broken; it just
+  // was not the sentence a broker needs, and it disagreed with ABY's own published rate sheet,
+  // which prints the whole ladder (Under 20 flat, then 20-99 at $4.50).
+  //
+  // THE NUMBER TO PRINT IS THE BREAKEVEN, NOT THE TIER BOUNDARY, and they are not the same. The
+  // per-participant tier can START below the point where it beats the minimum:
+  //   TX HSA          tier starts 15, but 15 x $3.20 = $48 against a $50 minimum, so 16.
+  //   Outside-TX HSA  tier starts 15, $100 minimum, so 32.
+  // Printing the boundary would understate the crossover by seventeen people on that last one, in
+  // the direction that makes ABY look cheaper than it is. Eric flagged this himself as "or however
+  // the math works".
+  function nextPppmTier(tiers, from) {
+    for (var j = from + 1; j < tiers.length; j++) if (tiers[j].type === 'pppm') return tiers[j];
+    return null;
+  }
+  // The first count at which rate x count actually EXCEEDS the minimum. Starts at the tier's own
+  // floor, so it can never name a count that is priced in a lower band.
+  function pppmBeatsMinAt(tier, startAt) {
+    var min = tier.minMonthly || 0;
+    var n = Math.max(1, startAt);
+    // Bounded: the rate is always positive, so this terminates. The cap is paranoia, not need.
+    for (var guard = 0; guard < 100000 && n * tier.amount <= min; guard++) n++;
+    return n;
+  }
+
   // Compute the monthly fee for tiered products given a participant/account/employee count.
   // Returns { amount, tierLabel, breakdown } or null if no count provided.
   function computeMonthly(monthlyTiers, count) {
@@ -46,7 +79,7 @@ ABYQuote.engine = (function () {
       return {
         amount: first.type === 'flat' ? first.amount : (first.minMonthly || first.amount),
         tierLabel: first.label || '',
-        breakdown: tierDescription(first),
+        breakdown: tierDescription(first, monthlyTiers, 0),
         countMissing: true,
         _m: { kind: first.type === 'flat' ? 'flat' : 'pppm', rate: first.amount, min: first.minMonthly || 0, count: null }
       };
@@ -65,7 +98,7 @@ ABYQuote.engine = (function () {
           return {
             amount: tier.amount,
             tierLabel: tier.label || '',
-            breakdown: ABYQuote.utils.money(tier.amount) + ' per month',
+            breakdown: flatBreakdown(monthlyTiers, i, tier),
             count: count,
             // lo/hi are the BAND this count was priced in. F-367 needs them: an employer
             // changing the headcount on a shared quote may only be re-priced at the agreed
@@ -103,8 +136,22 @@ ABYQuote.engine = (function () {
     };
   }
 
-  function tierDescription(tier) {
+  // ONE SENTENCE, TWO CALLERS. The flat branch above and tierDescription below both print the
+  // bottom band, and they must not drift into saying different things about the same money.
+  function flatBreakdown(tiers, i, tier) {
+    var flat = ABYQuote.utils.money(tier.amount) + ' per month minimum billing';
+    var nxt = nextPppmTier(tiers, i);
+    if (!nxt) return ABYQuote.utils.money(tier.amount) + ' per month';
+    var at = pppmBeatsMinAt(nxt, (tier.maxCount || 0) + 1);
+    // moneyExact, never money: a RATE is quoted to the cent, and money() prints $4.50 as $4.5,
+    // which has been reported as a typo before.
+    return flat + '. From ' + at + ' participants, ' +
+      ABYQuote.utils.moneyExact(nxt.amount) + ' per participant per month.';
+  }
+
+  function tierDescription(tier, tiers, i) {
     if (tier.type === 'flat') {
+      if (tiers && typeof i === 'number') return flatBreakdown(tiers, i, tier);
       return ABYQuote.utils.money(tier.amount) + ' per month';
     }
     var s = ABYQuote.utils.moneyExact(tier.amount) + ' per participant per month';
