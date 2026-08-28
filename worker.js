@@ -32,6 +32,26 @@ export default {
     const path = url.pathname;
     const method = request.method;
 
+    // SEND www TO THE APEX (F-449). A broker could not open a quote link in Microsoft Edge and got
+    // DNS_PROBE_FINISHED_NXDOMAIN, while the same link opened in Chrome. Measured 2026-08-28:
+    // abyquotes.com resolves everywhere and that exact quote returned 200, but
+    // www.abyquotes.com did not exist at all, which produces precisely that error. Edge
+    // autocompletes and search-corrects aggressively, so the www form is easy to arrive at.
+    //
+    // THIS HALF ALONE FIXES NOTHING. A name that does not resolve never reaches a worker. The DNS
+    // record for www is the actual repair and it is added in Cloudflare. This is here so that the
+    // moment the record exists there is ONE canonical address rather than two: the signed proposal
+    // links, the cookie scope and the origin allowlist are all host-sensitive, and serving the same
+    // page on two hostnames is how those quietly disagree.
+    //
+    // 301 rather than 302: it is permanent, and it lets the browser remember so the second visit
+    // does not need us at all.
+    if (url.hostname.toLowerCase().startsWith('www.')) {
+      const apex = new URL(url.toString());
+      apex.hostname = url.hostname.slice(4);
+      return Response.redirect(apex.toString(), 301);
+    }
+
     // ── API routes ──────────────────────────────────────────────────────────────
     if (path === '/api/quotes' && method === 'POST')  return handleSaveQuote(request, env, ctx);
     if (path === '/api/quotes' && method === 'GET')   return withAuth(request, env, () => handleListQuotes(request, env));
