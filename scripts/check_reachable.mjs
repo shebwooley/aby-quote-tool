@@ -307,9 +307,47 @@ const RULES = [
        + " logo never appeared on the link. Resolving by agency_id ALONE would still have failed"
        + " on his: 5,900 of 6,172 quotes carry an id, but only 2 of the 6 ever SHARED do, and his"
        + " is one of the four that do not. The name fallback is what makes it work.",
+    // REPOINTED 2026-08-31, AND THE OLD TEST IS WORTH RECORDING. It grepped for the literal SQL
+    // "lower(trim(name)) = ? AND COALESCE(logo_data_url,'') <> ''" -- the firm and the logo in ONE
+    // query. Adding parent inheritance split those into two questions, and this assertion failed on
+    // a change that made the feature STRONGER. That is a checker enforcing the MECHANISM instead of
+    // the guarantee. It now tests what its own name says: both lookups exist, and a path is emitted.
     holds: (f) => /shared\.agencyLogoPath = '\/api\/agency-logo\/'/.test(f.worker)
-      && /lower\(trim\(name\)\) = \? AND COALESCE\(logo_data_url,''\) <> ''/.test(f.worker)
+      && /SELECT id FROM agencies WHERE lower\(trim\(name\)\) = \?/.test(f.worker)
+      && /SELECT id FROM agencies WHERE id = \?/.test(f.worker)
       && /agencyLogoPath/.test(f.app),
+  },
+  {
+    name: "a logo set on a holding company brands the offices under it",
+    why: "Eric, 2026-08-31, having set one on an office and asked the obvious question: can it be"
+       + " set at the top level and apply to the subsidiaries? It could not -- the lookup matched"
+       + " the firm name EXACTLY and never walked parent_id, so a firm with one universal logo had"
+       + " to have it pasted onto every office. The inheritance already existed one level down (a"
+       + " broker account with no logo inherits its agency's), so the tree was the inconsistent"
+       + " part. The walk is BOUNDED and cycle-guarded because parent_id is set by hand.",
+    holds: (f) => /async function agencyLogoChain/.test(f.worker)
+      && /SELECT id, parent_id, logo_data_url FROM agencies WHERE id = \?/.test(f.worker)
+      && /hop < 5 && id && !seen\.has\(id\)/.test(f.worker)
+      // BOTH consumers go through it, or the two ends disagree about which firms have a logo
+      && /const row = await agencyLogoChain\(env, key\)/.test(f.worker)
+      && /if \(firmId && await agencyLogoChain\(env, firmId\)\)/.test(f.worker),
+  },
+  {
+    name: "an agent typed onto a quote becomes a record on the agency, not just a lookup entry",
+    why: "Eric, 2026-08-31: if we type their name and contact info, does the agent automatically"
+       + " get added to the brokers and agencies page under that agency? They did not. The"
+       + " directory row is keyed on an email with the firm as FREE TEXT, so the person became"
+       + " findable when quoting and never became a record anybody could see on the firm. This is"
+       + " the same linking the 2026-08-23 backfill does, moved to save time so it has nothing left"
+       + " to repair.",
+    holds: (f) => /async function linkBrokerToRegister/.test(f.worker)
+      && /await linkBrokerToRegister\(env, email, name, phone, agency, now\)/.test(f.worker)
+      // the three links: the firm, the human, and the join
+      && /INSERT INTO agencies \(id, name, share_quotes, created_at, needs_review\)/.test(f.worker)
+      && /INSERT INTO people \(id, name, phone, agency_id, source, created_at, updated_at\)/.test(f.worker)
+      && /UPDATE broker_directory SET person_id = \?/.test(f.worker)
+      // and it must never overwrite: the firm write is conditional on the field being empty
+      && /UPDATE people SET agency_id = \?, updated_at = \? WHERE id = \? AND COALESCE\(agency_id,''\) = ''/.test(f.worker),
   },
   {
     name: "a person's disposition is READ, not only written",

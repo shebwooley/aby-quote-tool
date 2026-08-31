@@ -942,6 +942,97 @@ async function rememberBroker(env, fields) {
     // whether or not it exists.
     console.warn('broker_directory not updated:', String(err && err.message || err));
   }
+
+  await linkBrokerToRegister(env, email, name, phone, agency, now);
+}
+
+/**
+ * PUT A TYPED-IN AGENT ON THE AGENCY, not only in the lookup directory.
+ *
+ * ERIC, 2026-08-31: "if we type their name and contact info, does the agent automatically get added
+ * to the brokers and agencies page under that agency?" They did not. The directory row above is
+ * what makes the typeahead work, and it is keyed on an email with the firm as FREE TEXT -- so the
+ * person became findable when quoting and never became a RECORD anybody could see on the firm.
+ *
+ * THE THREE LINKS THIS MAKES, and none of them existed at save time before:
+ *   the firm     -- the typed agency name resolved to an agencies row, created if it is new
+ *   the human    -- a people row, which is what the CRM page actually lists
+ *   the join     -- broker_directory.person_id and people.agency_id
+ *
+ * IT IS THE SAME WORK THE 2026-08-23 BACKFILL DOES, DELIBERATELY. That pass repaired the rows that
+ * already existed; this stops new ones arriving unlinked, so the backfill has nothing to find next
+ * time. Writing a second, different linking rule is how two of them end up disagreeing.
+ *
+ * A NEW FIRM IS MARKED needs_review, because a free-typed agency name is a typo away from a
+ * duplicate firm. Niels sees it flagged rather than silently mixed into the register.
+ *
+ * NOTHING HERE OVERWRITES. Every write is conditional on the field being empty, so a firm somebody
+ * has already corrected by hand is never re-pointed by a later quote that spelled it differently.
+ * The whole thing is best-effort for the same reason as the directory above: a quote must save.
+ */
+async function linkBrokerToRegister(env, email, name, phone, agency, now) {
+  if (!agency) return;
+  try {
+    // -- the firm --------------------------------------------------------------------------
+    let a = await env.DB.prepare('SELECT id FROM agencies WHERE lower(trim(name)) = ?')
+      .bind(agency.toLowerCase()).first();
+    if (!a) {
+      const newId = crypto.randomUUID();
+      await env.DB.prepare(
+        'INSERT INTO agencies (id, name, share_quotes, created_at, needs_review) VALUES (?,?,?,?,?)'
+      ).bind(newId, agency, 0, now, 'created from a quote -- the agency name was typed by hand').run();
+      // 🔴 RE-READ AND TAKE MIN(id), the same race guard the backfill uses: two quotes saved at once
+      // would otherwise both insert the firm, and both rows would be real.
+      const canon = await env.DB.prepare(
+        'SELECT MIN(id) AS id FROM agencies WHERE lower(trim(name)) = ?'
+      ).bind(agency.toLowerCase()).first();
+      const keep = (canon && canon.id) || newId;
+      if (keep !== newId) {
+        await env.DB.prepare('DELETE FROM agencies WHERE id = ? AND needs_review IS NOT NULL')
+          .bind(newId).run();
+      }
+      a = { id: keep };
+    }
+    await env.DB.prepare(
+      "UPDATE broker_directory SET agency_id = ? WHERE lower(trim(email)) = ? " +
+      "AND COALESCE(agency_id,'') = ''"
+    ).bind(a.id, email).run();
+
+    // -- the human, and the join ------------------------------------------------------------
+    // ⚠️ A DANGLING person_id IS TREATED AS UNLINKED, which is the lesson the backfill records:
+    // skipping on the pointer alone leaves an address whose person has gone, permanently unrepaired.
+    const dir = await env.DB.prepare(
+      'SELECT person_id FROM broker_directory WHERE lower(trim(email)) = ?').bind(email).first();
+    let personId = String((dir && dir.person_id) || '').trim();
+    if (personId) {
+      const alive = await env.DB.prepare('SELECT id FROM people WHERE id = ?').bind(personId).first();
+      if (!alive) personId = '';
+    }
+    if (!personId) {
+      personId = crypto.randomUUID();
+      await env.DB.prepare(
+        'INSERT INTO people (id, name, phone, agency_id, source, created_at, updated_at) ' +
+        'VALUES (?,?,?,?,?,?,?)'
+      ).bind(personId, name, phone, a.id, 'aby_broker', now, now).run();
+      // ⛔ CONDITIONAL, AND THE ROW COUNT IS THE ANSWER. "AND person_id IS NULL" means a concurrent
+      // save cannot take an address this one has already claimed; losing the race drops the person
+      // it just made rather than leaving a stray.
+      const claim = await env.DB.prepare(
+        "UPDATE broker_directory SET person_id = ? WHERE lower(trim(email)) = ? " +
+        "AND COALESCE(person_id,'') = ''"
+      ).bind(personId, email).run();
+      if (!claim || !claim.meta || claim.meta.changes === 0) {
+        await env.DB.prepare('DELETE FROM people WHERE id = ?').bind(personId).run();
+        return;
+      }
+    }
+    // The person may predate the firm link, so set it when it is missing -- never over the top.
+    await env.DB.prepare(
+      "UPDATE people SET agency_id = ?, updated_at = ? WHERE id = ? AND COALESCE(agency_id,'') = ''"
+    ).bind(a.id, now, personId).run();
+  } catch (err) {
+    console.warn('broker not linked to the register:', String(err && err.message || err));
+  }
 }
 
 // ADMIN ONLY, AND DELIBERATELY SO. This answers "who is broker@example.com?" with a name, a
@@ -1081,23 +1172,28 @@ async function serveSharedQuote(token, env, request) {
   // set by the SERVER and is only honoured on the server branch -- widening the allow-list instead
   // would have opened the crafted-link path too, which is the threat that list exists for.
   try {
-    let logoId = String(q.agency_id || '').trim();
-    if (logoId) {
-      const byId = await env.DB.prepare(
-        "SELECT id FROM agencies WHERE id = ? AND COALESCE(logo_data_url,'') <> ''"
-      ).bind(logoId).first();
-      logoId = (byId && byId.id) || '';
+    // ⭐⭐ RESOLVE THE FIRM FIRST, THEN ASK THE CHAIN FOR A LOGO. This used to require the logo in
+    // the SAME query -- "WHERE id = ? AND logo_data_url <> ''" -- which silently excluded an office
+    // whose logo lives on its parent. Since 2026-08-31 a logo set on a holding company brands every
+    // office beneath it, so the firm and the logo are two separate questions and are asked that way.
+    let firmId = String(q.agency_id || '').trim();
+    if (firmId) {
+      const byId = await env.DB.prepare('SELECT id FROM agencies WHERE id = ?').bind(firmId).first();
+      firmId = (byId && byId.id) || '';
     }
-    if (!logoId && String(q.broker_agency || '').trim()) {
+    if (!firmId && String(q.broker_agency || '').trim()) {
       const byName = await env.DB.prepare(
-        "SELECT id FROM agencies WHERE lower(trim(name)) = ? AND COALESCE(logo_data_url,'') <> '' " +
-        'ORDER BY id LIMIT 1'
+        'SELECT id FROM agencies WHERE lower(trim(name)) = ? ORDER BY id LIMIT 1'
       ).bind(String(q.broker_agency).trim().toLowerCase()).first();
-      logoId = (byName && byName.id) || '';
+      firmId = (byName && byName.id) || '';
     }
-    // ⚠️ ONLY WHEN THERE ACTUALLY IS ONE. Emitting the path unconditionally would put a broken
-    // image on every shared quote for the 2,364 firms that have no logo.
-    if (logoId) shared.agencyLogoPath = '/api/agency-logo/' + logoId;
+    // ⚠️ ONLY WHEN THERE ACTUALLY IS ONE, anywhere up the chain. Emitting the path unconditionally
+    // would put a broken image on every shared quote for the 2,364 firms that have no logo.
+    // ⭐ THE PATH CARRIES THE FIRM'S OWN ID, NOT THE ANCESTOR'S: the route walks the same chain, so
+    // both ends agree, and a link keeps working when the office later gets a logo of its own.
+    if (firmId && await agencyLogoChain(env, firmId)) {
+      shared.agencyLogoPath = '/api/agency-logo/' + firmId;
+    }
   } catch (e) {
     // A logo is decoration. It must never be the reason a client cannot open their quote.
   }
@@ -3480,6 +3576,49 @@ async function handleCrmAgencyLogo(request, env) {
  */
 const LOGO_TYPE_RE = /^data:(image\/(?:png|jpeg|jpg|gif|webp|svg\+xml));base64,([A-Za-z0-9+/=\s]+)$/;
 
+/**
+ * THE LOGO FOR A FIRM, INHERITED FROM ITS PARENT WHEN IT HAS NONE OF ITS OWN.
+ *
+ * ERIC, 2026-08-31, after setting one on an office and asking the obvious question: "if they have
+ * one universal logo, would I just set it on all of the subsidiaries? Or can it be set at the top
+ * level and apply to the subsidiaries?" It could not, until this.
+ *
+ * WHY IT IS ONE HELPER AND NOT A WALK AT EACH CALL SITE: the same question is asked by the share
+ * payload, by the route below when a downloaded quote re-fetches, and by the admin preview. Three
+ * copies of a parent walk is three chances to disagree about which logo a firm has.
+ *
+ * THE INHERITANCE ALREADY EXISTED ONE LEVEL DOWN, AND THIS ONLY MAKES IT CONSISTENT: a broker
+ * ACCOUNT with no logo of its own already inherits its agency's, which was Eric's ask on
+ * 2026-08-18 -- "have the agency upload the logo and it automatically apply to everyone under
+ * them". The CRM holding-company tree never got the same treatment.
+ *
+ * BOUNDED AT FIVE HOPS, AND THE BOUND IS NOT DECORATION. parent_id is set by hand on the admin
+ * page, so a cycle -- A parented to B, B back to A -- is one mis-click away, and an unbounded walk
+ * would spin until the Worker is killed. Five is well past the three levels the register uses. The
+ * seen-set guards the same thing from the other side.
+ *
+ * IT RETURNS THE ROW, NOT A BOOLEAN, so a caller that wants the bytes and a caller that only wants
+ * to know whether one exists cannot disagree about the answer.
+ */
+async function agencyLogoChain(env, startId) {
+  let id = String(startId || '').trim();
+  const seen = new Set();
+  for (let hop = 0; hop < 5 && id && !seen.has(id); hop += 1) {
+    seen.add(id);
+    let row;
+    try {
+      row = await env.DB.prepare(
+        'SELECT id, parent_id, logo_data_url FROM agencies WHERE id = ?').bind(id).first();
+    } catch (err) {
+      return null;   // older column set than this code expects; treat as no logo
+    }
+    if (!row) return null;
+    if (String(row.logo_data_url || '').trim()) return row;
+    id = String(row.parent_id || '').trim();
+  }
+  return null;
+}
+
 async function handleAbyAgencyLogo(request, env, id) {
   // ⛔ ONE REFUSAL, USED EVERYWHERE BELOW. Two different failure responses is how this becomes a
   // way to ask which firms exist.
@@ -3488,12 +3627,12 @@ async function handleAbyAgencyLogo(request, env, id) {
   const key = String(id || '').trim();
   if (!/^[0-9a-fA-F-]{36}$/.test(key)) return no();
 
-  let row;
-  try {
-    row = await env.DB.prepare('SELECT logo_data_url FROM agencies WHERE id = ?').bind(key).first();
-  } catch (err) {
-    return no();
-  }
+  // ⭐ THE FIRM'S OWN LOGO, OR THE NEAREST ANCESTOR'S. See agencyLogoChain above: a logo set on a
+  // holding company now brands every office under it, which is what Eric expected on 2026-08-31.
+  // ⛔ THE REFUSAL IS UNCHANGED AND STILL IDENTICAL for every failure -- unknown id, no logo
+  // anywhere up the chain, malformed row. Inheriting a logo must not become a way to ask whether a
+  // firm has a parent.
+  const row = await agencyLogoChain(env, key);
   const raw = String((row && row.logo_data_url) || '');
   const m = raw.match(LOGO_TYPE_RE);
   if (!m) return no();

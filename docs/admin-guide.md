@@ -504,6 +504,54 @@ download at that moment and is not kept. **Set it on the firm's panel to make it
 ⛔ **Under 300KB, and a real image file.** The image lives in the record, not in a file store, so
 the size is a hard limit rather than a guideline.
 
+#### One logo for a firm with several offices — set it at the top
+
+⭐ **Since 2026-08-31 a logo is INHERITED down the holding-company tree.** Set it once on the parent
+firm and every office under it is branded. You do not paste it onto each one.
+
+**Why this exists:** several of the big firms are split, because they both quote with us and have
+subsidiaries. *Brown & Brown* is a holding row with *Brown & Brown - DFW* under it, and the quotes
+hang off the office. Before this, a logo on the holding row reached nothing.
+
+**How it resolves, in order:**
+
+| | |
+|---|---|
+| the office's own logo | if it has one, that wins |
+| otherwise its parent's | and its parent's parent, up to five levels |
+| otherwise nothing | no broken image — the quote simply has no logo |
+
+⭐ **An office can still override.** If one office genuinely brands differently, put a logo on that
+office and it beats the parent's, for that office only.
+
+🔴 **This is why a logo can appear on the quote you are building and not on the shared link.** They
+come from two different places. The **file box inside the quote form** brands only the document in
+front of you and is never saved. The **shared link** uses the firm's logo. So if a link is
+unbranded, the firm — or a firm above it — has no logo set.
+
+### An agent you type onto a quote
+
+⭐ **Type a broker's name or email into a quote and the tool does three things when you save.**
+
+| | |
+|---|---|
+| **remembers them** | start typing that name or email next time and a suggestion appears; pick it and the name, email, phone and agency fill in together |
+| **files them under the firm** | they become a person on the agency's panel in Brokers & Agencies, not just a lookup entry |
+| **creates the firm if it is new** | flagged **needs review**, because a hand-typed agency name is one typo away from a duplicate |
+
+⚠️ **Before 2026-08-31 only the first of those happened.** The person was findable when quoting and
+never appeared as a record on the firm — which is how an agency could look as though it had no
+contacts while we had quoted for three of its agents.
+
+⛔ **Nothing is ever overwritten.** If a firm or a person already has details somebody set by hand, a
+later quote that spells the agency differently does not re-point them. It only fills what is blank.
+
+⚠️ **It needs an email.** That is the key the directory is built on, and a row per typo is worse than
+no row — so a quote with a name and no email is kept on the quote and nowhere else.
+
+📌 **Watch the *needs review* firms.** They are one way a second record for one firm gets in, and
+there is a section on exactly that problem further down.
+
 ### Where a firm is
 
 **Open a firm and type its city and state.** They start empty.
