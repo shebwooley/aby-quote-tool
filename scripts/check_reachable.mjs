@@ -429,6 +429,24 @@ const RULES = [
     holds: (f) => /const rerunUrl = '\/aby\?rerun=' \+ encodeURIComponent\(rerunState\)/.test(f.worker),
   },
   {
+    name: "re-pricing a quote on one page load actually saves the new price",
+    why: "The save hook skipped any generate whose quote NUMBER it had already saved on that page"
+       + " load. A re-run keeps its number deliberately, so the second and every later generate was"
+       + " silently dropped. Eric quoted out-of-state by accident, changed it back to TX and"
+       + " re-quoted several times, saw the right price on screen each time -- and the broker's"
+       + " link went on serving the first, wrong one. The dashboard RE-RUNS the engine; the link"
+       + " renders what was STORED, and only the stored copy was stale."
+       + " The guard now keys on the number PLUS the inputs, and it must read ABY_STATE and"
+       + " ABY_ADJUSTMENT directly: the overlay attaches those by patching fetch AFTER the payload"
+       + " is built, so a fingerprint of the payload alone cannot see a state change.",
+    holds: (f) => /function quoteKey\(qNum\)/.test(f.hook)
+      && /if \(key === lastSavedKey\) return;/.test(f.hook)
+      && !/if \(qNum === lastSavedNum\) return;/.test(f.hook)
+      // the state and the adjustment are part of the fingerprint, or the original bug returns
+      && /window\.ABY_STATE \|\| ''/.test(f.hook)
+      && /window\.ABY_ADJUSTMENT \|\| null/.test(f.hook),
+  },
+  {
     name: "a re-run carries the discount, and only the ABY overlay honours it",
     why: "The adjustment was stored on the quote all along and the Re-run link dropped it, so a"
        + " re-opened quote priced at LIST and the save overwrote resolved_pricing on the SAME share"

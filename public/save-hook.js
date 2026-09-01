@@ -177,7 +177,48 @@
     const output = document.getElementById('quoteOutput');
     if (!output) return;
 
-    let lastSavedNum = null;
+    let lastSavedKey = null;
+
+    /**
+     * WHAT WAS ACTUALLY QUOTED, not merely WHICH quote it is.
+     *
+     * THE BUG THIS FIXES (Eric, 2026-08-31, and it cost him an afternoon): the guard below
+     * compared the quote NUMBER alone. A re-run keeps its number deliberately, so the SECOND and
+     * every later generate on one page load was silently skipped. He accidentally quoted
+     * out-of-state, changed it back to TX and re-quoted several times, watched the screen show the
+     * right price each time -- and the link the broker held went on serving the first, wrong one,
+     * because nothing after the first generate was ever saved.
+     *
+     * His words: "If I click view quote from the dashboard, it shows the right price. But if I
+     * open it from the link that was sent to the broker, it is still opening and showing $100 per
+     * month." Two different sources: the dashboard RE-RUNS the engine, the link renders what was
+     * STORED. Only the stored copy was stale.
+     *
+     * SO THE KEY IS THE NUMBER PLUS THE INPUTS. Same number and same inputs is the observer firing
+     * twice on one render, which is the only thing this guard was ever for. Same number and
+     * DIFFERENT inputs is a genuine re-price, and it must save.
+     *
+     * ABY_STATE AND ABY_ADJUSTMENT ARE READ HERE ON PURPOSE, EVEN THOUGH THIS FILE DOES NOT SEND
+     * THEM. The overlay attaches both by patching fetch AFTER this payload is built, so a
+     * fingerprint taken from the payload alone cannot see a STATE change -- which is exactly the
+     * change that went missing. Both are undefined on the public page, where they are constant and
+     * cost nothing.
+     */
+    function quoteKey(qNum) {
+      var extra = '';
+      try {
+        extra = JSON.stringify([window.ABY_STATE || '', window.ABY_ADJUSTMENT || null]);
+      } catch (e) { extra = ''; }
+      try {
+        return qNum + '|' + JSON.stringify(getFormValues())
+             + '|' + JSON.stringify(collectProducts())
+             + '|' + JSON.stringify(window.__abyResolvedPricing || null)
+             + '|' + extra;
+      } catch (e) {
+        // Fall back to saving rather than not saving: a missed save is the defect being fixed.
+        return qNum + '|' + Date.now();
+      }
+    }
 
     const observer = new MutationObserver(function() {
       const text = output.textContent || '';
@@ -189,8 +230,10 @@
       const qNum = resolveQuoteNumber(text);
       if (!qNum) return;
 
-      if (qNum === lastSavedNum) return;   // don't double-save the same quote
-      lastSavedNum = qNum;
+      // Don't double-save the same quote priced the same way. A RE-PRICE saves.
+      const key = quoteKey(qNum);
+      if (key === lastSavedKey) return;
+      lastSavedKey = key;
 
       // View-only mode (opened via admin "View Quote"): skip this save,
       // then clear the flag so any subsequent manual generate does save normally.
