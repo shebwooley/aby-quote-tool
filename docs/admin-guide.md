@@ -551,7 +551,13 @@ a replacement.
 |---|---|
 | `TX260831-3379-NC` | the original |
 | `TX260831-3379-NC-2` | version 2 |
-| `TX260831-3379-C` | the same quote priced with commission |
+| `TX260831-3379-C` | the same quote priced WITH commission |
+
+⭐ **Flipping the commission checkbox keeps `3379` and changes only the `C`/`NC`.** Until
+2026-08-31 it minted a whole new number, so the two rate books had nothing in common and nobody
+could see they were one quote. ⚠️ **Flipping from a version starts that rate book at its own
+beginning** — `TX260831-3379-NC-2` flipped to commission is `TX260831-3379-C`, not `-C-2`,
+because no `-C` had ever existed to be a second version of.
 
 ⭐ **`3379` never changes — it is what ties the family together.** The date never changes either:
 a re-run keeps the day it was first run, and the document carries the revision date.

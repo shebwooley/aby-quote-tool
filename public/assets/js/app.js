@@ -70,7 +70,9 @@
 
   // TX260806-1234-C / -NC. The suffix records whether commission is included, so it
   // is part of the quote's identity rather than decoration.
-  var QUOTE_NUM_SHAPE = /^([A-Z]{2})(\d{6})-(\d{4})-(NC|C)$/;
+  // ⭐ THE VERSION SUFFIX IS OPTIONAL AND WAS MISSING (2026-08-31). Without it TX260831-3379-NC-2
+  // did not match at all, so re-running a version minted a brand-new number and lost the family.
+  var QUOTE_NUM_SHAPE = /^([A-Z]{2})(\d{6})-(\d{4})-(NC|C)(?:-(\d+))?$/;
 
   /**
    * Decide which number a render should carry.
@@ -85,7 +87,23 @@
   function resolveQuoteNumber(carried, commissioned, mint) {
     var m = carried ? QUOTE_NUM_SHAPE.exec(carried) : null;
     if (!m) return mint();                                  // none carried, or unrecognisable
-    if ((m[4] === 'C') !== !!commissioned) return mint();    // commission basis changed
+    if ((m[4] === 'C') !== !!commissioned) {
+      // 🔴🔴 THE COMMISSION FLIP KEEPS THE FAMILY AND SWAPS ONLY THE RATE BOOK (Eric, 2026-08-31).
+      //
+      // This used to call mint(), which generates a fresh RANDOM block -- so quoting with
+      // commission and then without produced two numbers with nothing in common, and the pair
+      // could not be recognised as one quote by anybody reading them. Eric found it by testing:
+      // "I quoted with commission and requoted without commission and it changed the four digits
+      // in the quote number. was that supposed to happen?" It was not.
+      //
+      // ⭐ HIS OWN FRAMING IS THE RULE: "C and NC are part of the quote number... so at least THAT
+      // part of the quote number should change." The state, the date and the 4-digit block are the
+      // quote's identity and stay; only the rate book moves.
+      // ⛔ THE VERSION IS DROPPED, not carried across. A version numbers revisions of one priced
+      // line; the other rate book has its own line and starts at its own beginning. Carrying it
+      // would produce TX260831-3379-C-2 with no -C ever having existed.
+      return m[1] + m[2] + '-' + m[3] + '-' + (commissioned ? 'C' : 'NC');
+    }
     return carried;
   }
 

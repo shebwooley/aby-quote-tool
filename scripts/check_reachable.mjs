@@ -445,6 +445,28 @@ const RULES = [
       && /!!window\.ABY_NEW_VERSION/.test(f.hook),
   },
   {
+    name: "flipping commission keeps the quote's identity and changes only the rate book",
+    why: "Eric found this by testing on 2026-08-31: 'I quoted with commission and requoted without"
+       + " commission and it changed the four digits in the quote number. was that supposed to"
+       + " happen?' It was not. resolveQuoteNumber called mint() on a flip, which generates a fresh"
+       + " RANDOM block -- so the two rate books produced numbers with nothing in common and could"
+       + " not be recognised as one quote. His own rule: 'C and NC are part of the quote number..."
+       + " so at least THAT part should change.' The state, date and 4-digit block are the identity."
+       + " AND THE SHAPE HAD TO LEARN THE VERSION SUFFIX: without it TX260831-3379-NC-2 matched"
+       + " nothing, so re-running a version minted a brand-new number too.",
+    // ⚠️ PLAIN STRING CHECKS, NOT REGEXES. The thing under test IS a regex, and writing a pattern
+    // to match a pattern means escaping every backslash twice -- which got it wrong on the first
+    // attempt and would fail confusingly for the wrong reason later.
+    // ⛔ AND THE PROBE ITSELF CARRIES NO BACKSLASH, deliberately. The first attempt checked for
+    // "(NC|C)(?:-(\d+))?" and JS collapsed the unrecognised escape to a bare d, so the string it
+    // actually looked for did not exist and the rule failed for a reason that had nothing to do
+    // with the code. Removing the need for an escape beats getting the escape right.
+    holds: (f) => f.app.includes("(NC|C)(?:-")
+      && f.app.includes("return m[1] + m[2] + '-' + m[3] + '-' + (commissioned ? 'C' : 'NC');")
+      // ⛔ and it must NOT mint on a flip any more, which is the whole defect
+      && !f.app.includes("if ((m[4] === 'C') !== !!commissioned) return mint();"),
+  },
+  {
     name: "a version's link can be retired, and put back",
     why: "Eric, 2026-08-31: 'I do sort of think we should be able to retire a quote version.'"
        + " A retired link serves a page saying the quote was replaced and offering to request the"
