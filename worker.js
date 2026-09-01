@@ -17039,9 +17039,29 @@ function detailHTML(q, products) {
     brokerEmail: q.broker_email || '',
     commissionIncluded: !!q.commission_included,
     repName: q.rep_name || '',
-    products: q.products || '[]'
+    products: q.products || '[]',
+    // ⭐⭐ THE PRICE ADJUSTMENT, CARRIED THROUGH THE RE-RUN (Eric, 2026-08-31).
+    //
+    // 🔴 IT WAS STORED ON THE QUOTE ALL ALONG AND THE RE-RUN LINK DROPPED IT, which cost him a
+    // waived setup fee on a quote he had already emailed to the agent: the re-opened quote priced
+    // at LIST, and saving then overwrote the stored resolved_pricing on the SAME share token, so
+    // the document the agent held changed underneath them.
+    // ⛔ THE ADJUSTMENT IS ABY-ONLY AND STAYS THAT WAY. This link is rendered only on the admin
+    // quote log, and the overlay that applies it is served only to an authenticated ABY session --
+    // see the /aby URL below. It is never put on a broker-facing page.
+    // ⚠️ Eric's own words for what a re-run should be: "it should start as the exact same quote
+    // (including any discounts), then we change from there."
+    adjustment: q.adjustment || null,
+    adjustmentNote: q.adjustment_note || ''
   });
-  const rerunUrl = '/?rerun=' + encodeURIComponent(rerunState);
+  // 🔴🔴 /aby, NOT /. ERIC, 2026-08-31: "when I clicked re-run quote, it didn't re-run from
+  // abyquotes.com/aby. It just did from abyquotes.com. So it did lose the discount and there was
+  // no way to put it back on there since I was in the general broker page at that point."
+  // ⭐ /aby IS THE SAME TOOL PLUS THE INTERNAL OVERLAY -- the state selector and the rate override.
+  // Sending an ABY admin to the public root handed them a page with no way to price the thing they
+  // had come to re-price. This link only ever renders on the admin quote log, so the destination
+  // is always an authenticated session.
+  const rerunUrl = '/aby?rerun=' + encodeURIComponent(rerunState);
 
   // 🔴🔴 A QUOTE WE CANNOT REPRODUCE MUST NOT OFFER "VIEW QUOTE".
   // "View" does not open a stored document -- there isn't one. It RE-RUNS THE PRICING ENGINE from
@@ -17955,6 +17975,34 @@ const ABY_INTERNAL_JS = `
   window.ABY_STATE = 'TX';
   window.ABY_ADJUSTMENT = null;   // { mode:'percent'|'flat', amount:Number, scope:'all'|productId }
   window.ABY_ADJ_NOTE = '';
+
+  // 0) A RE-RUN STARTS AS THE SAME QUOTE, DISCOUNT INCLUDED (Eric, 2026-08-31).
+  //
+  // "It should start as the exact same quote (including any discounts), then we change from
+  // there." The adjustment was already stored on the quote row; the Re-run link simply did not
+  // carry it, so a re-opened quote priced at LIST and the save then overwrote the stored price on
+  // the same share token -- changing a document the agent had already been sent.
+  //
+  // THIS LIVES IN THE OVERLAY AND NOT IN app.js, AND THAT IS THE WHOLE SECURITY POINT. The rerun
+  // parameter is a URL anyone can construct. app.js runs on the PUBLIC page, so honouring a
+  // discount there would let a crafted link produce a discounted ABY quote for anybody. This file
+  // is served only to an authenticated ABY session, so an adjustment read here can only ever be
+  // applied by somebody who could have typed it in anyway. Same reasoning the firm name and the
+  // logo path already follow.
+  try {
+    var rr = new URLSearchParams(window.location.search).get('rerun');
+    if (rr) {
+      var carried = JSON.parse(decodeURIComponent(rr));
+      // Shape-checked rather than trusted: mode and amount are what the engine branches on, and a
+      // malformed object would throw inside calculateAll on every keystroke.
+      var adj = carried && carried.adjustment;
+      if (adj && typeof adj === 'object'
+          && ['percent', 'flat', 'set'].indexOf(String(adj.mode)) !== -1) {
+        window.ABY_ADJUSTMENT = adj;
+        window.ABY_ADJ_NOTE = String(carried.adjustmentNote || '');
+      }
+    }
+  } catch (e) {}   // a re-run must open whether or not the carried state parses
 
   // 1) Route state + override through BOTH the preview and the downloaded file.
   var origCalcAll = window.ABYQuote.engine.calculateAll;

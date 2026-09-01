@@ -417,6 +417,34 @@ const RULES = [
       && /fromServer = true;/.test(f.app)
       && /if \(fromServer && typeof state\.agencyLogoPath === 'string'/.test(f.app),
   },
+  {
+    name: "re-running a quote goes to /aby, where the price controls are",
+    why: "Eric, 2026-08-31: 'when I clicked re-run quote, it didn't re-run from abyquotes.com/aby."
+       + " It just did from abyquotes.com. So it did lose the discount and there was no way to put"
+       + " it back on there since I was in the general broker page at that point.' /aby is the same"
+       + " tool plus the internal overlay -- the state selector and the rate override. Sending an"
+       + " ABY admin to the public root hands them a page with no way to price the thing they came"
+       + " to re-price. This link only renders on the admin quote log, so the destination is always"
+       + " an authenticated session.",
+    holds: (f) => /const rerunUrl = '\/aby\?rerun=' \+ encodeURIComponent\(rerunState\)/.test(f.worker),
+  },
+  {
+    name: "a re-run carries the discount, and only the ABY overlay honours it",
+    why: "The adjustment was stored on the quote all along and the Re-run link dropped it, so a"
+       + " re-opened quote priced at LIST and the save overwrote resolved_pricing on the SAME share"
+       + " token -- changing a document already emailed to an agent. Eric: 'it should start as the"
+       + " exact same quote (including any discounts), then we change from there.'"
+       + " THE SECOND HALF IS THE SECURITY ONE: ?rerun= is a URL anyone can construct, so the"
+       + " discount must be read by the OVERLAY, which is served only to an authenticated session,"
+       + " and never by app.js, which runs on the public page. Otherwise a crafted link discounts"
+       + " an ABY quote for anybody.",
+    holds: (f) => /adjustment: q\.adjustment \|\| null/.test(f.worker)
+      && /adjustmentNote: q\.adjustment_note \|\| ''/.test(f.worker)
+      // read in the overlay, shape-checked, and NOT in the public bundle
+      && /window\.ABY_ADJUSTMENT = adj;/.test(f.worker)
+      && /\['percent', 'flat', 'set'\]\.indexOf\(String\(adj\.mode\)\) !== -1/.test(f.worker)
+      && !/ABY_ADJUSTMENT/.test(f.app),
+  },
     {
     name: "a signature records WHICH QUOTE it was for, and the proposal is openable from it",
     why: "Eric, 2026-08-26: 'we receive the proposal link with the original quote and the"
