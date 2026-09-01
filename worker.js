@@ -431,11 +431,26 @@ async function handleSaveQuote(request, env, ctx) {
   const familyKey = quoteFamilyOf(quoteNumber);
   if (saveAsNewVersion && quoteNumber) {
     try {
+      // ⛔ MATCH ON THE STORED FAMILY *OR* ON THE NUMBER ITSELF, and the second half is not
+      // belt-and-braces. `quote_family` is only written by this handler, so all 6,179 quotes that
+      // existed before it are NULL -- and a lookup on the column alone would think the original is
+      // not there, hand out version 2 twice, and lose to the UNIQUE index the second time.
+      // ⭐ The LIKE is anchored to the family plus a dash, so TX260831-3379 cannot match
+      // TX260831-33790: the 4-digit block is fixed width, but relying on that silently is how a
+      // prefix match goes wrong.
       const top = await env.DB.prepare(
-        'SELECT MAX(COALESCE(version,1)) AS v FROM quotes WHERE quote_family = ?'
-      ).bind(familyKey).first();
+        'SELECT MAX(COALESCE(version,1)) AS v FROM quotes WHERE quote_family = ? OR quote_number LIKE ?'
+      ).bind(familyKey, familyKey + '-%').first();
       versionNo = Math.max(1, Number((top && top.v) || 1)) + 1;
       saveNumber = familyKey + '-' + (commissionIncluded ? 'C' : 'NC') + '-' + versionNo;
+      // ⭐ STAMP THE FAMILY ON THE SIBLINGS THAT PREDATE IT, so the family becomes queryable the
+      // moment it has more than one member. A targeted repair of the rows that actually need it,
+      // rather than a migration pass over the whole table for a column most rows will never use.
+      try {
+        await env.DB.prepare(
+          "UPDATE quotes SET quote_family = ? WHERE quote_number LIKE ? AND COALESCE(quote_family,'') = ''"
+        ).bind(familyKey, familyKey + '-%').run();
+      } catch (e) { /* the column is newer than the row; the insert below still carries it */ }
     } catch (err) {
       // The columns are newer than this handler. Fall through and save as an ordinary re-run
       // rather than refusing: an unsaved quote is worse than an unversioned one.
