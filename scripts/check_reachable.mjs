@@ -440,7 +440,9 @@ const RULES = [
       && /window\.ABY_NEW_VERSION = false;/.test(f.worker)
       && /if \(window\.ABY_NEW_VERSION\) b\.saveAsNewVersion = true;/.test(f.worker)
       && /saveAsNewVersion\s+= false,/.test(f.worker)
-      && /SELECT MAX\(COALESCE\(version,1\)\) AS v FROM quotes WHERE quote_family = \?/.test(f.worker)
+      && f.worker.includes("SELECT COUNT(*) AS n, MAX(COALESCE(version,1)) AS v FROM quotes ")
+      // ⛔ and a version with nothing to be a version OF is refused, not numbered -2
+      && f.worker.includes("if (!top || Number(top.n || 0) === 0) throw new Error('no earlier version');")
       // ticking the box must survive the save-hook's dedupe, or the version is never created
       && /!!window\.ABY_NEW_VERSION/.test(f.hook),
   },

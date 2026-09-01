@@ -439,8 +439,13 @@ async function handleSaveQuote(request, env, ctx) {
       // TX260831-33790: the 4-digit block is fixed width, but relying on that silently is how a
       // prefix match goes wrong.
       const top = await env.DB.prepare(
-        'SELECT MAX(COALESCE(version,1)) AS v FROM quotes WHERE quote_family = ? OR quote_number LIKE ?'
+        'SELECT COUNT(*) AS n, MAX(COALESCE(version,1)) AS v FROM quotes ' +
+        'WHERE quote_family = ? OR quote_number LIKE ?'
       ).bind(familyKey, familyKey + '-%').first();
+      // ⛔ NOTHING TO BE A VERSION OF. A brand-new quote asking to be saved as a version would
+      // otherwise become -2 with no -1 anywhere, which is a number that lies about its own history.
+      // The box is a request; this is where an impossible one becomes an ordinary save.
+      if (!top || Number(top.n || 0) === 0) throw new Error('no earlier version');
       versionNo = Math.max(1, Number((top && top.v) || 1)) + 1;
       saveNumber = familyKey + '-' + (commissionIncluded ? 'C' : 'NC') + '-' + versionNo;
       // ⭐ STAMP THE FAMILY ON THE SIBLINGS THAT PREDATE IT, so the family becomes queryable the
@@ -18626,13 +18631,16 @@ const ABY_INTERNAL_JS = `
     if (host === form && form.parentNode) form.parentNode.insertBefore(panel, form);
     else host.insertBefore(panel, host.firstChild);
 
-    // THE CHOICE ONLY EXISTS ON A RE-RUN, because a brand-new quote has nothing to be a version OF.
-    // A checkbox offering to version something that does not exist yet is a question with no
-    // meaning, and the whole reason this is a choice rather than automatic is Eric's: most re-runs
-    // are corrections. "Replace" is the default; versioning is deliberate.
-    var isRerun = new URLSearchParams(window.location.search).has('rerun');
+    // 🔴 IT IS ALWAYS SHOWN, AND THE FIRST VERSION OF THIS WAS WRONG. It keyed on ?rerun= being in
+    // the address bar, which is true when the admin link opens the page and NOT true a moment later
+    // -- Eric had four /aby tabs open with no query string, tried to save a version, and there was
+    // simply no checkbox. A control that exists only while a URL parameter survives is a control
+    // nobody can rely on finding.
+    // ⭐ SO THE SERVER DECIDES WHETHER VERSIONING MEANS ANYTHING, not the page: asking to version a
+    // quote that has no earlier version saves it normally as version 1. The box is a request, and
+    // an impossible request is simply an ordinary save.
     var vRow = panel.querySelector('#abyVersionRow');
-    if (vRow && isRerun) vRow.style.display = 'block';
+    if (vRow) vRow.style.display = 'block';
     var vBox = panel.querySelector('#abyNewVersion');
     if (vBox) {
       // Published as a global for save-hook.js, the same way ABY_STATE and ABY_ADJUSTMENT are.
