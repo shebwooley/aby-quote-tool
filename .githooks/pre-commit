@@ -72,6 +72,19 @@ if git diff --cached --name-only | grep -q '^worker\.js$'; then
     echo "Run: node scripts/check_agency_rollup.mjs --self-test"
     exit 1
   fi
+
+  # THE SIGNED COMMITMENT EXPORT (F-416 iii). Eric asked for a JSON so the next phase can read a
+  # signed authorization without re-typing it. This drives the real handler against fake rows --
+  # D1 cannot be reached from a hook -- and asserts the two things that matter: the signed fields
+  # survive, and NO PRICING is copied in. Two sets of numbers that can disagree is the defect the
+  # quote link-back was built to avoid, and an export is exactly where it would come back.
+  # It carries three sabotages of its own, so it cannot pass by doing nothing.
+  if ! node scripts/check_commitment_export.mjs; then
+    echo ""
+    echo "The commitment JSON export is wrong. Commit refused."
+    echo "Run: node scripts/check_commitment_export.mjs"
+    exit 1
+  fi
 fi
 
 # 🔴🔴 CAN A USER REACH WHAT WE BUILT? Added 2026-08-23 after F-367 -- the employer corrects the

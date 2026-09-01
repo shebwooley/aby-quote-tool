@@ -216,6 +216,11 @@ export default {
     if (/^\/api\/commitments\/[^/]+$/.test(path) && method === 'DELETE') {
       return withAuth(request, env, () => handleDeleteCommitment(path.split('/').pop(), env));
     }
+    // F-416 (iii). Eric, 2026-09-01: "we also need a Json with the info they complete so it can
+    // feed the next phase (processing)." Auth-gated like the list it is reached from.
+    if (/^\/api\/commitments\/[^/]+\/export$/.test(path) && method === 'GET') {
+      return withAuth(request, env, () => handleCommitmentExport(request, path.split('/')[3], env));
+    }
     if (path === '/api/admin/login'  && method === 'POST') return handleLogin(request, env);
     if (path === '/api/admin/logout')                      return handleLogout();
 
@@ -1739,6 +1744,131 @@ async function handleListCommitments(request, env) {
     } catch (err2) {
       return jsonResp({ error: String(err2) }, 500);
     }
+  }
+}
+
+/**
+ * ONE SIGNED AUTHORIZATION, AS MACHINE-READABLE JSON (F-416).
+ *
+ * ERIC, 2026-09-01: "we also need a Json with the info they complete so it can feed the next
+ * phase (processing)." The other two things he asked for already existed and are NOT rebuilt
+ * here: the signed page downloads from the Commitments tab, and the whole quote renders at
+ * /q/<token>. This is the third, and it is the only one a machine can read.
+ *
+ * WHAT IT CARRIES, AND WHAT IT DELIBERATELY DOES NOT.
+ * It carries the commitment's OWN fields -- everything the employer typed and signed -- plus a
+ * POINTER to the quote. It does NOT copy the quote's pricing into itself. Duplicating those
+ * numbers would create a second set that can disagree with the first, which is the exact reason
+ * the link-back was built as a reference rather than a copy.
+ * The products blob IS included verbatim, because it is not a copy of the quote: it is part of
+ * what the employer put their name to, it is frozen at signing, and it cannot drift.
+ *
+ * A SCHEMA NAME IS EMITTED so a consumer can tell which shape it is holding. A JSON document
+ * with no version is one that can never be changed safely.
+ *
+ * ENTRIES IN `products` ARE STRINGS ON OLD ROWS AND OBJECTS ON NEW ONES -- the same two shapes
+ * that printed an empty product box on a real employer's document in August. `product_names` is
+ * normalised for consumers that just want the list; `products` keeps whatever was stored.
+ */
+async function handleCommitmentExport(request, id, env) {
+  try {
+    // The same broker resolution the list uses: the row's own columns first, the quote only as
+    // a fallback for rows signed before those columns existed.
+    let row = null;
+    try {
+      row = await env.DB.prepare(
+        'SELECT c.*, ' +
+        "       COALESCE(NULLIF(c.broker_email,''), q.broker_email) AS broker_email_resolved, " +
+        '       q.broker_name   AS quote_broker_name, ' +
+        '       q.broker_agency AS quote_broker_agency ' +
+        '  FROM commitments c ' +
+        '  LEFT JOIN quotes q ON q.quote_number = c.quote_number ' +
+        ' WHERE c.id = ?'
+      ).bind(id).first();
+    } catch (err) {
+      // A pre-migration database has no client_id / broker_email, so the join throws. The
+      // signed record still has to be exportable -- losing the broker column is a gap, losing
+      // the authorization is a defect. Same ruling as the list.
+      console.error('commitment export: broker join failed (falling back):', err);
+      row = await env.DB.prepare('SELECT * FROM commitments WHERE id = ?').bind(id).first();
+    }
+    if (!row) return jsonResp({ error: 'No such commitment' }, 404);
+
+    let products = [];
+    try { products = JSON.parse(row.products || '[]'); } catch (e) { products = []; }
+    if (!Array.isArray(products)) products = [];
+    const names = products
+      .map((p) => (p && typeof p === 'object' ? String(p.name || '') : String(p || '')).trim())
+      .filter((n) => n);
+
+    // An absent value is null, never an empty string: a consumer must be able to tell "they left
+    // it blank" from "we never asked". Empty strings are what the columns default to.
+    const val = (v) => {
+      const t = String(v == null ? '' : v).trim();
+      return t === '' ? null : t;
+    };
+
+    const origin = new URL(request.url).origin;
+    const token  = val(row.share_token);
+
+    const doc = {
+      schema: 'aby.commitment/1',
+      exported_at: new Date().toISOString(),
+      commitment_id: row.id,
+      signed_at: val(row.submitted_at),
+      quote: {
+        quote_number: val(row.quote_number),
+        quote_id: val(row.quote_id),
+        share_token: token,
+        // The proposal as the employer saw it, priced from what was STORED. Null on rows signed
+        // before the link-back shipped, and that is honest -- a dead link is worse than none.
+        proposal_url: token ? origin + '/q/' + encodeURIComponent(token) : null,
+      },
+      employer: {
+        name: val(row.employer_name),
+        address: val(row.address),
+        city_state_zip: val(row.city_state_zip),
+        client_id: val(row.client_id),
+      },
+      authorized_signer: {
+        name: val(row.auth_signer),
+        title: val(row.auth_title),
+        email: val(row.auth_email),
+        phone: val(row.auth_phone),
+      },
+      hr_contact: {
+        name: val(row.hr_contact),
+        title: val(row.hr_title),
+        email: val(row.hr_email),
+        phone: val(row.hr_phone),
+      },
+      coverage: {
+        requested_start_date: val(row.start_date),
+      },
+      acceptance: {
+        printed_name: val(row.accepted_print),
+        signature: val(row.accepted_sign),
+        product_names: names,
+        products: products,
+      },
+      broker: {
+        email: val(row.broker_email_resolved) || val(row.broker_email),
+        name: val(row.quote_broker_name),
+        agency: val(row.quote_broker_agency),
+      },
+    };
+
+    const filename = 'Commitment-' + (val(row.quote_number) || 'unknown') + '.json';
+    return new Response(JSON.stringify(doc, null, 2), {
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="' + filename + '"',
+        'Cache-Control': 'no-store',
+      },
+    });
+  } catch (err) {
+    console.error('handleCommitmentExport failed:', err);
+    return jsonResp({ error: String(err) }, 500);
   }
 }
 
@@ -17936,6 +18066,13 @@ async function loadCommitments() {
               + 'border:1px solid #1a5c3a;border-radius:4px;font-size:12px;text-decoration:none;'
               + 'margin-right:6px">Open the signed proposal</a>'
             : '') +
+          // F-416 (iii). The signed record, machine-readable, for whoever processes the sale.
+          // A plain link rather than a button: it is a GET, and a link can be opened in a tab,
+          // copied, or handed to a script, which is the whole point of the format.
+          '<a href="/api/commitments/' + encodeURIComponent(c.id) + '/export" '
+            + 'style="display:inline-block;padding:5px 10px;background:#fff;color:#3d4a5c;'
+            + 'border:1px solid #c8d2de;border-radius:4px;font-size:12px;text-decoration:none;'
+            + 'margin-right:6px">JSON</a>' +
           '<button class="dl-btn" data-cid="' + c.id + '" style="padding:5px 10px;background:#1a5c3a;color:white;border:none;border-radius:4px;font-size:12px;cursor:pointer;margin-right:6px">&#11091; Download</button>' +
           '<button class="del-cmt-btn" data-cid="' + c.id + '" style="padding:5px 10px;background:white;color:#c0392b;border:1px solid #f5b8b8;border-radius:4px;font-size:12px;cursor:pointer">Delete ✕</button>' +
         '</td>' +

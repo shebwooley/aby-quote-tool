@@ -545,6 +545,32 @@ const RULES = [
       && /Open the signed proposal/.test(f.worker),
   },
   {
+    name: "a signed commitment can be exported as JSON from the screen it is listed on",
+    why: "Eric, 2026-09-01: 'we also need a Json with the info they complete so it can feed the"
+       + " next phase (processing).' The other two things he asked for already existed -- the"
+       + " signed page downloads, and /q/<token> renders the whole quote -- so this is the only"
+       + " one that was missing, and it is the only one a machine can read. An export endpoint"
+       + " with no link on the Commitments tab is a door-less feature, which is the exact shape"
+       + " F-367 shipped in.",
+    holds: (f) => f.worker.includes("export$/.test(path)")
+      && /async function handleCommitmentExport\(/.test(f.worker)
+      && /encodeURIComponent\(c\.id\) \+ '\/export"/.test(f.worker),
+  },
+  {
+    name: "the JSON export points at the quote instead of copying its prices",
+    why: "Two sets of numbers that can disagree is the defect the link-back was built to avoid."
+       + " The export carries the commitment's own fields plus a POINTER; if it ever starts"
+       + " copying pricing, the signed record and the quote can drift apart silently.",
+    holds: (f) => {
+      const i = f.worker.indexOf('async function handleCommitmentExport');
+      if (i === -1) return false;
+      const body = f.worker.slice(i, i + 6000);
+      return /proposal_url/.test(body)
+        && /schema: 'aby\.commitment\/1'/.test(body)
+        && !/first_year_value|monthly_premium|\brates\b/.test(body);
+    },
+  },
+  {
     name: "signing never replaces a share token a client already holds",
     why: "A link already sent to an employer must keep working. Minting unconditionally would"
        + " kill every outstanding proposal link the moment somebody signed -- and the person who"
