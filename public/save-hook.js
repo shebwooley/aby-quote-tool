@@ -207,7 +207,12 @@
     function quoteKey(qNum) {
       var extra = '';
       try {
-        extra = JSON.stringify([window.ABY_STATE || '', window.ABY_ADJUSTMENT || null]);
+        // ABY_NEW_VERSION belongs here for the SAME reason as the other two, and leaving it
+        // out would have re-created the bug this key was written to fix: ticking 'save as a
+        // new version' without changing anything else produces identical inputs, so the
+        // save would have been suppressed and the version never created.
+        extra = JSON.stringify([window.ABY_STATE || '', window.ABY_ADJUSTMENT || null,
+                                !!window.ABY_NEW_VERSION]);
       } catch (e) { extra = ''; }
       try {
         return qNum + '|' + JSON.stringify(getFormValues())

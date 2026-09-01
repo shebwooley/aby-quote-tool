@@ -325,7 +325,7 @@ const RULES = [
        + " to have it pasted onto every office. The inheritance already existed one level down (a"
        + " broker account with no logo inherits its agency's), so the tree was the inconsistent"
        + " part. The walk is BOUNDED and cycle-guarded because parent_id is set by hand.",
-    holds: (f) => /async function agencyLogoChain/.test(f.worker)
+    holds: (f) => /async function agencyLogoChain\(/.test(f.worker)
       && /SELECT id, parent_id, logo_data_url FROM agencies WHERE id = \?/.test(f.worker)
       && /hop < 5 && id && !seen\.has\(id\)/.test(f.worker)
       // BOTH consumers go through it, or the two ends disagree about which firms have a logo
@@ -340,7 +340,7 @@ const RULES = [
        + " findable when quoting and never became a record anybody could see on the firm. This is"
        + " the same linking the 2026-08-23 backfill does, moved to save time so it has nothing left"
        + " to repair.",
-    holds: (f) => /async function linkBrokerToRegister/.test(f.worker)
+    holds: (f) => /async function linkBrokerToRegister\(/.test(f.worker)
       && /await linkBrokerToRegister\(env, email, name, phone, agency, now\)/.test(f.worker)
       // the three links: the firm, the human, and the join
       && /INSERT INTO agencies \(id, name, share_quotes, created_at, needs_review\)/.test(f.worker)
@@ -427,6 +427,51 @@ const RULES = [
        + " to re-price. This link only renders on the admin quote log, so the destination is always"
        + " an authenticated session.",
     holds: (f) => /const rerunUrl = '\/aby\?rerun=' \+ encodeURIComponent\(rerunState\)/.test(f.worker),
+  },
+  {
+    name: "a re-run can be saved as a NEW VERSION, and the choice is on the screen",
+    why: "Eric, 2026-08-31: 'we need to be able to send two versions of the same quote... it"
+       + " shouldn't change an existing link.' The choice is deliberate rather than automatic,"
+       + " because most re-runs are CORRECTIONS -- versioning every one would have left four junk"
+       + " versions behind on the afternoon this was found. Replace is the default."
+       + " THE SERVER PICKS THE NUMBER, never the page: two saves racing on one family would both"
+       + " compute the same next version and one would lose to the UNIQUE index.",
+    holds: (f) => /id="abyNewVersion" type="checkbox"/.test(f.worker)
+      && /window\.ABY_NEW_VERSION = false;/.test(f.worker)
+      && /if \(window\.ABY_NEW_VERSION\) b\.saveAsNewVersion = true;/.test(f.worker)
+      && /saveAsNewVersion\s+= false,/.test(f.worker)
+      && /SELECT MAX\(COALESCE\(version,1\)\) AS v FROM quotes WHERE quote_family = \?/.test(f.worker)
+      // ticking the box must survive the save-hook's dedupe, or the version is never created
+      && /!!window\.ABY_NEW_VERSION/.test(f.hook),
+  },
+  {
+    name: "a version's link can be retired, and put back",
+    why: "Eric, 2026-08-31: 'I do sort of think we should be able to retire a quote version.'"
+       + " A retired link serves a page saying the quote was replaced and offering to request the"
+       + " current one -- NOT a 404, because the reader is usually the employer, who did nothing"
+       + " wrong and has a link their broker sent them. It is reversible: nothing is deleted, so a"
+       + " mis-click is one click back rather than a re-run.",
+    holds: (f) => /function retiredQuoteHTML\(/.test(f.worker)
+      && /async function handleRetireQuote\(/.test(f.worker)
+      && /async function retireQuote\(id, btn\)/.test(f.worker)
+      && /Retire this link/.test(f.worker)
+      && /Reinstate this link/.test(f.worker)
+      // the share route has to actually consult it, or retiring changes nothing
+      && /if \(String\(q\.retired_at \|\| ''\)\.trim\(\)\)/.test(f.worker),
+  },
+  {
+    name: "a retired link offers the updated quote, and tells ABY and the broker",
+    why: "Eric: 'if the broker prepared the quote, they could be alerted. If ABY ran the quote, we"
+       + " could be alerted. In fact, we should be alerted regardless by email.' So ABY always,"
+       + " from NOTIFY_EMAILS, and the broker on the quote whenever the row has their address --"
+       + " the employer rings the BROKER, not ABY, and a broker who has not heard cannot answer."
+       + " It is throttled for the same reason the admin login is: a public button that sends"
+       + " email is a thing to press repeatedly.",
+    holds: (f) => /async function handleRequestUpdate\(/.test(f.worker)
+      && /request-update/.test(f.worker)
+      && /quote_update_requests/.test(f.worker)
+      && /NOTIFY_EMAILS/.test(f.worker)
+      && /q\.broker_email/.test(f.worker),
   },
   {
     name: "re-pricing a quote on one page load actually saves the new price",

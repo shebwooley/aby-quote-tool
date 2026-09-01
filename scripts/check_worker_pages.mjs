@@ -130,6 +130,11 @@ const PAGES = ["adminHTML", "adminBrokersHTML", "adminRatesHTML",
                "adminReferralsHTML", "adminClientsHTML", "brokerPageHTML", "setPasswordPageHTML",
                "adminRfpHTML",
                "loginHTML",
+               // 🆕 The page a RETIRED quote link serves (2026-08-31). Public, unauthenticated, read
+               // by employers rather than by ABY, and it carries an inline script -- exactly the
+               // shape this checker exists for. Caught by the scope check on the run that first
+               // emitted it, which is the fourth time that check has paid for itself.
+               "retiredQuoteHTML",
                // The admin guide. Its BODY is generated from docs/admin-guide.md, so what is checked
                // here is the page SHELL -- that the wrapper still emits valid HTML around it.
                "adminGuideHTML"];

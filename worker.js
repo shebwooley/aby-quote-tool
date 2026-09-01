@@ -167,6 +167,12 @@ export default {
     if (/^\/api\/quotes\/[^/]+$/.test(path) && method === 'DELETE') {
       return withAuth(request, env, () => handleDeleteQuote(path.split('/').pop(), env));
     }
+    // ⭐ RETIRE OR REINSTATE ONE VERSION. Admin only, and REVERSIBLE by design: retiring is a
+    // presentation decision about a link, not a deletion, and the wrong version retired by mistake
+    // must be undoable without re-running anything.
+    if (/^\/api\/quotes\/[^/]+\/retire$/.test(path) && method === 'POST') {
+      return withAuth(request, env, () => handleRetireQuote(path.split('/')[3], request, env));
+    }
     // The SHARED QUOTE LINK (F-368). Public and unauthenticated by design -- an employer has no
     // account and must not need one to read a quote addressed to them. The token is the whole
     // credential, which is why it is 128 bits of randomness rather than the quote number.
@@ -175,6 +181,12 @@ export default {
     }
     if (/^\/q\/[a-z2-9]{16}$/.test(path) && method === 'GET') {
       return serveSharedQuote(path.slice(3), env, request);
+    }
+    // ⭐ ASKING FOR THE CURRENT VERSION FROM A RETIRED LINK. Public for the same reason the page
+    // above is: the reader is an employer with no account. It answers identically whether or not
+    // it did anything, and it is throttled -- see handleRequestUpdate.
+    if (/^\/api\/q\/[a-z2-9]{16}\/request-update$/.test(path) && method === 'POST') {
+      return handleRequestUpdate(path.split('/')[3], request, env);
     }
     // BOTH LOOKUPS ARE ADMIN ONLY. Each answers a question about ABY's book -- who a broker is,
     // and which agencies ABY works with. On a public endpoint either would be a harvesting
@@ -356,6 +368,11 @@ async function handleSaveQuote(request, env, ctx) {
     adjustment         = null,
     adjustmentNote     = '',
     resolvedPricing    = null,
+    // ⭐ SAVE AS A NEW VERSION rather than replacing this one. The CHOICE is Eric's, made on save:
+    // "I like your suggestion" -- replace by default, version deliberately. Most re-runs are
+    // corrections, and versioning every one of them would have left four junk versions behind on
+    // the afternoon this was found.
+    saveAsNewVersion   = false,
   } = body;
 
   // Attribution is decided on the SERVER from the session cookie, so a broker
@@ -395,11 +412,44 @@ async function handleSaveQuote(request, env, ctx) {
   // and brokers would go on quoting into nothing. Plain SELECT / UPDATE / INSERT are already used
   // elsewhere in this file, so they are known to work. Predictability beats elegance in code that
   // ships untested.
+  // ⭐⭐ SAVE AS A NEW VERSION: the SERVER picks the number, never the page.
+  //
+  // The client asks for a version and the server decides which one, because two saves racing on the
+  // same family would otherwise both compute the same next number and one would lose to the UNIQUE
+  // index. The page cannot know what exists; this can.
+  //
+  // ⚠️ THE FAMILY IS THE NUMBER WITHOUT THE RATE BOOK OR THE VERSION -- TX260831-3379 out of
+  // TX260831-3379-NC-2. So a commission flip and a re-price stay in one family, which is what makes
+  // the log able to group them and what Eric meant by "3379 ties them together".
+  // ⛔ The version suffix goes AFTER the rate book, and only from 2, so every existing number is
+  // untouched: TX260831-3379-NC then TX260831-3379-NC-2.
+  // ⚠️ A SEPARATE BINDING, because `quoteNumber` above is a const destructure and every line below
+  // already reads it. Rebinding the whole block to let, to change one value, is a wider edit than
+  // the change deserves.
+  let saveNumber = quoteNumber;
+  let versionNo = 1;
+  const familyKey = quoteFamilyOf(quoteNumber);
+  if (saveAsNewVersion && quoteNumber) {
+    try {
+      const top = await env.DB.prepare(
+        'SELECT MAX(COALESCE(version,1)) AS v FROM quotes WHERE quote_family = ?'
+      ).bind(familyKey).first();
+      versionNo = Math.max(1, Number((top && top.v) || 1)) + 1;
+      saveNumber = familyKey + '-' + (commissionIncluded ? 'C' : 'NC') + '-' + versionNo;
+    } catch (err) {
+      // The columns are newer than this handler. Fall through and save as an ordinary re-run
+      // rather than refusing: an unsaved quote is worse than an unversioned one.
+      console.warn('version allocation unavailable:', String(err && err.message || err));
+      versionNo = 1;
+      saveNumber = quoteNumber;
+    }
+  }
+
   let existing = null;
   try {
     existing = await env.DB.prepare(
       'SELECT id, revision, client_name, effective_date, commission_included, products, state, adjustment FROM quotes WHERE quote_number = ?'
-    ).bind(quoteNumber).first();
+    ).bind(saveNumber).first();
   } catch (err) {
     // A pre-migration database has no `revision` column. Treat that as "not found" rather than
     // failing the save: an unsaved quote is worse than an un-revised one.
@@ -431,10 +481,11 @@ async function handleSaveQuote(request, env, ctx) {
           (id, quote_number, created_at, client_name, effective_date,
            broker_name, broker_agency, broker_phone, broker_email,
            rep_name, rep_phone, rep_email, commission_included, products,
-           ran_by, ran_by_who, state, adjustment, adjustment_note, client_id, client_match_key, revision)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+           ran_by, ran_by_who, state, adjustment, adjustment_note, client_id, client_match_key,
+           version, quote_family, revision)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
       `).bind(
-        id, quoteNumber, now, clientName, effectiveDate,
+        id, saveNumber, now, clientName, effectiveDate,
         brokerName, brokerAgency, brokerPhone, brokerEmail,
         repName, repPhone, repEmail,
         commissionIncluded ? 1 : 0,
@@ -447,7 +498,10 @@ async function handleSaveQuote(request, env, ctx) {
         // do, and how two screens come to disagree about one number.
         // A derived column is only safe while EVERY write path maintains it. There are three, and
         // backfill_quote_match_key.py repairs the table if one is ever missed.
-        normName(clientName)
+        normName(clientName),
+        // The version and the family it belongs to. v1 for an ordinary quote, so nothing that
+        // already exists is treated as a version of anything.
+        versionNo, familyKey
       ).run();
     } catch (err) {
       console.error('DB insert failed:', err);
@@ -572,7 +626,15 @@ async function handleListQuotes(request, env) {
 
   const ranByFilter = (url.searchParams.get('ran_by') || '').trim();   // '', 'ABY', or 'broker'
   const stateFilter  = (url.searchParams.get('state')  || '').trim().toUpperCase();
-  const cols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, COALESCE(ran_by_who, '') AS ran_by_who, COALESCE(state, 'TX') AS state, adjustment, adjustment_note, client_id, source_tag, notes, COALESCE(direct, 0) AS direct";
+  const baseCols = "id, quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_phone, broker_email, rep_name, rep_phone, rep_email, commission_included, products, COALESCE(status, 'P') AS status, COALESCE(ran_by, 'broker') AS ran_by, COALESCE(ran_by_who, '') AS ran_by_who, COALESCE(state, 'TX') AS state, adjustment, adjustment_note, client_id, source_tag, notes, COALESCE(direct, 0) AS direct";
+  // ⛔ THE VERSION COLUMNS ARE ASKED FOR SEPARATELY AND THE WHOLE LOG MUST NOT DEPEND ON THEM.
+  // They are newer than this handler, and this query has ONE catch that returns a 500 -- so naming
+  // an unmigrated column here would take the entire quote log down until somebody ran /api/migrate.
+  // A page that cannot list a single quote is a far worse failure than a missing version badge.
+  // ⚠️ `versionCols` is set to '' on the first failure and the query is retried without it, so the
+  // degradation happens once rather than on every request.
+  const versionCols = ", COALESCE(version, 1) AS version, quote_family, retired_at";
+  const cols = baseCols + versionCols;
 
   try {
     const where = [];
@@ -609,9 +671,19 @@ async function handleListQuotes(request, env) {
       args.push(year);
     }
     const whereSql = where.length ? ('WHERE ' + where.join(' AND ')) : '';
-    const result = await env.DB.prepare(
-      `SELECT ${cols} FROM quotes ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`
-    ).bind(...args, limit, offset).all();
+    const listSql = (c) =>
+      `SELECT ${c} FROM quotes ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+    let result;
+    try {
+      result = await env.DB.prepare(listSql(cols)).bind(...args, limit, offset).all();
+    } catch (err) {
+      // ⛔ THE VERSION COLUMNS ARE OPTIONAL; THE QUOTE LOG IS NOT. Before /api/migrate has run they
+      // do not exist, and naming one in a SELECT is a hard error -- which this handler's single
+      // catch would turn into a 500 for the whole page. Retry without them instead.
+      console.warn('version columns unavailable, listing without them:',
+                   String(err && err.message || err));
+      result = await env.DB.prepare(listSql(baseCols)).bind(...args, limit, offset).all();
+    }
     // 🔴🔴 THE TOTAL TRAVELS WITH THE PAGE, because the page used to count what it RECEIVED and
     // print that as the answer. At 372 quotes the cap of 300 was invisible; at 1,795 the screen
     // said "300 quotes" about a book more than five times that size -- a wrong number, stated
@@ -1112,15 +1184,41 @@ async function handleEmployerCount(token, request, env) {
 
 async function serveSharedQuote(token, env, request) {
   const url = new URL(request.url);
-  const q = await env.DB.prepare(
-    'SELECT quote_number, client_name, effective_date, broker_name, broker_agency, broker_phone, ' +
-    '       broker_email, commission_included, rep_name, products, resolved_pricing, agency_id ' +
-    'FROM quotes WHERE share_token = ?'
-  ).bind(token).first();
+  let q;
+  try {
+    q = await env.DB.prepare(
+      'SELECT quote_number, client_name, effective_date, broker_name, broker_agency, broker_phone, ' +
+      '       broker_email, commission_included, rep_name, products, resolved_pricing, agency_id, ' +
+      '       retired_at ' +
+      'FROM quotes WHERE share_token = ?'
+    ).bind(token).first();
+  } catch (err) {
+    // A pre-migration database has no `retired_at`. Fall back rather than taking every shared
+    // quote down: the column is newer than the route.
+    q = await env.DB.prepare(
+      'SELECT quote_number, client_name, effective_date, broker_name, broker_agency, broker_phone, ' +
+      '       broker_email, commission_included, rep_name, products, resolved_pricing, agency_id ' +
+      'FROM quotes WHERE share_token = ?'
+    ).bind(token).first();
+  }
 
   // An unknown token is a plain 404 with no detail. It must not become a way to ask whether a
   // token exists, which is the rule /api/agency-logo already follows.
   if (!q) return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+
+  // ⭐⭐ A RETIRED VERSION SAYS SO RATHER THAN SERVING A SUPERSEDED PRICE.
+  //
+  // ⛔ AND IT IS NOT A 404, DELIBERATELY. The reader is usually the EMPLOYER, who did nothing
+  // wrong and has a link their broker sent them. A dead page tells them nothing and they ring
+  // somebody anyway; this tells them what happened and gives them the one action worth taking.
+  // ⚠️ IT DOES NOT SAY "EXPIRED". Nothing lapsed -- it was replaced, and "expired" invites the
+  // question "why?", which is a conversation about ABY's internals with the wrong person.
+  if (String(q.retired_at || '').trim()) {
+    return new Response(retiredQuoteHTML(q, token), {
+      status: 200,
+      headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+    });
+  }
 
   // EXACTLY the fields the admin's own View link carries, and no more. Every one of them is
   // already printed on the client document, so the link exposes nothing the employer does not
@@ -1276,6 +1374,28 @@ async function serveSharedQuote(token, env, request) {
 }
 
 // ─── Quote: delete (admin) ────────────────────────────────────────────────────
+
+/**
+ * RETIRE OR REINSTATE ONE VERSION'S LINK.
+ *
+ * ⭐ REVERSIBLE, AND THAT IS DELIBERATE. Retiring is a decision about what a LINK serves, not a
+ * deletion of anything: the row, its price and its share token all survive, so retiring the wrong
+ * version is a mistake somebody can undo in one click rather than by re-running a quote.
+ * ⛔ IT NEVER TOUCHES resolved_pricing. A retired version must still say exactly what it said, both
+ * because the quote log has to show what was sent and because reinstating has to be lossless.
+ */
+async function handleRetireQuote(id, request, env) {
+  let body = {};
+  try { body = await request.json(); } catch (e) { body = {}; }
+  const retire = body.retire !== false;   // default is to retire; { retire: false } reinstates
+  try {
+    await env.DB.prepare('UPDATE quotes SET retired_at = ? WHERE id = ?')
+      .bind(retire ? new Date().toISOString() : null, id).run();
+  } catch (err) {
+    return jsonResp({ error: 'Could not update this version' }, 500);
+  }
+  return jsonResp({ ok: true, retired: retire });
+}
 
 async function handleDeleteQuote(id, env) {
   try {
@@ -5862,6 +5982,31 @@ function cleanAgency(a) {
   const t = foldDashes(a).trim(), low = t.toLowerCase();
   if (DIRECT_MARKERS.has(low)) return '(direct)';
   return NOT_A_FIRM.has(low) ? '' : t;
+}
+
+/**
+ * THE FAMILY A QUOTE NUMBER BELONGS TO: TX260831-3379 out of TX260831-3379-NC-2.
+ *
+ * ⭐⭐ WHAT IT STRIPS AND WHY. The number is state + date + a 4-digit id + the rate book, and now
+ * optionally a version. The RATE BOOK and the VERSION both vary within one quote; the first three
+ * do not. So the family is everything up to the rate book.
+ *   TX260831-3379-NC     -> TX260831-3379
+ *   TX260831-3379-NC-2   -> TX260831-3379
+ *   TX260831-3379-C      -> TX260831-3379
+ * Eric, 2026-08-31: "3379 ties them together." That is exactly what this returns.
+ *
+ * ⛔ IT NEVER INVENTS A FAMILY. A number that does not match the shape -- the imported fifteen-year
+ * history has several -- returns the number itself, so such a quote is a family of one rather than
+ * being silently grouped with something it has nothing to do with.
+ *
+ * ⚠️ THE DATE IS PART OF THE FAMILY, AND THAT IS ERIC'S OWN 2026-08-06 RULING carried forward: a
+ * re-run keeps its original date because the date is IN the number, and re-dating it would change
+ * the number. "The revision date belongs on the document, not in the number."
+ */
+function quoteFamilyOf(quoteNumber) {
+  const s = String(quoteNumber || '').trim();
+  const m = s.match(/^([A-Z]{2}\d{6}-\d{4})-(?:C|NC)(?:-\d+)?$/i);
+  return m ? m[1] : s;
 }
 
 function normName(s) {
@@ -14419,6 +14564,37 @@ const MIGRATIONS = [
   // swallow-everything loop hid most completely.
   { sql: "CREATE UNIQUE INDEX IF NOT EXISTS quotes_quote_number_unique ON quotes (quote_number)",
     index: "quotes_quote_number_unique" },
+
+  // ── QUOTE VERSIONS (Eric, 2026-08-31) ───────────────────────────────────────────────────────
+  //
+  // "We need to be able to send two versions of the same quote... it shouldn't change an existing
+  // link because we might want to run with commission and then re-run without commission. In that
+  // case, we should be able to choose among different versions."
+  //
+  // 🔴 WHAT MADE THIS URGENT: a re-run UPDATED the one row and its share token, so a quote already
+  // emailed to a broker changed underneath them. It cost Eric an afternoon on 2026-08-31 -- an
+  // accidental out-of-state re-run rewrote a TX quote the broker was holding.
+  //
+  // ⭐⭐ THE SHAPE FALLS OUT OF WHAT ALREADY EXISTED, AND THAT IS WHY IT IS THREE COLUMNS AND NOT A
+  // TABLE. `quote_number` is UNIQUE and `share_token` is minted per ROW, so a version that is a new
+  // row with a new number gets its own frozen link for nothing. The old row is never touched.
+  //
+  // `version`      1 for everything that already exists, so no history is rewritten.
+  // `quote_family` the part that ties versions together: TX260831-3379, without the rate book or
+  //                the version. STORED rather than derived -- deriving it means every reader
+  //                re-implements the same string surgery, and they drift.
+  // `retired_at`   NULL means live. A retired version's link says it was replaced and offers to
+  //                request the current one, rather than 404ing at an employer.
+  //
+  // ⛔ THE VERSION IS NOT IN THE 4-DIGIT BLOCK, DELIBERATELY. Eric considered it ("the four digit
+  // quote number that's made up turn into five digits") and the cost is that two versions of one
+  // quote stop looking related -- 3379 IS the quote's identity, and keeping it constant is what
+  // makes a family legible in the log and to the broker.
+  // ⭐ AND v1 CARRIES NO SUFFIX, so all 6,172 existing numbers stay exactly as they are.
+  { sql: "ALTER TABLE quotes ADD COLUMN version INTEGER DEFAULT 1", table: "quotes", column: "version" },
+  { sql: "ALTER TABLE quotes ADD COLUMN quote_family TEXT", table: "quotes", column: "quote_family" },
+  { sql: "ALTER TABLE quotes ADD COLUMN retired_at TEXT", table: "quotes", column: "retired_at" },
+  { sql: "CREATE INDEX IF NOT EXISTS quotes_family ON quotes (quote_family)", index: "quotes_family" },
   // Added 2026-08-06 (F-345). The employer's signed authorization had no broker on it at
   // all; `broker_email` is stored on the row so the answer survives even if the quote it
   // came from is ever renumbered, and `client_id` is the BenefitLab employer.
@@ -17000,6 +17176,14 @@ function render() {
            : originOf(q) === 'direct' ? 'Run on the shared link - broker typed their own details'
            : 'Run by ABY from the admin') + '">' + originBadge(q) + '</span>' +
         (q.adjustment ? '<br><span style="font-size:.72rem;color:#b8860b" title="' + esc(q.adjustment_note || "") + '">price adjusted</span>' : '') +
+        // VERSION AND RETIREMENT, ON THE ROW. Eric asked to be able to "choose among different
+        // versions", and choosing starts with SEEING that there is more than one -- a v2 whose
+        // only difference from v1 is the number would otherwise look like a duplicate row.
+        // v1 shows nothing, because every quote in fifteen years of history is v1 and a badge on
+        // all of them carries no information (a flag true of every row buries the rows where it
+        // means something).
+        (Number(q.version || 1) > 1 ? '<br><span style="font-size:.72rem;color:#205aa6;font-weight:600">version ' + Number(q.version) + '</span>' : '') +
+        (String(q.retired_at || "").trim() ? '<br><span style="font-size:.72rem;color:#8a5a00;font-weight:600" title="Anyone opening this link is told the quote was replaced">link retired</span>' : '') +
       '</td>';
 
     row.addEventListener('click', function(e){
@@ -17218,6 +17402,19 @@ function detailHTML(q, products) {
       (reproducible
         ? '<button onclick="event.stopPropagation();shareQuote(this.dataset.id,this)" data-id="' + q.id + '" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;background:white;color:#1a5c3a;border-radius:6px;font-size:.85rem;font-weight:600;border:1px solid #b8d9c4;cursor:pointer">Copy share link</button>'
         : '') +
+      // RETIRE THIS VERSION'S LINK, or put it back. Eric, 2026-08-31, having asked for versions:
+      // "I do sort of think we should be able to retire a quote version."
+      // A retired link stops serving a superseded price and instead says it was replaced and
+      // offers to request the current one -- see retiredQuoteHTML.
+      // It is REVERSIBLE and says which state it is in, because the button that only ever retires
+      // gives somebody no way back from a mis-click.
+      '<button onclick="event.stopPropagation();retireQuote(this.dataset.id,this)" data-id="' + q.id +
+        '" data-retired="' + (String(q.retired_at || '').trim() ? '1' : '') +
+        '" style="display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;' +
+        'background:white;color:' + (String(q.retired_at || '').trim() ? '#1a5c3a' : '#8a5a00') +
+        ';border-radius:6px;font-size:.85rem;font-weight:600;border:1px solid ' +
+        (String(q.retired_at || '').trim() ? '#b8d9c4' : '#e0c48a') + ';cursor:pointer">' +
+        (String(q.retired_at || '').trim() ? 'Reinstate this link' : 'Retire this link') + '</button>' +
       // ⭐ A TO-DO ABOUT THIS QUOTE, filed against it. Eric, 2026-08-26: "generate the to-do
       // within the actual opportunity / quote and have it show up on the calendar for a
       // particular day/time."
@@ -17284,6 +17481,31 @@ function esc(s) {
 async function logout() {
   await fetch('/api/admin/logout');
   location.href = '/admin';
+}
+
+// RETIRE OR REINSTATE ONE VERSION'S SHARE LINK.
+// ⭐ It asks first, because retiring changes what an EMPLOYER sees the moment it happens -- and it
+// names the consequence rather than saying "are you sure", which tells nobody anything.
+// ⛔ Nothing is deleted: the row, its price and its token all survive, so this is undoable.
+async function retireQuote(id, btn) {
+  var retired = btn.dataset.retired === '1';
+  var msg = retired
+    ? 'Put this link back? Anyone holding it will see the quote again.'
+    : 'Retire this link? Anyone opening it will be told the quote has been replaced, and offered to request the current one.';
+  if (!confirm(msg)) return;
+  btn.disabled = true;
+  try {
+    var res = await fetch('/api/quotes/' + id + '/retire', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ retire: !retired })
+    });
+    if (!res.ok) throw new Error('failed');
+    location.reload();
+  } catch (e) {
+    btn.disabled = false;
+    alert('Could not change this link. Nothing has been altered.');
+  }
 }
 
 async function moveQuote(id, status) {
@@ -17881,6 +18103,149 @@ async function deleteCommitment(id) {
 
 // ─── Login page HTML ───────────────────────────────────────────────────────────
 
+/**
+ * THE PAGE A RETIRED QUOTE LINK SERVES.
+ *
+ * ⭐⭐ ERIC'S CALL, 2026-08-31, on both halves: that a version should be retirable at all, and that
+ * the page should offer to request the current one -- "that way, if the broker prepared the quote,
+ * they could be alerted. If ABY ran the quote, we could be alerted. In fact, we should be alerted
+ * regardless by email."
+ *
+ * ⛔ IT DOES NOT SAY "EXPIRED", AND THAT IS NOT PEDANTRY. Nothing lapsed; a newer version was
+ * issued. "Expired" invites "why did it expire?" -- a question about ABY's internals, asked by an
+ * employer, to a broker who may not know either.
+ *
+ * ⛔ IT NAMES THE QUOTE AND THE DATE, AND NOTHING ELSE. No price, no products, no broker contact
+ * details. Whoever holds this URL is not necessarily the person the quote was for, and a retired
+ * link must not become a way to read a quote somebody withdrew.
+ *
+ * ⚠️ THE BUTTON POSTS AND THEN STOPS. One request per link, then the button says so -- a public
+ * endpoint that emails somebody is a thing to press repeatedly, and the server throttles it too.
+ */
+function retiredQuoteHTML(q, token) {
+  // ⛔ DEFENSIVE ON PURPOSE, NOT TO SATISFY A CHECKER. A page function that throws takes its whole
+  // route down, and this one is served to an employer who already has a link that disappointed
+  // them. Missing fields render as an empty line; nothing here is load-bearing enough to fail on.
+  const row = q || {};
+  const tok = String(token || '');
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const when = String(row.retired_at || '').slice(0, 10);
+  return '<!DOCTYPE html>\n<html lang="en"><head><meta charset="UTF-8">'
+    + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    + '<meta name="robots" content="noindex">'
+    + '<title>This quote has been replaced</title><style>'
+    + '*{box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;'
+    + 'display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;'
+    + 'background:#f0f4f0;padding:20px}'
+    + '.card{background:#fff;padding:2.5rem;border-radius:10px;box-shadow:0 4px 24px rgba(0,0,0,.12);'
+    + 'max-width:520px}'
+    + 'h1{margin:0 0 .5rem;font-size:1.3rem;color:#1a5c3a}'
+    + 'p{color:#44515c;line-height:1.55;margin:.6rem 0}'
+    + '.meta{font-size:.85rem;color:#7b8794;margin-top:1.2rem}'
+    + 'button{margin-top:1.4rem;padding:.7rem 1.2rem;background:#1a5c3a;color:#fff;border:none;'
+    + 'border-radius:6px;font-size:1rem;font-weight:600;cursor:pointer}'
+    + 'button:disabled{opacity:.55;cursor:default}'
+    + '.said{margin-top:1rem;color:#1a5c3a;font-weight:600;display:none}'
+    + '</style></head><body><div class="card">'
+    + '<h1>This quote has been replaced by a newer version</h1>'
+    + '<p>The figures on this link are no longer current, so we have taken them down rather than '
+    + 'leave you looking at a price we would not honour.</p>'
+    + '<p>Your broker has the current version. You can ask us to send it on.</p>'
+    + '<button id="ask" onclick="ask()">Request the updated quote</button>'
+    + '<p class="said" id="said">Thank you. We have let them know and somebody will be in touch.</p>'
+    + '<p class="meta">Quote ' + esc(row.quote_number || '')
+    + (when ? ' &middot; replaced ' + esc(when) : '') + '</p>'
+    + '</div><script>\n'
+    + 'async function ask(){var b=document.getElementById("ask");b.disabled=true;\n'
+    + '  try{await fetch("/api/q/' + encodeURIComponent(token) + '/request-update",{method:"POST"});}catch(e){}\n'
+    + '  document.getElementById("said").style.display="block";b.style.display="none";}\n'
+    + '</script></body></html>';
+}
+
+/**
+ * SOMEBODY HOLDING A RETIRED LINK ASKED FOR THE CURRENT QUOTE.
+ *
+ * ⭐ WHO IS TOLD: ABY always, from NOTIFY_EMAILS -- Eric, "we should be alerted regardless by
+ * email" -- AND the broker on the quote whenever the row carries their address. The broker gets it
+ * even on an ABY-run quote, because the employer will ring THEM, not ABY, and a broker who has not
+ * heard is a broker who cannot answer.
+ *
+ * ⛔ IT IS THROTTLED, AND THAT IS THE SAME REASONING AS THE ADMIN LOGIN: a public button that
+ * sends email is a thing to press repeatedly, whether by a frustrated reader or a script. One
+ * request per link per hour is plenty for a real employer and useless to anybody else.
+ * ⚠️ THE RESPONSE IS THE SAME EITHER WAY. A throttled request must not answer differently from an
+ * accepted one, or the endpoint reports which links are real.
+ * ⛔ AND IT SAYS NOTHING ABOUT WHO CLICKED. A public link has no identity, and inventing one -- an
+ * IP, a guess at the employer -- would put a fact in an email that nobody established.
+ */
+async function handleRequestUpdate(token, request, env) {
+  const ok = () => jsonResp({ ok: true });
+  let q;
+  try {
+    q = await env.DB.prepare(
+      'SELECT quote_number, client_name, broker_name, broker_email, broker_agency, rep_name, ' +
+      '       retired_at FROM quotes WHERE share_token = ?'
+    ).bind(token).first();
+  } catch (err) { return ok(); }
+  if (!q || !String(q.retired_at || '').trim()) return ok();
+
+  const now = Date.now();
+  try {
+    await env.DB.prepare(
+      'CREATE TABLE IF NOT EXISTS quote_update_requests (token TEXT NOT NULL, at INTEGER NOT NULL)'
+    ).run();
+    await env.DB.prepare('DELETE FROM quote_update_requests WHERE at < ?')
+      .bind(now - 24 * 60 * 60 * 1000).run();
+    const seen = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM quote_update_requests WHERE token = ? AND at >= ?'
+    ).bind(token, now - 60 * 60 * 1000).first();
+    if (seen && Number(seen.n) > 0) return ok();   // already asked within the hour
+    await env.DB.prepare('INSERT INTO quote_update_requests (token, at) VALUES (?,?)')
+      .bind(token, now).run();
+  } catch (err) {
+    // The throttle is a guard, not a gate. If it cannot run, still tell somebody.
+    console.warn('update-request throttle unavailable:', String(err && err.message || err));
+  }
+
+  const to = [];
+  String(env.NOTIFY_EMAILS || '').split(',').map((s) => s.trim()).filter(Boolean)
+    .forEach((a) => to.push(a));
+  const brokerTo = String(q.broker_email || '').trim();
+  if (brokerTo && brokerTo.indexOf('@') !== -1 && to.indexOf(brokerTo) === -1) to.push(brokerTo);
+  if (!to.length || !env.RESEND_API_KEY) return ok();
+
+  const lines = [
+    'Somebody opened a retired quote link and asked for the current version.',
+    '',
+    'Quote:   ' + (q.quote_number || ''),
+    'Client:  ' + (q.client_name || ''),
+    'Broker:  ' + [q.broker_name, q.broker_agency].filter(Boolean).join(', '),
+    'ABY rep: ' + (q.rep_name || ''),
+    '',
+    'This link was retired on ' + String(q.retired_at || '').slice(0, 10) + '.',
+    'Open the quote log to send the current version.',
+  ];
+  try {
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + env.RESEND_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: env.FROM_EMAIL || 'onboarding@resend.dev',
+        to,
+        subject: 'Updated quote requested - ' + (q.client_name || q.quote_number || ''),
+        text: lines.join('\n'),
+      }),
+    });
+  } catch (err) {
+    console.warn('update-request email failed:', String(err && err.message || err));
+  }
+  return ok();
+}
+
 function loginHTML() {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -18025,6 +18390,8 @@ const ABY_INTERNAL_JS = `
       if (init && (init.method || '').toUpperCase() === 'POST' && url.indexOf('/api/quotes') !== -1 && init.body) {
         var b = JSON.parse(init.body);
         b.state = window.ABY_STATE || 'TX';
+        // ⭐ SAVE AS A NEW VERSION. The server decides WHICH version number; this only asks.
+        if (window.ABY_NEW_VERSION) b.saveAsNewVersion = true;
         if (window.ABY_ADJUSTMENT) {
           b.adjustment = window.ABY_ADJUSTMENT;
           b.adjustmentNote = describeOverride(window.ABY_ADJUSTMENT) +
@@ -18232,10 +18599,32 @@ const ABY_INTERNAL_JS = `
         '<label style="font-size:12px;color:#143c73;">Monthly admin<br><input id="abySetMonthly" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:130px;"></label>' +
         '<label style="font-size:12px;color:#143c73;">Per participant<br><input id="abySetPerPart" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:130px;"></label>' +
       '</div>' +
+      '<div id="abyVersionRow" style="display:none;margin-top:12px;padding-top:12px;border-top:1px dashed #a9c2e0;font-size:12.5px;color:#143c73;">' +
+        '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">' +
+          '<input id="abyNewVersion" type="checkbox" style="margin-top:3px;">' +
+          '<span><strong>Save as a NEW version</strong> instead of replacing this quote.<br>' +
+          '<span style="color:#4a5568;">The link already sent keeps its own prices. ' + 'A new version gets its own number and its own link.</span></span>' +
+        '</label>' +
+      '</div>' +
       '<div id="abySummary" style="margin-top:10px;font-size:12.5px;color:#143c73;font-weight:bold;"></div>';
 
     if (host === form && form.parentNode) form.parentNode.insertBefore(panel, form);
     else host.insertBefore(panel, host.firstChild);
+
+    // THE CHOICE ONLY EXISTS ON A RE-RUN, because a brand-new quote has nothing to be a version OF.
+    // A checkbox offering to version something that does not exist yet is a question with no
+    // meaning, and the whole reason this is a choice rather than automatic is Eric's: most re-runs
+    // are corrections. "Replace" is the default; versioning is deliberate.
+    var isRerun = new URLSearchParams(window.location.search).has('rerun');
+    var vRow = panel.querySelector('#abyVersionRow');
+    if (vRow && isRerun) vRow.style.display = 'block';
+    var vBox = panel.querySelector('#abyNewVersion');
+    if (vBox) {
+      // Published as a global for save-hook.js, the same way ABY_STATE and ABY_ADJUSTMENT are.
+      // ⛔ It is read at SAVE time, not now, so ticking the box after pricing still counts.
+      window.ABY_NEW_VERSION = false;
+      vBox.addEventListener('change', function () { window.ABY_NEW_VERSION = !!vBox.checked; });
+    }
 
     ['abyState', 'abyMode', 'abyAmt', 'abyScope', 'abyNote',
      'abySetSetup', 'abySetRenewal', 'abySetAnnual', 'abySetMonthly', 'abySetPerPart'].forEach(function (id) {

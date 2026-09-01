@@ -529,6 +529,53 @@ come from two different places. The **file box inside the quote form** brands on
 front of you and is never saved. The **shared link** uses the firm's logo. So if a link is
 unbranded, the firm — or a firm above it — has no logo set.
 
+### Re-running a quote, and versions
+
+⭐ **Re-run Quote opens the tool at `/aby`, with the ABY price controls, and carries everything the
+quote had — including any discount.** Change what you need and generate.
+
+**Then you choose what the save means:**
+
+| | |
+|---|---|
+| **Replace** (the default) | the quote keeps its number and its link, and the new price replaces the old one |
+| **Save as a NEW version** | tick the box in the ABY panel — a new number, a new link, and **the link already sent keeps its own prices** |
+
+🔴 **Use REPLACE when you are correcting a mistake, and a VERSION when both prices are real.**
+Quoting with commission and then without is two versions. Fixing a state you picked by accident is
+a replacement.
+
+**The numbering:**
+
+| Number | What it is |
+|---|---|
+| `TX260831-3379-NC` | the original |
+| `TX260831-3379-NC-2` | version 2 |
+| `TX260831-3379-C` | the same quote priced with commission |
+
+⭐ **`3379` never changes — it is what ties the family together.** The date never changes either:
+a re-run keeps the day it was first run, and the document carries the revision date.
+⛔ **The broker is not credited with extra quotes for versions.** The scoreboard counts a client,
+an effective date and a product set once, however many times it was priced.
+
+### Retiring a link
+
+**Open the quote and use *Retire this link*.** Anyone who opens it after that sees:
+
+> **This quote has been replaced by a newer version.**
+> Your broker has the current version. You can ask us to send it on.
+
+⭐ **They can press a button to request the current one, and that emails ABY — and the broker on the
+quote, when we have their address.** The employer will ring the broker, not us, so the broker needs
+to know too.
+
+⛔ **Nothing is deleted and it is reversible** — *Reinstate this link* puts it back exactly as it
+was. ⚠️ **It does not say "expired"**, because nothing lapsed. It was replaced, and "expired"
+invites a question about our internals asked by the wrong person.
+
+⚠️ **One request per link per hour reaches your inbox.** A public button that sends email is a thing
+to press repeatedly.
+
 ### An agent you type onto a quote
 
 ⭐ **Type a broker's name or email into a quote and the tool does three things when you save.**
