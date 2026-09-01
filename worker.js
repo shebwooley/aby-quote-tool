@@ -2570,7 +2570,7 @@ function metroFor(city, state) {
 
 const CRM_VIEWS = {
   performance: 'Performance',  // what the quote log says they have DONE. Hides never-quoted rows.
-  marketing: 'Marketing',      // who we are working. Hides agencies that no longer exist.
+  marketing: 'Prospects',      // who we are working. Hides agencies that no longer exist.
 };
 
 /**
@@ -5980,7 +5980,11 @@ async function handleAdminReferrals(request, env) {
 const NOT_A_FIRM = new Set(['(no agency folder)', '(loose file - no agency folder)', '(not stated)',
   '', 'no brokers', 'no broker', 'existing client', 'independent', 'independent broker',
   'unknown', 'none', 'aby']);
-const DIRECT_MARKERS = new Set(['direct', 'niels', 'eric', 'niels direct', 'eric direct']);
+// 'client direct' added 2026-09-01 on Eric's ruling (F-394): "yes client direct belongs with
+// the direct markers. these are ones that we worked with directly, no broker involved."
+// It was the ONLY one of the 10 remaining non-firm names that was not already classified.
+const DIRECT_MARKERS = new Set(['direct', 'niels', 'eric', 'niels direct', 'eric direct',
+  'client direct']);
 
 // A DASH IS NOT ONE CHARACTER, AND THE LOOKUP BELOW IS EXACT.
 // Measured on live D1, 2026-08-24: 42 quotes carry the agency name
@@ -6524,7 +6528,7 @@ ${abyAdminNav('/admin/brokers')}
        The two labels live in CRM_VIEWS in worker.js, so renaming one is a single edit. -->
   <div class="views">
     <button id="vPerf" class="on" onclick="setView('performance')">Performance</button>
-    <button id="vMkt" onclick="setView('marketing')">Marketing</button>
+    <button id="vMkt" onclick="setView('marketing')">Prospects</button>
     <span class="vhint" id="viewHint"></span>
   </div>
   <div class="filters">
@@ -6585,7 +6589,7 @@ ${abyAdminNav('/admin/brokers')}
 
   <div id="mktView" style="display:none">
     <div class="card">
-      <h2 style="cursor:default">Marketing</h2>
+      <h2 style="cursor:default">Prospects</h2>
       <p class="sub" id="mktSub">Every firm we could work &mdash; including the ones that have never quoted.</p>
       <!-- ADD A LIST FROM AN EVENT (Eric, 2026-08-23). Shut by default: it is an occasional
            action and the list is the everyday one. -->
@@ -8867,7 +8871,7 @@ ${abyAdminNav('/admin/brokers')}
      opts += '<option value="' + k + '"' + (cur === k ? ' selected' : '') + '>' + esc(DISP_LABEL[k]) + '</option>';
    }
    var when = a.disposition_at ? ' <span class="muted">since ' + esc(day(a.disposition_at)) + '</span>' : '';
-   return '<div style="margin:12px 0 0"><div class="sec">Marketing</div>'
+   return '<div style="margin:12px 0 0"><div class="sec">Prospect status</div>'
      + '<div class="mfilters">'
      +   '<select id="fDisp">' + opts + '</select>'
      +   '<input id="fDispNote" placeholder="Why? (optional)" value="' + esc(a.disposition_note || '') + '" style="flex:1;padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
