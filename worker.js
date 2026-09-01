@@ -15196,6 +15196,27 @@ const MIGRATIONS = [
   { sql: "CREATE INDEX IF NOT EXISTS broker_directory_person ON broker_directory (person_id)",
     index: "broker_directory_person" },
 
+  // THE INDEX THAT ENDED THE D1 READ-LIMIT OUTAGE, 2026-09-01. MEASURED, NOT REASONED.
+  //
+   // The CRM agency list counts agents per firm with a correlated subquery:
+  //     (SELECT COUNT(*) FROM broker_directory d WHERE d.agency_id = a.id)
+  // broker_directory carried an index on person_id and on lower(trim(email)) but NONE on
+  // agency_id, so that subquery scanned the WHOLE table once per agency row.
+  //
+  // MEASURED ON PRODUCTION, the isolated subquery: 2,364 agencies x 4,560 directory rows =
+  // 10,782,204 rows read, 844ms. With this index: 7,318 rows, 2ms.
+  // The whole page query went from 9,985,946 rows / 956ms to 45,487 rows / 46ms.
+  // At 47 runs a week that is 424 million rows a week against a 5,000,000/day free limit --
+  // which is exactly how the limit was exhausted.
+  //
+  // THE REASONING THAT NEARLY LOST THIS: it was dismissed on the grounds that "one missing
+  // index on a ~2,300-row table cannot read five million rows". A small table is not a small
+  // cost -- what matters is rows TIMES the number of times it is scanned, and this one was
+  // scanned once per agency. The neighbouring people.agency_id subquery reads 7,639 because
+  // people_agency exists; that comparison is what named the culprit.
+  { sql: "CREATE INDEX IF NOT EXISTS idx_broker_directory_agency_id ON broker_directory (agency_id)",
+    index: "idx_broker_directory_agency_id" },
+
   // THE AGENCY THIS ADDRESS BELONGED TO, RESOLVED ONCE AND STORED.
   // "7 while at the prior agency" is a question about the address, not about the person, and it must
   // survive the person moving. Resolved from the agency NAME already on the row -- the same
