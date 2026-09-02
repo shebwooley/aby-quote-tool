@@ -790,9 +790,6 @@
       includeAuthorization: true,
       clientId: window.__abyClientId || '',
       employerEditableCounts: forEmployer,
-      // F-481. Present only on a shared link whose quote has already been signed; the server
-      // attaches it. On the internal /aby view it is absent, so the form behaves as it always did.
-      signed: (window.__ABY_SHARED && window.__ABY_SHARED.signed) || null,
     });
 
     outputEl.innerHTML =

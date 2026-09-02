@@ -672,16 +672,9 @@ ABYQuote.renderer = (function () {
         '<div class="opt-main"><div class="opt-title">' + esc(name) + '</div>' + desc + tier + countBox + extraRows + '</div></div>';
     }).join('\n');
 
-    // F-481. `signed` is the commitment this quote already carries, or null. When it is present
-    // every field shows WHAT WAS SIGNED and is read-only: this page is then a record, not a form.
-    // ⛔ readonly, NOT disabled -- a disabled input is skipped by form serialisation and greyed
-    // past legibility, and the whole point here is that the values can be READ.
-    var signed = pageOpts.signed || null;
     function field(label, fname, val, full, type) {
-      var v = (signed && signed[fname] != null && signed[fname] !== '') ? signed[fname] : val;
       return '<div class="ack-field' + (full ? ' full' : '') + '"><label>' + esc(label) + '</label>' +
-        '<input type="' + (type || 'text') + '" name="' + fname + '"' + (v ? ' value="' + esc(v) + '"' : '') +
-        (signed ? ' readonly' : '') + '></div>';
+        '<input type="' + (type || 'text') + '" name="' + fname + '"' + (val ? ' value="' + esc(val) + '"' : '') + '></div>';
     }
 
     return [
@@ -727,7 +720,7 @@ ABYQuote.renderer = (function () {
       field('City / State / Zip', 'cityStateZip', ''),
       '      </div></div>',
       '      <div class="ack-group"><div class="ack-group-label">Authorized Signer</div><div class="ack-field-grid">',
-      '        <div class="ack-field"><label>Name</label><input type="text" name="authSigner" id="authSignerInput"' + (signed ? ' value="' + esc(signed.authSigner || '') + '" readonly' : ' oninput="abySign(this.value)"') + '></div>',
+      '        <div class="ack-field"><label>Name</label><input type="text" name="authSigner" id="authSignerInput" oninput="abySign(this.value)"></div>',
       field('Title', 'authTitle', ''),
       field('Email', 'authEmail', '', false, 'email'),
       field('Phone', 'authPhone', '', false, 'tel'),
@@ -742,29 +735,12 @@ ABYQuote.renderer = (function () {
       field('Proposed Administrative Start Date', 'startDate', form.effectiveDate || '', false, 'date'),
       '      </div></div>',
       '      <div class="ack-group"><div class="ack-group-label">Authorization</div><div class="ack-sign-grid">',
-      '        <div><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:6px;">Accepted: Printed Name</label><div id="printPreview" class="sign-preview print-name">' + (signed ? esc(signed.acceptedPrint || '') : '') + '</div><input type="hidden" name="acceptedPrint" id="acceptedPrint"' + (signed ? ' value="' + esc(signed.acceptedPrint || '') + '"' : '') + '></div>',
-      '        <div><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:6px;">Accepted: Electronic Signature</label><div id="signPreview" class="sign-preview signature">' + (signed ? esc(signed.acceptedSign || '') : '') + '</div><input type="hidden" name="acceptedSign" id="acceptedSign"' + (signed ? ' value="' + esc(signed.acceptedSign || '') + '"' : '') + '>' + (signed ? '' : '<div class="sign-hint">Type your name in the Authorized Signer field above to sign.</div>') + '</div>',
+      '        <div><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:6px;">Accepted: Printed Name</label><div id="printPreview" class="sign-preview print-name"></div><input type="hidden" name="acceptedPrint" id="acceptedPrint"></div>',
+      '        <div><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:6px;">Accepted: Electronic Signature</label><div id="signPreview" class="sign-preview signature"></div><input type="hidden" name="acceptedSign" id="acceptedSign"><div class="sign-hint">Type your name in the Authorized Signer field above to sign.</div></div>',
       '      </div>',
-      '      <div style="margin-top:16px;max-width:220px;"><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:4px;">Date</label><input type="date" name="signDate" id="signDate"' + (signed && signed.submittedAt ? ' value="' + esc(String(signed.submittedAt).slice(0, 10)) + '" readonly' : '') + ' style="width:100%;padding:9px 11px;border:1px solid #c4d2dd;border-radius:8px;font:inherit;font-size:14px;"></div>',
+      '      <div style="margin-top:16px;max-width:220px;"><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:4px;">Date</label><input type="date" name="signDate" id="signDate" style="width:100%;padding:9px 11px;border:1px solid #c4d2dd;border-radius:8px;font:inherit;font-size:14px;"></div>',
       '      </div>',
-      // 🔴 A SIGNED PROPOSAL MUST NOT OFFER TO BE SIGNED AGAIN (F-481). This page went on
-      // rendering a live Submit button under a blank form however many times it had been signed,
-      // so one agreement could be committed twice. When the quote carries a commitment the button
-      // is REPLACED -- not hidden, not disabled -- by a statement of who signed it and when.
-      (signed
-        ? '      <div class="ack-submit"><div style="padding:14px 16px;border:1px solid #bcdcc4;background:#f3faf5;border-radius:8px;color:#22503a;font-size:14px;line-height:1.5;text-align:left;">'
-          + '<strong>Signed and submitted to ABY.</strong>'
-          + (signed.acceptedSign ? ' Authorized by ' + esc(signed.acceptedSign) : '')
-          + (signed.authTitle ? ', ' + esc(signed.authTitle) : '')
-          // ⚠️ SLICED TO yyyy-mm-dd FIRST. submittedAt is a full ISO timestamp, and formatDateLong
-          // splits on "-" and wants exactly three parts -- handed the timestamp it takes
-          // "02T19:35:52.628Z" as the day, which is NaN, and prints "undefined NaN, NaN".
-          // ⛔ And it RETURNS ITS INPUT UNCHANGED for anything that is not three parts, so the
-          // near-miss would have been a raw timestamp on a client document rather than an error.
-          + (signed.submittedAt ? ', on ' + esc(u.formatDateLong(String(signed.submittedAt).slice(0, 10))) : '')
-          + '.<div style="margin-top:8px;font-size:13px;color:#3d6b52;">This is a record of what was submitted. To change anything, contact your broker or ABY rather than signing again.</div>'
-          + '</div></div>'
-        : '      <div class="ack-submit"><button type="submit" id="commitBtn">Submit Authorization to ABY</button><div class="submit-note">This is a non-binding letter of intent. ABY will follow up to confirm implementation details.</div><div id="commitMsg" style="margin-top:12px;font-size:13px;display:none;"></div></div>'),
+      '      <div class="ack-submit"><button type="submit" id="commitBtn">Submit Authorization to ABY</button><div class="submit-note">This is a non-binding letter of intent. ABY will follow up to confirm implementation details.</div><div id="commitMsg" style="margin-top:12px;font-size:13px;display:none;"></div></div>',
       '    </form>',
       '    <p class="ack-disclaimer">This proposal is a summary of the services and pricing offered based on the information provided. Rates may be affected by actual enrollment and transferred information. This proposal does not constitute a final offer or agreement. Final service terms and plan details should be confirmed during setup.</p>',
       '  </div>',

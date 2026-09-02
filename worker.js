@@ -920,6 +920,38 @@ function newShareToken() {
   return out;
 }
 
+/**
+ * WOULD A SHARED LINK FOR THIS QUOTE SHOW A NUMBER THE READER WAS NOT SENT? (F-480)
+ *
+ * Returns a REASON STRING or null. Null means the link is safe to hand out.
+ *
+ * THE MECHANISM, BECAUSE IT IS NOT OBVIOUS: /q/<token> RE-RUNS the pricing engine in the reader's
+ * browser from the quote's inputs -- and neither the internal price adjustment nor the state is
+ * among them. So a discounted quote would re-price at STANDARD rates and the employer would open
+ * a page showing MORE than the document they were sent, with nothing on the page saying so.
+ *
+ * UNLESS THE PRICED OUTPUT WAS STORED, which is the ordinary case now. A quote saved with
+ * resolved_pricing renders those STORED figures instead of recomputing, so a discounted quote
+ * shares correctly and the discount itself never travels. That is why the test is conditional and
+ * why most quotes are unaffected.
+ *
+ * ⛔ ONE COPY, CALLED FROM BOTH THE SHARE BUTTON AND THE SIGNING PATH. It was an if-statement
+ * inside handleShareQuote until 2026-09-02, and the signing path -- added later, by a different
+ * row -- never knew about it. So the refusal's own advice ("send the file for this one") led
+ * straight into the path with no refusal, and the link appeared once the employer signed.
+ * A second copy is how that happens again.
+ *
+ * ⭐ ERIC RULED ON IT IN ONE LINE: "It needs to stay accurate."
+ */
+function quoteShareBlockReason(q) {
+  const resolved = q.resolved_pricing && String(q.resolved_pricing).trim();
+  if (resolved) return null;   // the stored price is rendered; nothing is recomputed
+  const adjusted = q.adjustment && String(q.adjustment).trim() && String(q.adjustment) !== 'null';
+  if (adjusted) return 'adjusted';
+  if (q.state && String(q.state) !== 'TX') return 'state';
+  return null;
+}
+
 async function handleShareQuote(id, env, url) {
   try {
     const q = await env.DB.prepare(
@@ -942,17 +974,16 @@ async function handleShareQuote(id, env, url) {
     // whatever adjustment produced it: the shared page renders the stored figures instead of
     // re-running the engine, so the employer sees exactly the numbers on their document and the
     // discount never leaves this server. Only a quote we would have to RE-COMPUTE is refused.
-    const resolved = q.resolved_pricing && String(q.resolved_pricing).trim();
-    const adjusted = q.adjustment && String(q.adjustment).trim() && String(q.adjustment) !== 'null';
-    if (adjusted && !resolved) {
+    // ONE PREDICATE, shared with the signing path. See quoteShareBlockReason above -- this was an
+    // if-statement here until F-480 found that signing had no equivalent.
+    const blockReason = quoteShareBlockReason(q);
+    if (blockReason === 'adjusted') {
       return jsonResp({
         error: 'not_shareable_adjusted',
         message: 'This quote carries a price adjustment. A shared link re-prices at standard rates, so the employer would see a higher figure than the quote you sent. Send the file for this one.'
       }, 409);
     }
-    // The same shape of mismatch: state is not carried either, so an Outside-Texas quote would
-    // re-price at Texas rates.
-    if (q.state && String(q.state) !== 'TX' && !resolved) {
+    if (blockReason === 'state') {
       return jsonResp({
         error: 'not_shareable_state',
         message: 'This quote was priced outside Texas, and a shared link re-prices at Texas rates. Send the file for this one.'
@@ -1326,6 +1357,62 @@ async function serveSharedQuote(token, env, request) {
     // A logo is decoration. It must never be the reason a client cannot open their quote.
   }
 
+  // -- HAS THIS QUOTE BEEN SIGNED? (F-481) --------------------------------------------------
+  //
+  // 🔴 THIS PAGE NEVER ASKED. serveSharedQuote read only the quotes table, so /q/<token> rendered
+  // the live, EMPTY authorization form however many times it had been signed -- and went on
+  // offering a Submit button underneath it. Eric, 2026-09-02, on a commitment signed that day:
+  // "when you click open the signed quote nothing is filled in."
+  //
+  // ⭐ NOTHING WAS EVER LOST. Every field the employer typed was in the commitments table the
+  // whole time; the page simply did not look. Same shape as the empty product box on the signed
+  // document (F-416) -- the store was faithful and only the READER disagreed.
+  //
+  // ⛔ THE SUBMIT BUTTON IS THE PART THAT IS MORE THAN COSMETIC. A signed proposal that still
+  // invites a signature can be signed twice, which writes a second commitment for one agreement.
+  //
+  // ⭐ MATCHED ON share_token ALONE, AND THAT IS DELIBERATE RATHER THAN LAZY. The obvious version
+  // also matches quote_id -- but NEITHER select above fetches the quote's `id`, so `q.id` is
+  // undefined here and a quote_id clause would silently never fire while looking thorough. That
+  // is the shape of an assertion that cannot fail (TRAPS #122).
+  // ⭐ share_token IS SUFFICIENT AND STABLE: the signing path writes it onto the commitment in the
+  // same statement as quote_id, and a token is never replaced once a client holds one -- there is
+  // a reachability rule asserting exactly that. So a commitment for this quote carries this token.
+  // ⚠️ NEWEST WINS: a quote can be signed more than once today, and the latest is the one standing.
+  // ⚠️ Read-only and best-effort, like the logo above: a signature lookup must never be the reason
+  // an employer cannot open their proposal.
+  try {
+    const sig = await env.DB.prepare(
+      'SELECT employer_name, address, city_state_zip, auth_signer, auth_title, auth_email, ' +
+      '       auth_phone, hr_contact, hr_title, hr_email, hr_phone, start_date, ' +
+      '       accepted_print, accepted_sign, submitted_at ' +
+      'FROM commitments WHERE share_token = ? ' +
+      'ORDER BY submitted_at DESC LIMIT 1'
+    ).bind(String(token || '')).first();
+    if (sig && (sig.accepted_sign || sig.auth_signer)) {
+      shared.signed = {
+        employerName:  sig.employer_name   || '',
+        address:       sig.address         || '',
+        cityStateZip:  sig.city_state_zip  || '',
+        authSigner:    sig.auth_signer     || '',
+        authTitle:     sig.auth_title      || '',
+        authEmail:     sig.auth_email      || '',
+        authPhone:     sig.auth_phone      || '',
+        hrContact:     sig.hr_contact      || '',
+        hrTitle:       sig.hr_title        || '',
+        hrEmail:       sig.hr_email        || '',
+        hrPhone:       sig.hr_phone        || '',
+        startDate:     sig.start_date      || '',
+        acceptedPrint: sig.accepted_print  || '',
+        acceptedSign:  sig.accepted_sign   || '',
+        submittedAt:   sig.submitted_at    || '',
+      };
+    }
+  } catch (err) {
+    // An older database without the commitments columns must still serve the proposal.
+    console.error('shared quote: could not read the signature:', err);
+  }
+
   // -- THE NAME THIS FIRM WANTS THEIR CLIENT TO READ (F-429) --------------------------------
   //
   // ERIC, 2026-08-27: "we might call an agency MMA-DFW but they may want it to say MMA or Marsh
@@ -1664,19 +1751,35 @@ async function handleSaveCommitment(request, env, ctx) {
     // ⚠️ A token is MINTED only if the quote has none; an existing one is never replaced, or
     // every link already sent to a client would die the moment somebody signed.
     try {
+      // F-480. The three lookups now also fetch what decides whether a LINK is safe to hand out.
+      // Adding the columns is the whole change on this side; the decision is the shared predicate.
+      const COLS = 'SELECT id, share_token, adjustment, state, resolved_pricing FROM quotes ';
       let qRow = null;
       if (quoteId) {
-        qRow = await env.DB.prepare('SELECT id, share_token FROM quotes WHERE id = ?')
+        qRow = await env.DB.prepare(COLS + 'WHERE id = ?')
           .bind(String(quoteId)).first();
       }
       if (!qRow && shareToken) {
-        qRow = await env.DB.prepare('SELECT id, share_token FROM quotes WHERE share_token = ?')
+        qRow = await env.DB.prepare(COLS + 'WHERE share_token = ?')
           .bind(String(shareToken)).first();
       }
       if (!qRow && quoteNumber && quoteNumber !== 'UNKNOWN') {
         qRow = await env.DB.prepare(
-          'SELECT id, share_token FROM quotes WHERE quote_number = ? ORDER BY created_at DESC LIMIT 1'
+          COLS + 'WHERE quote_number = ? ORDER BY created_at DESC LIMIT 1'
         ).bind(quoteNumber).first();
+      }
+      // 🔴🔴 THE SIGNATURE IS RECORDED EITHER WAY; ONLY THE LINK IS WITHHELD (F-480, Eric's
+      // ruling: "It needs to stay accurate"). quote_id ALWAYS goes on the commitment, so nothing
+      // is lost and the signed document is always traceable to its quote. What is withheld is the
+      // shareable LINK, when opening it would show a figure the employer did not sign.
+      // ⛔ Do NOT "simplify" this by skipping the whole block -- losing quote_id would lose the
+      // link-back that F-416 was raised to build.
+      const signBlockReason = qRow ? quoteShareBlockReason(qRow) : null;
+      if (qRow && signBlockReason) {
+        await env.DB.prepare('UPDATE commitments SET quote_id = ? WHERE id = ?')
+          .bind(qRow.id, id).run();
+        console.warn('commitment ' + id + ': link withheld (' + signBlockReason + '), quote_id recorded');
+        qRow = null;   // fall past the token block below without minting one
       }
       if (qRow) {
         let token = qRow.share_token;

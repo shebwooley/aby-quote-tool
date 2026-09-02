@@ -10,24 +10,32 @@
 //
 //     "This quote carries a price adjustment... Send the file for this one."
 //
-// THE SIGNING PATH IN handleSaveCommitment() (the F-416 link-back) MINTS A TOKEN WITH NO SUCH TEST.
-// So the refusal's own recommended workaround completes the loop: Share is refused -> send the file,
-// exactly as instructed -> the employer signs the file -> a token is minted -> "Open the signed
-// proposal" appears on the commitments row -> the employer opens it and sees standard pricing.
-// It is WORSE on the unguarded path, because the contradicted document is one they have signed.
+// THE SIGNING PATH IN handleSaveCommitment() (the F-416 link-back) MINTED A TOKEN WITH NO SUCH
+// TEST. So the refusal's own recommended workaround completed the loop: Share is refused -> send
+// the file, exactly as instructed -> the employer signs the file -> a token is minted -> "Open the
+// signed proposal" appears on the commitments row -> the employer opens it and sees standard
+// pricing. It was WORSE on the unguarded path, because the contradicted document is one they have
+// already signed.
 //
-// WHAT THIS CHECKER DOES, AND WHAT IT DELIBERATELY DOES NOT DO.
-// It DECIDES NOTHING. Whether the signing path should withhold the link, or mint it anyway, is a
-// client-facing question that is Eric's -- it is the question put to him on 2026-08-27 and still
-// unanswered, now carried by F-480. Answering it here by turning a rule red would be a session
-// making a commercial decision by writing a test.
+// ✅ FIXED 2026-09-02 ON ERIC'S RULING, AND THIS HEADER WAS REWRITTEN WITH IT.
+// He was asked whether to withhold the link or let it re-price, and answered in one line:
+// "It needs to stay accurate." So the shareability test is now ONE named predicate --
+// quoteShareBlockReason() -- called by BOTH paths, and the signing path withholds the LINK while
+// still recording quote_id, so nothing about the signature is lost.
 //
-// What it stops is the disagreement being INVISIBLE. It pins the measured split as a BASELINE and
-// FAILS when either path moves, so a change reaches a person instead of being rediscovered later by
-// somebody who guesses differently. Same shape as check-packet-vs-tag.mjs in complydiy-app.
+// ⛔ THIS FILE USED TO SAY IT "DECIDES NOTHING" AND PINNED THE MEASURED SPLIT AS A BASELINE,
+// because the question was open and answering it by writing a test would have been a session
+// making a commercial decision. That was right THEN and is wrong NOW -- and a checker whose header
+// describes a state of the world that has moved is the thing this project keeps getting bitten by
+// ("expect it red" instructions, TRAPS.md's own session checklist). The three baseline rules were
+// DELETED, as this file instructed, not softened.
+//
+// WHAT IT ASSERTS NOW IS THE GUARANTEE, NOT THE MECHANISM: one predicate exists, it weighs all
+// three facts, both paths call it, signing still mints when the quote IS shareable, and a withheld
+// link still records quote_id.
 //
 // A CHECKER THAT ONLY PRINTS IS A REPORT, NOT A CHECK (TRAPS #215). This one can fail, and its
-// failure means "one of the two paths changed -- go and read F-480", never "the code is wrong".
+// failure means the two paths have diverged again -- go and read F-480.
 //
 // Run:  node scripts/check_share_guard.mjs
 //       node scripts/check_share_guard.mjs --self-test
@@ -88,20 +96,35 @@ function run(workerSrc) {
     /not_shareable_adjusted/.test(share));
   ok("share path refuses an OUTSIDE-TEXAS quote (not_shareable_state)",
     /not_shareable_state/.test(share));
-  ok("share path's refusal is CONDITIONAL on there being no resolved_pricing",
-    /resolved_pricing/.test(share) && /!\s*resolved/.test(share));
-
-  // -- ② THE BASELINE SPLIT, PINNED ---------------------------------------------------------
-  // These are the rules that record F-480. They assert the split AS MEASURED on 2026-09-02.
-  // When the signing path gains the test, these three go red -- and that is the SIGNAL, not a
-  // regression: read F-480, confirm it was a deliberate fix, then delete these three rules.
-  const commitMints = /UPDATE quotes SET share_token = \? WHERE id = \? AND share_token IS NULL/.test(commit);
-  ok("signing path DOES mint a share token (this is F-416 working, and is not the defect)",
-    commitMints);
-  ok("BASELINE F-480: signing path does NOT test `adjustment`",
-    !/\badjustment\b/.test(commit));
-  ok("BASELINE F-480: signing path does NOT test `resolved_pricing`",
-    !/\bresolved_pricing\b/.test(commit));
+  // -- ② F-480 IS FIXED: ONE PREDICATE, BOTH PATHS ------------------------------------------
+  // ⭐ THESE REPLACED THREE "BASELINE" RULES THAT PINNED THE SPLIT AS IT WAS ON 2026-09-02.
+  // They went red the moment the signing path gained the test, exactly as they were written to,
+  // and this checker's own instruction was to DELETE them once the fix was confirmed deliberate
+  // rather than soften them. Eric ruled: "It needs to stay accurate."
+  //
+  // ⚠️ A THIRD RULE WENT WITH THEM AND IT IS THE MORE INTERESTING ONE: "the share path's refusal
+  // is CONDITIONAL on resolved_pricing" asserted WHERE the check lived, so moving it into a
+  // shared predicate -- the fix itself -- broke it. TRAPS #355: a checker that enforces the
+  // MECHANISM blocks the change that improves it. What follows tests the GUARANTEE instead.
+  ok("the shareability test exists as ONE named predicate",
+    /function quoteShareBlockReason\(q\)/.test(workerSrc));
+  ok("the predicate weighs all three facts: stored price, adjustment, state",
+    (() => {
+      const i = workerSrc.indexOf("function quoteShareBlockReason(q)");
+      const body = i < 0 ? "" : workerSrc.slice(i, i + 900);
+      return /resolved_pricing/.test(body) && /adjustment/.test(body) && /'TX'/.test(body);
+    })());
+  ok("the SHARE path decides by calling the predicate, not its own copy",
+    /quoteShareBlockReason\(q\)/.test(share));
+  ok("the SIGNING path decides by calling the predicate too",
+    /quoteShareBlockReason\(qRow\)/.test(commit));
+  ok("signing still mints a token when the quote IS shareable (F-416 still works)",
+    /UPDATE quotes SET share_token = \? WHERE id = \? AND share_token IS NULL/.test(commit));
+  // ⛔ THE HALF THAT IS EASY TO LOSE. Withholding the LINK must never withhold the RECORD:
+  // quote_id is what F-416 exists to store, and a signed document that cannot be traced back to
+  // its quote is a worse defect than the one being fixed.
+  ok("a withheld link still records quote_id on the commitment",
+    /UPDATE commitments SET quote_id = \? WHERE id = \?/.test(commit));
 
   // -- ③ THE INVARIANT THAT DOES HOLD -------------------------------------------------------
   // Whatever is decided about the refusal, BOTH paths must keep the race-safe claim. Minting
@@ -135,10 +158,12 @@ if (selfTest) {
   const sabotages = [
     ["remove the adjusted refusal", (s) => s.replace("not_shareable_adjusted", "not_shareable_XXXX")],
     ["remove the outside-Texas refusal", (s) => s.replace("not_shareable_state", "not_shareable_YYYY")],
-    ["give the signing path an adjustment test",
+    ["the signing path stops consulting the predicate, so a discounted quote gets a link again",
+      (s) => s.replace("quoteShareBlockReason(qRow)", "null")],
+    ["withholding the link also drops quote_id, losing the link-back F-416 built",
       (s) => s.replace(
-        "      let qRow = null;\n      if (quoteId) {",
-        "      let qRow = null;\n      const adjustment = null;\n      if (quoteId) {")],
+        "        await env.DB.prepare('UPDATE commitments SET quote_id = ? WHERE id = ?')",
+        "        await env.DB.prepare('SELECT 1 WHERE 0 -- quote_id = ? WHERE id = ?')")],
     ["drop the race-safe claim from the signing path",
       (s) => s.replace(
         "            'UPDATE quotes SET share_token = ? WHERE id = ? AND share_token IS NULL'",
