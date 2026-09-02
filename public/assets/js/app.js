@@ -786,14 +786,8 @@
     // leak was in a branch no test input reached. A quote with no participant count reaches it.
     var forEmployer = !!window.__ABY_SHARED;
     var renderFn = forEmployer ? ABYQuote.renderer.renderForClient : ABYQuote.renderer.renderInternal;
-    var html = renderFn(form, results, quoteNumber, {
-      includeAuthorization: true,
-      clientId: window.__abyClientId || '',
-      employerEditableCounts: forEmployer,
-      // F-481. Present only on a shared link whose quote has already been signed; the server
-      // attaches it. On the internal /aby view it is absent, so the form behaves as it always did.
-      signed: (window.__ABY_SHARED && window.__ABY_SHARED.signed) || null,
-    });
+    var html = renderFn(form, results, quoteNumber,
+      authRenderOpts({ employerEditableCounts: forEmployer }));
 
     outputEl.innerHTML =
       '<div class="output-toolbar no-print">' +
@@ -965,14 +959,42 @@
     host.parentNode.insertBefore(el, host.nextSibling);
   }
 
+  /**
+   * THE ONE PLACE THAT BUILDS THE OPTIONS FOR A RENDER CARRYING THE AUTHORIZATION PAGE (F-481).
+   *
+   * WHY IT EXISTS: the signature was threaded into the on-screen render and NOT into the
+   * download, so Download HTML produced a file with the employer form blank again -- on a
+   * proposal that had already been signed. Eric found it within minutes.
+   * "when I click download html it clears out the employer form on the last page again."
+   *
+   * ⛔ TWO CALL SITES, ONE RULE. Adding `signed` to the second one would have fixed the symptom
+   * and left the shape that caused it: the next person to render an authorization page has to
+   * remember. TRAPS #197 -- a fix applied to one copy of a pattern is not applied to the pattern.
+   *
+   * ⭐ `signed` IS NULL UNLESS THE SERVER SAID OTHERWISE, which is what keeps the ordinary path
+   * working: a downloaded file for an UNSIGNED quote must still be a live form, because that is
+   * how an employer signs one.
+   *
+   * 🔬 check_signed_proposal.mjs fails if `includeAuthorization` appears anywhere but here.
+   */
+  function authRenderOpts(extra) {
+    var o = {
+      includeAuthorization: true,
+      clientId: window.__abyClientId || '',
+      signed: (window.__ABY_SHARED && window.__ABY_SHARED.signed) || null,
+    };
+    if (extra) { for (var k in extra) { if (Object.prototype.hasOwnProperty.call(extra, k)) o[k] = extra[k]; } }
+    return o;
+  }
+
   function downloadQuoteAsHtml(form, quoteNumber) {
     var expanded = expandSelections(form.selections);
     var results = ABYQuote.engine.calculateAll(expanded, form.commissioned);
     noticeIfClientFileCarriesWarnings(results);
-    var body = ABYQuote.renderer.renderForClient(form, results, quoteNumber, {
-      includeAuthorization: true,
-      clientId: window.__abyClientId || '',
-    });
+    // 🔴 THIS CALL IS WHY authRenderOpts EXISTS. It used to build its own options object and so
+    // never carried the signature -- the downloaded file showed a blank employer form on a
+    // proposal that had already been signed.
+    var body = ABYQuote.renderer.renderForClient(form, results, quoteNumber, authRenderOpts());
     // Make the ABY logo load from the deployed worker when the client opens the saved file.
     // ⭐ POINTS AT THE BRANDED DOMAIN, NOT `*.workers.dev`. This url is embedded in a document
     // an employer opens and signs, so it is read by a customer: a `workers.dev` hostname reads

@@ -88,7 +88,7 @@ function renderWith(A, signed) {
   });
 }
 
-function run(rendererSrc) {
+function run(rendererSrc, appSrcIn) {
   pass = 0;
   fail.length = 0;
 
@@ -145,52 +145,96 @@ function run(rendererSrc) {
   ok("the raw ISO timestamp is not printed at the reader",
     !signedHtml.includes("19:35:52"));
 
+  // -- ⑤ EVERY RENDER THAT CARRIES THE AUTHORIZATION PAGE MUST CARRY THE SIGNATURE ----------
+  //
+  // 🔴 THIS IS THE RULE THE FIRST FIX NEEDED AND DID NOT HAVE. The signature was threaded into
+  // the ON-SCREEN render and not the DOWNLOAD one, so Download HTML produced a file with a blank
+  // employer form on a proposal that had already been signed. Eric found it within minutes:
+  // "when I click download html it clears out the employer form on the last page again."
+  //
+  // ⛔ ADDING `signed` TO THE SECOND CALL SITE WOULD HAVE FIXED THE SYMPTOM AND KEPT THE SHAPE.
+  // TRAPS #197: a fix applied to one copy of a pattern is not applied to the pattern. So the
+  // options are built in ONE place, authRenderOpts(), and this rule holds that line -- a THIRD
+  // call site cannot quietly appear without it.
+  //
+  // ⚠️ Print and Download PDF are deliberately NOT covered: both work from the live DOM rather
+  // than re-rendering, so they inherit whatever is on screen. Asserting on them would be
+  // asserting a mechanism they do not use.
+  const appSrc = appSrcIn;
+  const authOptsCount = (appSrc.match(/includeAuthorization:/g) || []).length;
+  ok("app.js builds authorization render options in exactly ONE place",
+    authOptsCount === 1);
+  ok("that one place carries the signature",
+    /function authRenderOpts\(/.test(appSrc)
+    && /signed:\s*\(window\.__ABY_SHARED && window\.__ABY_SHARED\.signed\)/.test(appSrc));
+  ok("the DOWNLOAD path uses it (this is the one that regressed)",
+    /renderForClient\(form, results, quoteNumber, authRenderOpts\(\)\)/.test(appSrc));
+  ok("the ON-SCREEN path uses it too",
+    /renderFn\(form, results, quoteNumber,\s*\n?\s*authRenderOpts\(/.test(appSrc));
+
   console.log("\n  " + pass + " passed, " + fail.length + " failed");
 }
 
-const rendererPath = join(root, "public/assets/js/lib/renderer.js");
-const rendererSrc = readFileSync(rendererPath, "utf8");
+const rendererSrc = readFileSync(join(root, "public/assets/js/lib/renderer.js"), "utf8");
+const appSrc = readFileSync(join(root, "public/assets/js/app.js"), "utf8");
 
 console.log("F-481 -- a signed proposal shows the signature and retires the button\n");
-run(rendererSrc);
+run(rendererSrc, appSrc);
 const realFailures = fail.length;
 
 if (selfTest) {
+  // Each sabotage names the FILE it patches. Four of these rules read app.js, and a harness that
+  // could only mutate the renderer would have reported them green forever without ever testing
+  // them -- which is the exact failure that let the download regression ship.
   const sabotages = [
     // FLIPS THE CONDITION, producing VALID JavaScript that behaves wrongly. The first version
     // inserted a comma and the renderer threw a SyntaxError -- which the harness scored as
     // "caught" while testing nothing about the rule. A sabotage that breaks the wrong thing
     // certifies nothing (TRAPS #243).
-    ["the Submit button comes back on a signed page",
+    ["renderer", "the Submit button comes back on a signed page",
       (s) => s.replace(
         "      (signed\n        ? '      <div class=\"ack-submit\"><div style=\"padding:14px",
         "      (false\n        ? '      <div class=\"ack-submit\"><div style=\"padding:14px")],
-    ["field() stops preferring the signed value",
+    ["renderer", "field() stops preferring the signed value",
       (s) => s.replace(
         "var v = (signed && signed[fname] != null && signed[fname] !== '') ? signed[fname] : val;",
         "var v = val;")],
-    ["the fields stop being read-only",
+    ["renderer", "the fields stop being read-only",
       (s) => s.replace("(signed ? ' readonly' : '')", "''")],
-    ["the date is handed the raw timestamp again",
+    ["renderer", "the date is handed the raw timestamp again",
       (s) => s.replace(
         "u.formatDateLong(String(signed.submittedAt).slice(0, 10))",
         "u.formatDateLong(signed.submittedAt)")],
+    // -- app.js. The regression Eric found, and the shape that caused it.
+    ["app", "the download path builds its own options again, losing the signature",
+      (s) => s.replace(
+        "renderForClient(form, results, quoteNumber, authRenderOpts())",
+        "renderForClient(form, results, quoteNumber, { includeAuthorization: true })")],
+    ["app", "authRenderOpts stops carrying the signature",
+      (s) => s.replace(
+        "signed: (window.__ABY_SHARED && window.__ABY_SHARED.signed) || null,",
+        "signed: null,")],
+    ["app", "the on-screen render stops going through the builder",
+      (s) => s.replace(
+        "    var html = renderFn(form, results, quoteNumber,\n      authRenderOpts({ employerEditableCounts: forEmployer }));",
+        "    var html = renderFn(form, results, quoteNumber, { includeAuthorization: true });")],
   ];
 
   console.log("\n\n=== SELF-TEST ===");
   let caught = 0;
   let broken = 0;
-  for (const [name, mutate] of sabotages) {
-    const mutated = mutate(rendererSrc);
-    if (mutated === rendererSrc) {
+  for (const [target, name, mutate] of sabotages) {
+    const base = target === "app" ? appSrc : rendererSrc;
+    const mutated = mutate(base);
+    if (mutated === base) {
       broken++;
       console.log("\n  BROKEN  " + name + " -- the sabotage matched NOTHING, its anchor is gone.");
       console.log("          That is an ABSENT test, not a passing or a failing one.");
       continue;
     }
-    console.log("\n  sabotage: " + name);
+    console.log("\n  sabotage: [" + target + "] " + name);
     try {
-      run(mutated);
+      run(target === "app" ? rendererSrc : mutated, target === "app" ? mutated : appSrc);
       if (fail.length > realFailures) { caught++; console.log("  -> caught"); }
       else console.log("  -> MISSED");
     } catch (err) {
