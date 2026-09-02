@@ -109,6 +109,18 @@ export default {
     if (path === '/api/admin/crm/agency'       && method === 'POST') return withAuth(request, env, () => handleCrmAgencyField(request, env));
     // A firm's logo, set by ABY staff rather than by a broker who has not registered (F-428).
     if (path === '/api/admin/crm/agency-logo'  && method === 'POST') return withAuth(request, env, () => handleCrmAgencyLogo(request, env));
+    // F-428, the last half. Eric, 2026-09-01: "if there's one in the broker area, shouldn't it show
+    // that it's already uploaded so someone doesn't accidentally upload another when running a
+    // quote?" A blank upload box is an invitation to re-upload, and the broker cannot tell a
+    // branded quote from an unbranded one until the document comes out.
+    // AUTH-GATED, AND THAT IS THE DESIGN, NOT AN OVERSIGHT. It answers "is there a logo for the
+    // firm called X", so a PUBLIC version would let anyone enumerate ABY's book of business by
+    // typing names -- the same reason broker-lookup and agency-lookup are admin only. The public
+    // /api/agency-logo/<id> route is safe to be public precisely because it is keyed on an opaque
+    // id and returns an identical empty 404 for every failure.
+    if (path === '/api/admin/crm/agency-logo-status' && method === 'GET') {
+      return withAuth(request, env, () => handleCrmAgencyLogoStatus(url, env));
+    }
     // ⭐ AND THE PUBLIC READ, WHICH IS DELIBERATELY NOT BEHIND withAuth: a quote is opened from an
     // employer's inbox with no session, so a gated logo would be a broken image for every client
     // who ever sees the document. Image bytes or an identical empty 404 -- see handleAbyAgencyLogo.
@@ -1299,17 +1311,10 @@ async function serveSharedQuote(token, env, request) {
     // the SAME query -- "WHERE id = ? AND logo_data_url <> ''" -- which silently excluded an office
     // whose logo lives on its parent. Since 2026-08-31 a logo set on a holding company brands every
     // office beneath it, so the firm and the logo are two separate questions and are asked that way.
-    let firmId = String(q.agency_id || '').trim();
-    if (firmId) {
-      const byId = await env.DB.prepare('SELECT id FROM agencies WHERE id = ?').bind(firmId).first();
-      firmId = (byId && byId.id) || '';
-    }
-    if (!firmId && String(q.broker_agency || '').trim()) {
-      const byName = await env.DB.prepare(
-        'SELECT id FROM agencies WHERE lower(trim(name)) = ? ORDER BY id LIMIT 1'
-      ).bind(String(q.broker_agency).trim().toLowerCase()).first();
-      firmId = (byName && byName.id) || '';
-    }
+    // ONE COPY OF THIS RULE, shared with the admin form's logo-status endpoint. See
+    // resolveFirmIdForLogo -- it was inlined here until a second caller needed it, and F-480 is
+    // what a second inline copy turns into.
+    const firmId = await resolveFirmIdForLogo(env, q.agency_id, q.broker_agency);
     // ⚠️ ONLY WHEN THERE ACTUALLY IS ONE, anywhere up the chain. Emitting the path unconditionally
     // would put a broken image on every shared quote for the 2,364 firms that have no logo.
     // ⭐ THE PATH CARRIES THE FIRM'S OWN ID, NOT THE ANCESTOR'S: the route walks the same chain, so
@@ -3870,6 +3875,84 @@ const LOGO_TYPE_RE = /^data:(image\/(?:png|jpeg|jpg|gif|webp|svg\+xml));base64,(
  * IT RETURNS THE ROW, NOT A BOOLEAN, so a caller that wants the bytes and a caller that only wants
  * to know whether one exists cannot disagree about the answer.
  */
+/**
+ * WHICH FIRM SHOULD THIS QUOTE TAKE ITS LOGO FROM? The id when the quote carries one, otherwise
+ * the firm NAME the broker typed.
+ *
+ * WHY THIS IS A FUNCTION AND NOT TWO COPIES. The rule below used to live inline inside
+ * serveSharedQuote, and on 2026-09-02 a SECOND caller needed it -- the admin quote form, which
+ * asks the same question before a quote exists. Writing it twice is precisely the shape that
+ * produced F-480 the same morning: the share-link REFUSAL was an if-statement inside one handler,
+ * a later feature reached the same data by another path, and the two disagreed silently for days
+ * because nothing compared them. Two copies in ONE file, 2,500 lines apart, are no safer than two
+ * copies in two repos.
+ *
+ * THE NAME FALLBACK IS NOT DECORATION: 5,900 of 6,172 quotes carry an agency_id, but only 2 of the
+ * 6 ever SHARED do, and Eric's own MMA - DFW quote is one of the four that do not.
+ *
+ * IT RETURNS THE FIRM, NEVER THE LOGO. Whether that firm HAS one is agencyLogoChain's question,
+ * asked separately -- since 2026-08-31 a logo set on a holding company brands every office beneath
+ * it, so a single query joining the two would silently drop an office whose logo lives on a parent.
+ */
+async function resolveFirmIdForLogo(env, agencyId, agencyName) {
+  let firmId = String(agencyId || '').trim();
+  if (firmId) {
+    const byId = await env.DB.prepare('SELECT id FROM agencies WHERE id = ?').bind(firmId).first();
+    firmId = (byId && byId.id) || '';
+  }
+  if (!firmId && String(agencyName || '').trim()) {
+    const byName = await env.DB.prepare(
+      'SELECT id FROM agencies WHERE lower(trim(name)) = ? ORDER BY id LIMIT 1'
+    ).bind(String(agencyName).trim().toLowerCase()).first();
+    firmId = (byName && byName.id) || '';
+  }
+  return firmId;
+}
+
+/**
+ * Does the firm the broker just named already have a logo? F-428.
+ *
+ * IT RETURNS A PATH, NEVER THE IMAGE. The preview loads through the existing
+ * /api/agency-logo/<id> route, so there is exactly one place that reads logo bytes out of the
+ * database and exactly one set of safety rules to keep right.
+ *
+ * inheritedFrom IS THE HONEST PART. A logo set on a holding company brands every office beneath
+ * it, so a quote for "MMA - DFW" can be branded by "MMA" -- and a broker who is told "this firm
+ * already has a logo" without being told WHOSE would reasonably think their own office had one.
+ */
+async function handleCrmAgencyLogoStatus(url, env) {
+  const name = String(url.searchParams.get('agency') || '').trim();
+  const id   = String(url.searchParams.get('agencyId') || '').trim();
+  if (!name && !id) return jsonResp({ firm: null, hasLogo: false });
+
+  try {
+    const firmId = await resolveFirmIdForLogo(env, id, name);
+    if (!firmId) return jsonResp({ firm: null, hasLogo: false });
+
+    const firm = await env.DB.prepare('SELECT id, name FROM agencies WHERE id = ?')
+      .bind(firmId).first();
+    const owner = await agencyLogoChain(env, firmId);
+    if (!owner) return jsonResp({ firm: { id: firmId, name: (firm && firm.name) || name }, hasLogo: false });
+
+    let ownerName = null;
+    if (String(owner.id) !== String(firmId)) {
+      const o = await env.DB.prepare('SELECT name FROM agencies WHERE id = ?').bind(owner.id).first();
+      ownerName = (o && o.name) || null;
+    }
+    return jsonResp({
+      firm: { id: firmId, name: (firm && firm.name) || name },
+      hasLogo: true,
+      logoPath: '/api/agency-logo/' + firmId,
+      inheritedFrom: ownerName,
+    });
+  } catch (err) {
+    // A logo hint is decoration. It must never be the reason the quote form misbehaves, so a
+    // failure reads as "no logo on file" -- which leaves the upload box exactly as it was.
+    console.error('agency-logo-status failed:', err);
+    return jsonResp({ firm: null, hasLogo: false });
+  }
+}
+
 async function agencyLogoChain(env, startId) {
   let id = String(startId || '').trim();
   const seen = new Set();
@@ -18943,7 +19026,88 @@ const ABY_INTERNAL_JS = `
     window.addEventListener('scroll', function () { if (activeEl) place(activeEl); }, true);
   }
 
-  function boot() { build(); attachDirectoryPrefill(); }
+
+  // ── F-428: SAY WHEN THE FIRM ALREADY HAS A LOGO ────────────────────────────────────────────
+  //
+  // Eric, 2026-09-01: "if there's one in the broker area, shouldn't it show that it's already
+  // uploaded so someone doesn't accidentally upload another when running a quote?"
+  //
+  // THE DEFECT THIS FIXES IS AN EMPTY BOX, NOT A BROKEN ONE. A blank upload control is an
+  // invitation to upload, and nothing on the form said the firm was already branded -- so the
+  // only way to find out was to produce the document and look at it.
+  //
+  // PRECEDENCE IS UNCHANGED AND IS ERIC'S RULING, 2026-09-01: "an uploaded logo should win since
+  // it's more recent". app.js already does that. This only makes the standing logo VISIBLE, so
+  // the broker overrides it on purpose instead of by accident.
+  //
+  // OVERLAY ONLY, WHICH IS THE WHOLE REASON IT CAN EXIST. This file is served exclusively to an
+  // authenticated ABY session, and the endpoint it calls is auth-gated, because "does the firm
+  // called X have a logo" is a question about ABY's book of business. The public form keeps its
+  // honest helper text and gains nothing here.
+  function attachAgencyLogoHint() {
+    var agencyEl = document.querySelector('[name="brokerAgency"]');
+    var logoEl   = document.querySelector('[name="brokerLogo"]');
+    if (!agencyEl || !logoEl) return;
+
+    var hint = document.createElement('div');
+    hint.id = 'abyAgencyLogoHint';
+    hint.style.cssText = 'display:none;margin-top:8px;padding:8px 10px;border:1px solid #bcdcc4;' +
+      'background:#f3faf5;border-radius:6px;font-size:13px;color:#22503a;align-items:center;gap:10px;';
+    logoEl.parentNode.appendChild(hint);
+
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+      });
+    }
+
+    function clear() { hint.style.display = 'none'; hint.innerHTML = ''; }
+
+    function show(d) {
+      var firmName = (d.firm && d.firm.name) || '';
+      // WHOSE logo, stated plainly. A logo set on a holding company brands every office beneath
+      // it, so telling an office "you already have one" without naming the parent would be a
+      // small lie that costs somebody a confused minute.
+      var whose = d.inheritedFrom
+        ? esc(firmName) + ' inherits a logo from ' + esc(d.inheritedFrom)
+        : esc(firmName) + ' already has a logo on file';
+      hint.innerHTML =
+        '<img src="' + esc(d.logoPath) + '?t=' + Date.now() + '" alt="" ' +
+        'style="max-height:34px;max-width:120px;vertical-align:middle;border-radius:3px;">' +
+        '<span><strong>' + whose + '</strong> and it will brand this quote and its share link. ' +
+        'Upload here only to override it for this one quote.</span>';
+      hint.style.display = 'flex';
+    }
+
+    var timer = null, lastAsked = '';
+    function look() {
+      var q = agencyEl.value.trim();
+      if (q === lastAsked) return;
+      lastAsked = q;
+      if (q.length < 2) return clear();
+      fetch('/api/admin/crm/agency-logo-status?agency=' + encodeURIComponent(q))
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          // The answer can arrive after the broker has typed on. Only paint if it still matches
+          // what is in the box, or a stale response overwrites a newer one.
+          if (!d || agencyEl.value.trim() !== q) return;
+          if (d.hasLogo && d.logoPath) show(d); else clear();
+        })
+        .catch(function () { clear(); });
+    }
+
+    agencyEl.addEventListener('input', function () {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(look, 300);
+    });
+    // The autocomplete sets .value directly, which fires no input event, so a picked firm would
+    // never be looked up. Change covers the pick and the tab-away.
+    agencyEl.addEventListener('change', look);
+    agencyEl.addEventListener('blur', function () { setTimeout(look, 60); });
+    if (agencyEl.value.trim()) look();
+  }
+
+  function boot() { build(); attachDirectoryPrefill(); attachAgencyLogoHint(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();

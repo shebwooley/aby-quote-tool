@@ -48,6 +48,48 @@ function brokersPage(worker) {
 }
 
 const RULES = [
+  // ── F-428: THE QUOTE FORM SAYS WHEN THE FIRM ALREADY HAS A LOGO ─────────────────────────────
+  // Eric, 2026-09-01: "if there's one in the broker area, shouldn't it show that it's already
+  // uploaded so someone doesn't accidentally upload another when running a quote?"
+  // The failure mode here is SILENCE, not an error: the hint simply never appears, the box looks
+  // exactly as it always did, and the broker uploads a duplicate. Nothing throws.
+  {
+    name: "the logo-status endpoint exists and is AUTH-GATED",
+    why: "It answers 'does the firm called X have a logo', so a public version would let anyone"
+       + " enumerate ABY's book of business by typing names -- the same reason broker-lookup and"
+       + " agency-lookup are admin only. Public reachability here would be the defect.",
+    // THE WRAPPER, ON THIS ROUTE, BY NAME. A proximity match was the first version and the
+    // self-test proved it vacuous: the routes on either side carry their own withAuth, so
+    // deleting this one's changed nothing within 200 characters. TRAPS #148.
+    holds: (f) => /path === '\/api\/admin\/crm\/agency-logo-status'/.test(f.worker)
+               && f.worker.includes(
+                    "withAuth(request, env, () => handleCrmAgencyLogoStatus(url, env))"),
+  },
+  {
+    name: "the overlay actually calls it",
+    why: "An endpoint with no caller is the exact shape this checker exists for: built, correct,"
+       + " deployed, and reachable by nobody.",
+    holds: (f) => /fetch\('\/api\/admin\/crm\/agency-logo-status/.test(f.worker),
+  },
+  {
+    name: "the hint is wired into boot(), so it runs on the page a broker lands on",
+    why: "Anything defined but never called from boot() is dead code. attachDirectoryPrefill is"
+       + " called there for the same reason; a sibling that is not is invisible.",
+    holds: (f) => /function boot\(\)[^\n]*attachAgencyLogoHint\(\)/.test(f.worker),
+  },
+  {
+    name: "the firm-resolution rule has exactly ONE copy",
+    why: "F-480, found the same morning: the share-link refusal lived as an if-statement inside one"
+       + " handler, a later feature reached the same data by another path, and the two disagreed"
+       + " silently. serveSharedQuote and the logo-status endpoint must both call"
+       + " resolveFirmIdForLogo, never hold their own copy of the id-then-name rule.",
+    // COUNT THE CALLS, NOT THE DECLARATION. `resolveFirmIdForLogo(env,` matches the function's
+    // own signature too, so the original floor of 2 was satisfied by ONE caller plus the
+    // declaration -- and removing serveSharedQuote's call left it green. `await` is what
+    // separates a call from a declaration here. TRAPS #148.
+    holds: (f) => /async function resolveFirmIdForLogo\(/.test(f.worker)
+               && (f.worker.match(/await resolveFirmIdForLogo\(env,/g) || []).length >= 2,
+  },
   // ── RFP WATCH (F-384) ───────────────────────────────────────────────────────────────────
   // Written in the SAME commit as the endpoints, not after them. Every one of these fails until a
   // control exists that calls the thing, which is the only version of this rule that has ever
@@ -312,10 +354,18 @@ const RULES = [
     // query. Adding parent inheritance split those into two questions, and this assertion failed on
     // a change that made the feature STRONGER. That is a checker enforcing the MECHANISM instead of
     // the guarantee. It now tests what its own name says: both lookups exist, and a path is emitted.
-    holds: (f) => /shared\.agencyLogoPath = '\/api\/agency-logo\/'/.test(f.worker)
-      && /SELECT id FROM agencies WHERE lower\(trim\(name\)\) = \?/.test(f.worker)
-      && /SELECT id FROM agencies WHERE id = \?/.test(f.worker)
-      && /agencyLogoPath/.test(f.app),
+    // SCOPED TO THE SHARED RESOLVER, 2026-09-02. Grepping the WHOLE worker for the name-lookup
+    // SQL was vacuous: it appears FIVE times, in unrelated handlers, so deleting the one that
+    // actually serves the shared quote left this rule green. Its own sabotage proved it.
+    holds: (f) => {
+      const i = f.worker.indexOf("async function resolveFirmIdForLogo(");
+      if (i < 0) return false;
+      const resolver = f.worker.slice(i, i + 1400);
+      return /shared\.agencyLogoPath = '\/api\/agency-logo\/'/.test(f.worker)
+        && /SELECT id FROM agencies WHERE lower\(trim\(name\)\) = \?/.test(resolver)
+        && /SELECT id FROM agencies WHERE id = \?/.test(resolver)
+        && /agencyLogoPath/.test(f.app);
+    },
   },
   {
     name: "a logo set on a holding company brands the offices under it",
@@ -1034,6 +1084,35 @@ const RULES = [
 ];
 
 const SABOTAGES = [
+  // -- F-428. Each asserts the MUTATION LANDED is impossible to check from here, so each anchor is
+  // a string this checker also asserts on: if an anchor rots, the matching RULE goes red too.
+  {
+    why: "the logo-status endpoint loses its auth wrapper, turning it into a public way to ask"
+       + " which firms ABY has on its books",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      "return withAuth(request, env, () => handleCrmAgencyLogoStatus(url, env));",
+      "return handleCrmAgencyLogoStatus(url, env);") }),
+  },
+  {
+    why: "the overlay stops calling the endpoint, so the hint never appears and the box looks"
+       + " exactly as it did before -- a silent regression",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      "fetch('/api/admin/crm/agency-logo-status?agency='",
+      "fetch('/api/admin/crm/NOPE?agency='") }),
+  },
+  {
+    why: "the hint is defined but dropped from boot(), which is dead code that still greps",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      "function boot() { build(); attachDirectoryPrefill(); attachAgencyLogoHint(); }",
+      "function boot() { build(); attachDirectoryPrefill(); }") }),
+  },
+  {
+    why: "serveSharedQuote goes back to its own inline copy of the firm-resolution rule, which is"
+       + " the F-480 divergence being recreated by hand",
+    apply: (f) => ({ ...f, worker: f.worker.replace(
+      "const firmId = await resolveFirmIdForLogo(env, q.agency_id, q.broker_agency);",
+      "const firmId = String(q.agency_id || '').trim();") }),
+  },
   // -- F-408: the pipeline retirement. Each sabotage is a way the merge could silently lose a job.
   {
     // Every rule in the block above has one of these. Written last because it was MISSING: nine
@@ -1070,7 +1149,11 @@ const SABOTAGES = [
   },
   {
     why: "a product the tool sells is dropped from the pill list, so it cannot be logged at all",
-    apply: (f) => ({ ...f, worker: f.worker.replace(/'directBilling',\n/g, "") }),
+    // \r? BECAUSE THIS CHECKOUT IS CRLF (core.autocrlf=true; worker.js is 19,114 CRLF pairs and
+    // zero bare LF), so a bare backslash-n anchor matched NOTHING and this sabotage was silently
+    // disabled. TRAPS #299. Found 2026-09-02 by the BROKEN-anchor guard in the self-test below --
+    // before that it reported MISSED, which reads like a weak rule rather than an absent test.
+    apply: (f) => ({ ...f, worker: f.worker.replace(/'directBilling',\r?\n/g, "") }),
   },
   {
     why: "the rep goes back to being stored as the dropdown's lowercase id",
@@ -1192,10 +1275,14 @@ const SABOTAGES = [
   {
     // The name fallback goes, so resolution works only for quotes carrying an agency_id -- which
     // is 2 of the 6 ever shared, and not Eric's.
+    // REPOINTED 2026-09-02. It patched "lower(trim(name)) = ? AND COALESCE(logo_data_url,'') <> ''"
+    // -- the firm and the logo in ONE query -- which parent inheritance removed on 2026-08-31. The
+    // RULE was repointed that day and this sabotage was not, so it matched nothing for two days and
+    // reported MISSED, which reads like a weak rule rather than an absent test. TRAPS #361.
     why: "the shared quote resolves its logo by agency_id only, losing the name fallback",
     apply: (f) => ({ ...f, worker: f.worker.replace(
-      /lower\(trim\(name\)\) = \? AND COALESCE\(logo_data_url,''\) <> ''/g,
-      "id = ? AND COALESCE(logo_data_url,'') <> ''") }),
+      "'SELECT id FROM agencies WHERE lower(trim(name)) = ? ORDER BY id LIMIT 1'",
+      "'SELECT id FROM agencies WHERE id = ? ORDER BY id LIMIT 1'") }),
   },
   {
     // Back to counting a deceased contact as a callable agent.
@@ -1420,7 +1507,22 @@ if (process.argv.includes("--self-test")) {
   console.log("SELF-TEST -- every sabotage must redden at least one rule");
   for (const s of SABOTAGES) {
     const before = run(files);
-    const after = run(s.apply(files));
+    const mutated = s.apply(files);
+    // ASSERT THE MUTATION LANDED (TRAPS #361). String.replace on a pattern that matches nothing
+    // returns the source unchanged, so the sabotage applies cleanly, changes NOTHING, and the
+    // checker correctly stays green -- which the harness would score as MISSED. That sends a
+    // reader to audit a guard that is fine, when the real fault is a rotted anchor. A sabotage
+    // whose anchor has vanished is not a passing test and not a failing one; it is an ABSENT
+    // one, and it has to say so in its own vocabulary.
+    const landed = Object.keys(files).some((k) => mutated[k] !== files[k]);
+    if (!landed) {
+      console.log("  BROKEN  " + s.why);
+      console.log("          the sabotage matched NOTHING -- its anchor is gone, so this tests"
+                + " nothing. Repoint it at the code as it is now.");
+      bad++;
+      continue;
+    }
+    const after = run(mutated);
     const flipped = after.filter((a, i) => before[i].ok && !a.ok).length;
     console.log((flipped ? "  caught  " : "  MISSED  ") + s.why
       + (flipped ? "  (" + flipped + " rule(s) went green->red)" : ""));
