@@ -122,6 +122,14 @@ function run(rendererSrc, appSrcIn) {
   ok("the signed fields are read-only",
     /name="authTitle"[^>]*readonly/.test(signedHtml)
     && /name="address"[^>]*readonly/.test(signedHtml));
+  // ⛔ REMOVING THE BUTTON IS NOT ENOUGH. The handler is bound to the FORM, so Enter in any field
+  // fires it, and the service checkboxes stay interactive. It happens to throw on the missing
+  // button and abort before the fetch -- safe BY ACCIDENT, a TypeError standing in for a rule.
+  // A signed document must not bind it at all.
+  ok("a signed page does not bind the submit handler",
+    !/onsubmit="submitCommitment/.test(signedHtml));
+  ok("an unsigned page still binds it, or nobody could ever sign",
+    /onsubmit="submitCommitment/.test(blankHtml));
 
   // -- ③ THE UNSIGNED PAGE IS UNTOUCHED. A fix that breaks the ordinary path is not a fix, and
   // this is the path every employer who has NOT yet signed still uses.
@@ -205,6 +213,10 @@ if (selfTest) {
       (s) => s.replace(
         "u.formatDateLong(String(signed.submittedAt).slice(0, 10))",
         "u.formatDateLong(signed.submittedAt)")],
+    ["renderer", "the submit handler is bound even on a signed document",
+      (s) => s.replace(
+        "'    <form id=\"commitForm\"' + (signed ? '' : ' onsubmit=\"submitCommitment(event)\"') + '>',",
+        "'    <form id=\"commitForm\" onsubmit=\"submitCommitment(event)\">',")],
     // -- app.js. The regression Eric found, and the shape that caused it.
     ["app", "the download path builds its own options again, losing the signature",
       (s) => s.replace(

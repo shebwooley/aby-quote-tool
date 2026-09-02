@@ -697,7 +697,16 @@ ABYQuote.renderer = (function () {
       picker,
       '      <p class="fee-hint" style="padding-left:2px;">Uncheck any service you are not moving forward with. Your selections are sent to ABY with this authorization.</p>',
       '    </div>',
-      '    <form id="commitForm" onsubmit="submitCommitment(event)">',
+      // 🔴 A SIGNED DOCUMENT DOES NOT BIND THE SUBMIT HANDLER AT ALL (F-481).
+      // Removing the button is not enough: the handler is bound to the FORM, so pressing Enter in
+      // any field still fires it -- and the service checkboxes above stay interactive, so there is
+      // something to change before pressing it.
+      // ⚠️ IT WOULD NOT ACTUALLY HAVE POSTED, and that is the point worth writing down: it throws
+      // on `document.getElementById("commitBtn").disabled = true` because the button is gone, and
+      // aborts before the fetch. That is SAFE BY ACCIDENT -- a TypeError standing in for a rule.
+      // The next edit to that handler could reorder two lines and turn it into a live resubmit
+      // with nothing going red.
+      '    <form id="commitForm"' + (signed ? '' : ' onsubmit="submitCommitment(event)"') + '>',
       '      <input type="hidden" name="quoteNumber" value="' + esc(quoteNumber) + '">',
       // The authorization form posts every FormData field, so these two travel with the
       // employer's signed commitment automatically. WHY THEY ARE HERE: `commitments` stored
