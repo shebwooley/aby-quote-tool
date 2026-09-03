@@ -3465,7 +3465,7 @@ async function handleCrmAgencies(request, env) {
     // ⛔ THE NUMBER IS NOT THE FIX. Raising it buys time and nothing else, so the response now
     // carries `capped` and the page SAYS SO. A list that quietly drops rows is indistinguishable
     // from one that has lost them.
-    'WHERE ' + where.join(' AND ') + ' ORDER BY a.name LIMIT ' + (AGENCY_LIST_CAP + 1);
+    'WHERE ' + where.join(' AND ') + ' ORDER BY a.name COLLATE NOCASE LIMIT ' + (AGENCY_LIST_CAP + 1);
 
   try {
     const r = await env.DB.prepare(sql).bind(...args).all();
@@ -5694,7 +5694,7 @@ async function handleCrmNeverQuoted(request, env) {
       "  AND a.name NOT LIKE '%;%' " +
       "  AND tot.quotes >= ? " +
       "  AND NOT EXISTS (SELECT 1 FROM pq WHERE pq.k = tot.k AND pq.pid = ?) " +
-      "ORDER BY tot.quotes DESC, a.name LIMIT 500"
+      "ORDER BY tot.quotes DESC, a.name COLLATE NOCASE LIMIT 500"
     ).bind(min, product).all();
 
     // How many firms CLEAR THE FLOOR at all. Without it "28 firms" is a number with no
@@ -5746,7 +5746,7 @@ async function handleCrmAgencyDupes(request, env) {
       // ignore the answers." A finder that re-proposes something already answered is not a finder,
       // it is a loop -- and it spends the only expensive thing on this screen, which is his time.
       "  AND a.name_confirmed_at IS NULL " +
-      "  AND a.name NOT LIKE '%;%' ORDER BY a.name"
+      "  AND a.name NOT LIKE '%;%' ORDER BY a.name COLLATE NOCASE"
     ).all();
     const rows = results || [];
 
@@ -6053,7 +6053,7 @@ async function handleCrmAgencyDupes(request, env) {
         "WHERE COALESCE(a.relationship,'') NOT IN ('succeeded','alias') " +
         '  AND a.name_confirmed_at IS NULL ' +
         "  AND a.name NOT LIKE '%;%' " +
-        'ORDER BY quotes DESC, a.name'
+        'ORDER BY quotes DESC, a.name COLLATE NOCASE'
       ).all();
 
       // Every firm that could be the answer, counted BY NAME exactly like the sections above, so

@@ -129,6 +129,33 @@ const FIXTURE = [
 ];
 
 const RULES = [
+  // ── ALPHABETICAL MEANS ALPHABETICAL, NOT BYTE ORDER ──────────────────────────────────────
+  // Eric, 2026-09-03: "capital letters are alphabetized before lower case letters... VBA Software
+  // is listed before Valorem." SQLite's default collation is BINARY, so it compares BYTES, and
+  // every capital (A=65) sorts before every lowercase letter (a=97).
+  // ⛔ IT WAS IN FOUR QUERIES, NOT ONE. He reported the main list; the cross-sell list, the tidy-up
+  // finder and the person-named-firm finder had it too. Fixing only the screen somebody happened
+  // to be looking at is how the next report arrives.
+  // ⚠️ NOCASE FOLDS ASCII A-Z ONLY -- this is case-INSENSITIVE, not locale-correct. For US agency
+  // names that is the whole of the problem; do not describe it as more than it is.
+  {
+    name: "every bare `a.name` ordering term collates NOCASE",
+    why: "Without it the list is in byte order, so VBA Software sorts above Valorem and somebody"
+       + " scanning alphabetically does not find a name where they look for it.",
+    holds: () => {
+      const bad = [];
+      for (const clause of (SRC.match(/ORDER BY (?:[^"']|\\.)*/g) || [])) {
+        for (const term of clause.replace(/^ORDER BY /, "").split(",")) {
+          const t = term.trim();
+          // ⚠️ ONLY A BARE a.name ORDERS TEXT. `length(a.name)` orders a NUMBER, where case is
+          // irrelevant -- matching that was a false positive in the first version of this check,
+          // reported beside a true one. TRAPS #24.
+          if (/^a\.name\b/.test(t) && !/COLLATE/i.test(t)) bad.push(t);
+        }
+      }
+      return bad.length === 0;
+    },
+  },
   {
     // A SALE IS FILED UNDER THE NAME THAT WROTE IT. Benefits Texas wrote the business; Patriot
     // bought them. So a parent whose OWN name never quoted has no sales of its own, and before
