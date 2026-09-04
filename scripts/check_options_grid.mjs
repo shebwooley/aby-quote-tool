@@ -438,6 +438,67 @@ const RULES = [
     },
   },
   {
+    name: "the elected EXTRAS reach the Estimated Annual Total",
+    why: "🔴 F-483, Eric 2026-09-04: *\"EIN and state filing charges would apply to the annual total"
+       + " if they enter the number of EINs for 2-9 and 10+ and enter the number of states.\"* They"
+       + " reached it on NO quote before that — a two-EIN ACA quote headlined $1,500 short of what"
+       + " the employer would be billed, while the same $1,500 was printed twice elsewhere.",
+    holds: (A) => {
+      const extras = { stateFirst: 1, stateMore: 2 };            // 500 + 350x2 = 1200
+      const q = renderQuote(A, [
+        { productId: "aca", packageId: "fullLt100", extras },
+        { productId: "aca", packageId: "selfLt100", extras },
+      ]);
+      // selfLt100 is the pre-checked (cheapest) option at $1,250, plus $1,200 of extras.
+      // ⚠️ THE NOTE IS ASSERTED SEPARATELY FROM THE ROW, and it has to be: the row is NAMED
+      // "…: additional services", so a loose `includes("additional services")` was satisfied by
+      // the row and the note's own sabotage reported MISSED while nothing tested it.
+      return bigTotal(q.client) === moneyOf(A, 1250 + 1200)
+          && q.client.includes('data-aby-row="aca-extras"')
+          && q.client.includes("additional services elected on this quote, at the quantities entered");
+    },
+  },
+  {
+    name: "the extras are their OWN row, not folded into the option's figure",
+    why: "⭐ #381 again, and this is the direction it would have come back from. The cards print the"
+       + " price of an OPTION; these charges are per PRODUCT and identical whichever option wins."
+       + " Folding them in would make every card disagree with the total beside it.",
+    holds: (A) => {
+      const extras = { stateFirst: 1, stateMore: 2 };
+      const q = renderQuote(A, [
+        { productId: "aca", packageId: "fullLt100", extras },
+        { productId: "aca", packageId: "selfLt100", extras },
+      ]);
+      const rows = [...q.client.matchAll(/data-aby-row="([^"]+)"/g)].map((m) => m[1]);
+      const picked = picks(q.client);
+      return rows.indexOf("aca") !== -1 && rows.indexOf("aca-extras") !== -1
+          // every option radio still carries ONLY its own service price
+          && picked.every((p) => p.annual === 1250 || p.annual === 3500);
+    },
+  },
+  {
+    name: "the extras row carries no option radio, so the switcher treats it as a constant",
+    why: "It is what makes this need no new switching code: `abyRetotal()` reads a row's rendered"
+       + " cells when the row has no radio. A radio there would make the charge move with the pick.",
+    holds: (A) => {
+      const extras = { einLarge: 2 };
+      const q = renderQuote(A, [{ productId: "aca", packageId: "fullLt100", extras }]);
+      return q.client.indexOf('data-opt-product="aca-extras"') === -1
+          && q.client.indexOf('data-aby-row="aca-extras"') !== -1;
+    },
+  },
+  {
+    name: "a quote with NO extras answered gains no extras row and no note",
+    why: "Eric's condition is *if they enter* the numbers. An unanswered question must add nothing —"
+       + " a $0 'additional services' line on every quote is a line about a thing not happening.",
+    holds: (A) => {
+      const q = renderQuote(A, [{ productId: "aca", packageId: "fullLt100" }]);
+      return q.client.indexOf("-extras") === -1
+          && q.client.indexOf("additional services elected on this quote") === -1
+          && bigTotal(q.client) === moneyOf(A, 3500);
+    },
+  },
+  {
     name: "the switching bundle's SOURCE carries no backtick and no backslash",
     why: "TRAPS #224 and #248. Every entry is a single-quoted string inlined verbatim into a"
        + " downloaded document, so an escape is eaten before it becomes code -- leaving a pattern"
@@ -554,6 +615,22 @@ const SABOTAGES = [
   { why: "abyMoney drops its cents handling",
     edit: (rel, s) => rel.endsWith("app.js")
       ? s.replace("var c=(n*100)%100!==0;", "var c=false;") : s },
+  { why: "the extras stop reaching the total",
+    edit: (rel, s) => rel.endsWith("renderer.js")
+      ? s.replace("t.recurring += extras;", "") : s },
+  // ⛔ ONE LINE, NO NEWLINE IN THE REPLACEMENT. Written first as a two-line insert and the shell
+  // heredoc turned the escape into a REAL newline inside a string literal, which would not parse
+  // (TRAPS #257). The single-statement form needs no escape and cannot be mangled.
+  { why: "the extras are folded into the option's own figure, so cards disagree with the total",
+    edit: (rel, s) => rel.endsWith("renderer.js")
+      ? s.replace("if (r.annualFee != null) total += r.annualFee.amount;",
+                  "if (r.annualFee != null) total += r.annualFee.amount; total += r.extrasTotal || 0;") : s },
+  { why: "an empty extras line is emitted on every quote",
+    edit: (rel, s) => rel.endsWith("renderer.js")
+      ? s.replace("if (extras > 0) {", "if (extras >= 0) {") : s },
+  { why: "the note stops saying the elected charges are included",
+    edit: (rel, s) => rel.endsWith("renderer.js")
+      ? s.replace("if (t.hasExtras) notes.push(", "if (false) notes.push(") : s },
   { why: "the quote-log label stops deduping",
     edit: (rel, s) => rel.endsWith("worker.js")
       ? s.replace("if (seen.indexOf(t) === -1) seen.push(t);", "seen.push(t);") : s },

@@ -1015,6 +1015,40 @@ ABYQuote.renderer = (function () {
       t.oneTime += one;
       if (r.monthlyFee) { t.hasMonthly = true; if (r.monthlyFee.countMissing) t.monthlyIncomplete = true; }
       t.rows.push({ productId: g.productId, name: name, annual: ann, oneTime: one, multi: multi });
+
+      // ── THE ELECTED EXTRAS REACH THE TOTAL (F-483, Eric 2026-09-04) ─────────────────────
+      //
+      // **Eric:** *"Yes EIN and state filing charges would apply to the annual total if they enter
+      // the number of EINs for 2-9 and 10+ and enter the number of states."*
+      //
+      // 🔴 THEY REACHED IT ON NO QUOTE BEFORE THIS. `productAnnual()` sums annual + renewal +
+      // monthly x 12 and nothing else, so a two-EIN ACA quote's headline was $1,500 short of what
+      // the employer would be billed — while that same $1,500 was printed twice elsewhere on the
+      // same page. ⭐ **His condition is already the behaviour**: `applyExtras()` prices a line
+      // only where a positive quantity was entered, so an unanswered question adds nothing.
+      //
+      // ⭐⭐ ITS OWN ROW, NOT FOLDED INTO THE PRODUCT'S. Two reasons, and the first is #381:
+      //   1. The option cards print the price of an OPTION. Folding a per-PRODUCT charge into
+      //      each option's figure would make every card disagree with the total beside it — the
+      //      exact defect fixed earlier today. These charges are the same whichever option wins.
+      //   2. It shows the work, which is the bar for anything a client reads: the service, then
+      //      the additional services, then the sum.
+      //
+      // ⭐ AND IT NEEDS NO NEW SWITCHING CODE. `abyRetotal()` reads a row's rendered cells when
+      // that row has no option radio, so a row keyed `<id>-extras` is summed as a constant and
+      // stays put while the product's own row moves with the reader's pick.
+      var extras = r.extrasTotal || 0;
+      if (extras > 0) {
+        t.recurring += extras;
+        t.hasExtras = true;
+        t.rows.push({
+          productId: g.productId + '-extras',
+          name: name + ': additional services',
+          annual: extras,
+          oneTime: 0,
+          multi: false
+        });
+      }
     });
     return t;
   }
@@ -1028,6 +1062,11 @@ ABYQuote.renderer = (function () {
     if (t.hasMonthly) notes.push('Includes 12 months of administration.');
     if (t.oneTime > 0) notes.push('A one-time setup of <span data-aby-onetime-note>' + u.money(t.oneTime) + '</span> applies in the first year (shown separately below).');
     if (t.monthlyIncomplete) notes.push('Some monthly fees use a starting-tier estimate until participant counts are confirmed.');
+    // ⚠️ SAY THAT THE ELECTED CHARGES ARE IN IT (F-483). Without this the reader can add up the
+    // service lines, land short of the headline, and have no way to see where the gap came from.
+    // ⛔ It names the QUANTITIES ENTERED rather than a general "extras may apply", because they
+    // are quantities the broker put on this specific quote.
+    if (t.hasExtras) notes.push('Includes the additional services elected on this quote, at the quantities entered.');
     // 🔴 THIS SENTENCE USED TO SAY "the lowest-cost option is used for this estimate" AND IT IS
     // NO LONGER TRUE. The total now follows the option selected on the page. A caveat left
     // standing after the behaviour under it moved is worse than none: a reader who trusts it
