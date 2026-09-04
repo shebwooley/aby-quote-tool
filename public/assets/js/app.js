@@ -115,6 +115,72 @@
     'function abySign(v){v=(v||"").trim();var p=document.getElementById("printPreview"),s=document.getElementById("signPreview");if(p)p.textContent=v;if(s)s.textContent=v;}',
     'function abyElectedProducts(){var list=[];document.querySelectorAll(".opt-row").forEach(function(row){var cb=row.querySelector(".opt-check");if(!cb||!cb.checked)return;var label=cb.getAttribute("data-label");var sel=row.querySelector(".opt-tier-select");if(sel)label+=": "+sel.value;list.push(label);});return list;}',
     'function abyInitSignDate(){var d=document.getElementById("signDate");if(d&&!d.value)d.valueAsDate=new Date();}',
+
+    // ── THE TOTAL FOLLOWS THE OPTION THE READER PICKS (Eric, 2026-09-04) ────────────────────
+    //
+    // "Perhaps by pre-checking an option and changing the total if someone selects a different
+    // option instead."
+    //
+    // ⭐⭐ IT PICKS BETWEEN NUMBERS THE ENGINE ALREADY PRODUCED. Every option carries its own
+    // `data-opt-annual` and `data-opt-onetime`, computed by `productAnnual` / `productOneTime`
+    // when the quote was rendered. This code sums and formats; it does not price anything. A
+    // page that re-priced in the reader's browser is the exact failure `check_share_guard`
+    // exists to stop -- an employer opening a page showing more than the document they were sent.
+    //
+    // 🔴 IT LIVES IN THIS BUNDLE, NOT IN app.js's OWN FUNCTIONS, BECAUSE OF WHERE QUOTES ARE
+    // READ. There are three: the tool's preview and /q/<token>, which both load app.js, and the
+    // DOWNLOADED HTML FILE, which loads nothing except this array. Anything an employer must be
+    // able to use has to be in here or it is inert in the file that reaches their inbox.
+    // ⛔ NO BACKSLASHES AND NO BACKTICKS IN THIS ARRAY (TRAPS #224, #248). Every entry is a
+    // single-quoted JavaScript string that is inlined verbatim into a document -- an escape
+    // sequence is eaten before it ever becomes code, leaving a pattern that matches nothing.
+    //
+    // ⚠️ abyMoney IS A SECOND IMPLEMENTATION OF utils.money AND HAS TO BE. The downloaded file
+    // has no utils.js. The checker asserts the two agree over a spread of values, because the
+    // last hand-rolled formatter in this repo printed $2.70 as "$2.7" and shipped.
+    'function abyMoney(n){if(n==null||isNaN(n))return "";var c=(n*100)%100!==0;return "$"+Number(n).toLocaleString("en-US",{minimumFractionDigits:c?2:0,maximumFractionDigits:2});}',
+
+    'function abyPicked(pid){var r=document.querySelector("input.opt-pick[data-opt-product=" + JSON.stringify(pid) + "]:checked");return r||null;}',
+
+    // Sum every product row: a row with options reads the checked radio, a row without one keeps
+    // the figures it was rendered with. Reading the RENDERED cell back for single-option rows
+    // means this function never has to know how those were worked out.
+    'function abyRetotal(){var annual=0,one=0;var rows=document.querySelectorAll("[data-aby-row]");if(!rows.length)return;' +
+      'rows.forEach(function(row){var pid=row.getAttribute("data-aby-row");var pick=abyPicked(pid);' +
+        'var a,o;' +
+        'if(pick){a=Number(pick.getAttribute("data-opt-annual"))||0;o=Number(pick.getAttribute("data-opt-onetime"))||0;' +
+          'var ac=row.querySelector("[data-aby-row-annual]"),oc=row.querySelector("[data-aby-row-onetime]");' +
+          'if(ac)ac.textContent=abyMoney(Math.round(a));if(oc)oc.textContent=o>0?abyMoney(o):"—";}' +
+        'else{a=abyCell(row,"[data-aby-row-annual]");o=abyCell(row,"[data-aby-row-onetime]");}' +
+        'annual+=a;one+=o;});' +
+      'document.querySelectorAll("[data-aby-total-annual]").forEach(function(el){el.textContent=abyMoney(Math.round(annual));});' +
+      'document.querySelectorAll("[data-aby-total-onetime]").forEach(function(el){el.textContent=abyMoney(one);});' +
+      'document.querySelectorAll("[data-aby-onetime-note]").forEach(function(el){el.textContent=abyMoney(one);});' +
+      'var line=document.querySelector("[data-aby-onetime-line]");if(line)line.style.display=one>0?"":"none";' +
+      'var foot=document.querySelector("[data-aby-foot-onetime]");if(foot)foot.style.display=one>0?"":"none";' +
+      'var dash=document.querySelector("[data-aby-foot-dash]");if(dash)dash.textContent=one>0?"":"—";}',
+
+    // Read a money cell back out of the table. An em dash means nothing, not zero.
+    'function abyCell(row,sel){var el=row.querySelector(sel);if(!el)return 0;var t=(el.textContent||"").replace(/[^0-9.]/g,"");var n=Number(t);return isNaN(n)?0:n;}',
+
+    // Keep the cards and the authorization page saying the same thing, in both directions.
+    // ⛔ THE SIGNATURE PAGE IS THE REASON THIS SYNC EXISTS. An employer who picks an option in
+    // the body and then signs must be signing for THAT option -- `abyElectedProducts()` reads
+    // the dropdown, so leaving it behind would record a different option than the one they read
+    // a total for. It is the same defect as the total not moving, one page further on.
+    'function abySyncOption(pid,pkg){var sel=document.querySelector("select.opt-tier-select[data-opt-product=" + JSON.stringify(pid) + "]");' +
+      'if(sel){for(var i=0;i<sel.options.length;i++){if(sel.options[i].getAttribute("data-opt-package")===pkg){sel.selectedIndex=i;break;}}}' +
+      'var r=document.querySelector("input.opt-pick[data-opt-product=" + JSON.stringify(pid) + "][data-opt-package=" + JSON.stringify(pkg) + "]");' +
+      'if(r&&!r.checked)r.checked=true;abyRetotal();}',
+
+    'function abyWireOptions(){' +
+      'document.querySelectorAll("input.opt-pick").forEach(function(r){' +
+        'r.addEventListener("change",function(){abySyncOption(r.getAttribute("data-opt-product"),r.getAttribute("data-opt-package"));});});' +
+      'document.querySelectorAll("select.opt-tier-select[data-opt-product]").forEach(function(s){' +
+        's.addEventListener("change",function(){var o=s.options[s.selectedIndex];' +
+          'if(o)abySyncOption(s.getAttribute("data-opt-product"),o.getAttribute("data-opt-package"));});});' +
+      'abyRetotal();}',
+
         // WHICH QUOTE WAS SIGNED, backfilled at SUBMIT time (F-416). The fields are rendered
     // empty because the quote is drawn before save-hook.js has POSTed it; by the time an
     // employer has typed their details and signed, the id is long since known.
@@ -171,11 +237,14 @@
 
     if (product.inputType === 'count') {
       wrap.appendChild(buildCountInput(product));
-    } else if (product.inputType === 'multi-package' || product.id === 'erisa') {
-      // ERISA always uses checkboxes so brokers can quote multiple packages at once.
-      // The product.id check ensures this works even if products.js is cached with
-      // the old inputType: 'package' value.
+    } else if (product.inputType === 'multi-package' || product.id === 'erisa' || product.id === 'pop') {
+      // ERISA and POP use checkboxes so brokers can quote several packages at once.
+      // The product.id checks make this hold even when a browser is still serving a CACHED
+      // products.js whose inputType says 'package' -- POP joined the list on 2026-09-04, and
+      // this file and that one are separate cache entries that do not have to update together.
       wrap.appendChild(buildMultiPackageCheckboxes(product));
+    } else if (product.inputType === 'package-band') {
+      wrap.appendChild(buildBandSelect(product));
     } else if (product.inputType === 'package') {
       wrap.appendChild(buildPackageSelect(product));
     } else if (product.inputType === 'package-with-count') {
@@ -192,7 +261,11 @@
       }
       pkgEl.addEventListener('change', updateCountVisibility);
       updateCountVisibility();
-      if (product.extras) wrap.appendChild(buildExtras(product, pkgEl, updateCountVisibility));
+      if (product.extras) {
+        wrap.appendChild(buildExtras(product, function () {
+          applyExclusions(product, pkgEl, updateCountVisibility);
+        }));
+      }
     }
     return wrap;
   }
@@ -203,18 +276,28 @@
    * ⭐ GENERIC, DRIVEN FROM products.js. Nothing about EINs is written here -- the labels, the
    * fees and the exclusion rule are all data, so a second product needing its own questions gets
    * them without touching this function.
+   *
+   * ⚠️ `onChange` IS ONE CALLBACK, NOT A CONTROL PLUS A CALLBACK (changed 2026-09-04). It used to
+   * take the package `<select>` so it could call `applyExclusions` itself, which tied this
+   * function to a control ACA no longer has. Each caller now says what its own answer to an
+   * excluding change is; this one only has to fire it.
    */
-  function buildExtras(product, pkgEl, afterChange) {
+  function buildExtras(product, onChange) {
     var box = document.createElement('div');
     box.className = 'product-extras';
     box.dataset.productExtras = product.id;
 
-    var note = document.createElement('p');
-    note.className = 'extras-note';
-    note.dataset.extrasNote = product.id;
-    note.style.display = 'none';
-    note.textContent = product.excludedReason || '';
-    box.appendChild(note);
+    // ⛔ ONE NOTE PER SCREEN, AND THE BAND FORM ALREADY HAS ITS OWN. A band product shows the
+    // exclusion sentence beside the service-level switch it explains; a second copy down here
+    // would be the same sentence twice, in the wrong place, with two things able to toggle it.
+    if (!product.bands) {
+      var note = document.createElement('p');
+      note.className = 'extras-note';
+      note.dataset.extrasNote = product.id;
+      note.style.display = 'none';
+      note.textContent = product.excludedReason || '';
+      box.appendChild(note);
+    }
 
     product.extras.forEach(function (x) {
       var label = document.createElement('label');
@@ -234,7 +317,7 @@
       // field on this form. Putting them in the same order would make one of the two look broken.
       if (x.type === 'checkbox') { label.appendChild(input); label.appendChild(span); }
       else { label.appendChild(span); label.appendChild(input); }
-      input.addEventListener('change', function () { applyExclusions(product, pkgEl, afterChange); });
+      input.addEventListener('change', function () { if (onChange) onChange(); });
       box.appendChild(label);
     });
     return box;
@@ -294,6 +377,177 @@
     if (afterChange) afterChange();
   }
 
+  /**
+   * ONE FORM-COUNT BAND, AND WHETHER TO SHOW BOTH SERVICE LEVELS (ACA, Eric 2026-09-04).
+   *
+   * ⭐ IT EMITS `packageIds`, EXACTLY LIKE ERISA. That is the whole reason this is a small
+   * change rather than a large one: the engine, the renderer, `save-hook.js`'s capture and the
+   * worker's quote-log label all read `packageIds` already. Nothing downstream learns a new
+   * shape -- the two questions the broker answers are simply a shorter way of naming the same
+   * two package ids they used to have to find in a list of nine.
+   *
+   * 🔴 THE EXCLUSION RULE IS ENFORCED HERE AND AGAIN IN THE ENGINE, ON PURPOSE. This function
+   * cannot run for a quote arriving through the admin re-run link, so the browser is not the
+   * guard -- it is the part that keeps a broker from ever seeing the refusal.
+   */
+  function buildBandSelect(product) {
+    var box = document.createElement('div');
+    box.className = 'product-package-band';
+
+    var bandLabel = document.createElement('label');
+    var bandSpan = document.createElement('span');
+    bandSpan.textContent = 'Form count';
+    var bandSel = document.createElement('select');
+    bandSel.dataset.productInput = product.id + ':band';
+    product.bands.forEach(function (b) {
+      var o = document.createElement('option');
+      o.value = b.id;
+      o.textContent = b.label;
+      bandSel.appendChild(o);
+    });
+    // ⭐ The default is NAMED, not "whichever is first". See `defaultBand` in products.js: the
+    // first band is the only one with no service levels, so landing there would quietly defeat
+    // "show full service and self service both by default".
+    if (product.defaultBand) bandSel.value = product.defaultBand;
+    bandLabel.appendChild(bandSpan);
+    bandLabel.appendChild(bandSel);
+    box.appendChild(bandLabel);
+
+    // The count only exists for the per-form band. Every ALE band is a flat annual fee.
+    var countInput = buildCountInput(product);
+    box.appendChild(countInput);
+
+    // ── SHOW BOTH, OR FULL SERVICE ONLY ────────────────────────────────────────────────────
+    // A checkbox rather than two radios: there is a default (both) and one deviation from it,
+    // which is what a checkbox says and what a radio pair makes the reader work out.
+    var svcWrap = document.createElement('div');
+    svcWrap.className = 'product-service-level';
+    var svcLabel = document.createElement('label');
+    svcLabel.className = 'extra-check';
+    var svcCb = document.createElement('input');
+    svcCb.type = 'checkbox';
+    svcCb.dataset.productInput = product.id + ':fullOnly';
+    var svcSpan = document.createElement('span');
+    svcSpan.textContent = 'Show Full Service only (hide Self Service)';
+    svcLabel.appendChild(svcCb);
+    svcLabel.appendChild(svcSpan);
+    svcWrap.appendChild(svcLabel);
+
+    var svcNote = document.createElement('p');
+    svcNote.className = 'extras-note';
+    svcNote.dataset.serviceNote = product.id;
+    svcNote.style.display = 'none';
+    svcNote.textContent = product.excludedReason || '';
+    svcWrap.appendChild(svcNote);
+    box.appendChild(svcWrap);
+
+    // What this quote will actually show, in words, under the controls. A broker picking two
+    // things that combine into two package ids should be able to READ the answer rather than
+    // run the quote to find out.
+    var preview = document.createElement('p');
+    preview.className = 'band-preview';
+    preview.dataset.bandPreview = product.id;
+    box.appendChild(preview);
+
+    // ── THE COMPUTED IDS, IN THE DOM, WHERE save-hook.js CAN SEE THEM ──────────────────────
+    //
+    // 🔴 WITHOUT THIS, AN ACA QUOTE SAVES WITH NO PACKAGE AT ALL. `save-hook.js` is a DOM
+    // scraper: it reads `packageIds` off checked package CHECKBOXES, which is how ERISA and POP
+    // are stored. A band product has no such checkboxes, so the scraper would have found
+    // nothing, the quote log would have shown a bare "ACA Reporting" with no form set, and the
+    // re-run link would have had nothing to restore.
+    // ⭐ A HIDDEN FIELD RATHER THAN TEACHING THE SCRAPER ABOUT BANDS: `refresh()` already knows
+    // the answer, so it writes it down once and the scraper stays a scraper. It also puts the
+    // derived value somewhere a test can read without simulating the whole form.
+    // ⛔ NO `name` ATTRIBUTE -- a named field would join the FormData that `readForm` turns into
+    // the quote's own fields, and this is a derived value, not something the broker typed.
+    var idsField = document.createElement('input');
+    idsField.type = 'hidden';
+    idsField.dataset.productInput = product.id + ':packageIds';
+    box.appendChild(idsField);
+
+    function refresh() {
+      var band = currentBand(product, bandSel.value);
+      countInput.style.display = (band && band.requiresCount) ? '' : 'none';
+      // A band with a single package has no service level to choose.
+      var hasSelf = !!(band && band.packages && band.packages.self);
+      applyServiceExclusion(product, svcCb, hasSelf);
+      svcWrap.style.display = hasSelf ? '' : 'none';
+      var ids = bandPackageIds(product, bandSel.value, svcCb.checked);
+      idsField.value = ids.join(',');
+      preview.textContent = ids.length
+        ? 'This quote will show: ' + ids.map(function (id) {
+            var p = product.packages.find(function (x) { return x.id === id; });
+            return p ? p.name : id;
+          }).join('  |  ')
+        : '';
+    }
+
+    bandSel.addEventListener('change', refresh);
+    // 🔴 THE BROKER'S OWN INTENT IS RECORDED SEPARATELY FROM THE FORCED STATE, AND IT HAS TO BE.
+    // Withdrawing the excluding answer used to unlock the switch and leave it TICKED, so Self
+    // Service never came back and the quote silently stayed Full-Service-only. The old dropdown
+    // did restore its removed options; this is that behaviour, kept.
+    // ⚠️ Registered BEFORE `refresh`, because listeners fire in order and `refresh` reads this.
+    // ⛔ It records only what a HUMAN did: `applyServiceExclusion` sets `.checked` directly and
+    // fires no event, so a forced tick can never be mistaken for a chosen one.
+    svcCb.dataset.userSet = '0';
+    svcCb.addEventListener('change', function () { svcCb.dataset.userSet = svcCb.checked ? '1' : '0'; });
+    svcCb.addEventListener('change', refresh);
+
+    if (product.extras) box.appendChild(buildExtras(product, refresh));
+    refresh();
+    return box;
+  }
+
+  function currentBand(product, bandId) {
+    return (product.bands || []).find(function (b) { return b.id === bandId; }) || (product.bands || [])[0];
+  }
+
+  /**
+   * THE TWO PACKAGE IDS A BAND PLUS A SERVICE CHOICE COMES TO.
+   *
+   * ⛔ ONE DEFINITION, THREE CALLERS -- the live preview, `readForm`, and the re-run prefill.
+   * Three copies of this arithmetic is how a quote comes out showing something other than what
+   * the form said it would.
+   */
+  function bandPackageIds(product, bandId, fullOnly) {
+    var band = currentBand(product, bandId);
+    if (!band || !band.packages) return [];
+    var ids = [];
+    if (band.packages.full) ids.push(band.packages.full);
+    if (!fullOnly && band.packages.self) ids.push(band.packages.self);
+    return ids;
+  }
+
+  /**
+   * WHEN AN EXCLUDING ANSWER STANDS, FULL SERVICE ONLY IS FORCED AND SAYS WHY.
+   *
+   * Eric's ruling has not changed: multi-EIN or a late filing means Self Service "should not be
+   * included on the quote". What changed is only where that lands -- the switch is ticked and
+   * locked instead of four options being removed from a dropdown that no longer exists.
+   */
+  function applyServiceExclusion(product, svcCb, hasSelf) {
+    var note = formEl.querySelector('[data-service-note="' + product.id + '"]');
+    if (!product.excludeWhenAnyOf) return;
+    var hit = product.excludeWhenAnyOf.some(function (id) {
+      var el = formEl.querySelector('[data-product-input="' + product.id + ':extra:' + id + '"]');
+      if (!el) return false;
+      return (el.type === 'checkbox') ? el.checked : (Number(el.value) > 0);
+    });
+    if (hit) {
+      svcCb.checked = true;
+      svcCb.disabled = true;
+    } else {
+      svcCb.disabled = false;
+      // Back to what the BROKER asked for, which is usually "show both". Restoring to `false`
+      // unconditionally would throw away a deliberate Full-Service-only choice they made before
+      // ever typing an EIN count.
+      svcCb.checked = svcCb.dataset.userSet === '1';
+    }
+    if (note) note.style.display = (hit && hasSelf) ? '' : 'none';
+  }
+
   function buildCountInput(product) {
     var label = document.createElement('label');
     var span = document.createElement('span');
@@ -325,7 +579,11 @@
     return label;
   }
 
-  // Renders checkboxes so the broker can quote 1-5 ERISA packages at once.
+  // Renders checkboxes so the broker can quote several packages at once (ERISA, POP).
+  //
+  // ⭐ `defaultAll` TICKS EVERY BOX (Eric, 2026-09-04: all POP options and all ERISA options
+  // shown by default). The broker unticks what they do not want rather than ticking what they
+  // do -- which is the right way round, because the common case is "show them the choice".
   function buildMultiPackageCheckboxes(product) {
     var wrap = document.createElement('div');
     wrap.className = 'product-package-multi';
@@ -333,7 +591,9 @@
     var heading = document.createElement('p');
     heading.className = 'product-package-multi-label';
     heading.style.cssText = 'margin:0 0 8px;font-size:1rem;color:#555;font-weight:600;';
-    heading.textContent = 'Select packages to quote — choose one or more:';
+    heading.textContent = product.defaultAll
+      ? 'Options shown on the quote. Untick any you do not want the employer to see:'
+      : 'Select packages to quote. Choose one or more:';
     wrap.appendChild(heading);
 
     product.packages.forEach(function (pkg) {
@@ -342,6 +602,7 @@
       var cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.id = cbId;
+      cb.checked = !!product.defaultAll;
       cb.dataset.productInput = product.id + ':package:' + pkg.id;
       cb.style.cssText = 'margin:0;cursor:pointer;';
 
@@ -536,7 +797,7 @@
       if (product.inputType === 'count') {
         var ci = formEl.querySelector('[data-product-input="' + productId + ':count"]');
         selection.count = ci && ci.value !== '' ? Number(ci.value) : null;
-      } else if (product.inputType === 'multi-package' || product.id === 'erisa') {
+      } else if (product.inputType === 'multi-package' || product.id === 'erisa' || product.id === 'pop') {
         var multiCbs = formEl.querySelectorAll('[data-product-input^="' + productId + ':package:"]');
         var packageIds = [];
         multiCbs.forEach(function (pcb) {
@@ -545,6 +806,18 @@
           }
         });
         selection.packageIds = packageIds;
+      } else if (product.inputType === 'package-band') {
+        // ⭐ TWO ANSWERS IN, PACKAGE IDS OUT. `bandPackageIds` is the one definition of that
+        // arithmetic and the on-screen preview reads the same function, so what the form says
+        // it will show and what the quote shows cannot disagree.
+        var bandEl = formEl.querySelector('[data-product-input="' + productId + ':band"]');
+        var fullOnlyEl = formEl.querySelector('[data-product-input="' + productId + ':fullOnly"]');
+        var bandId = bandEl ? bandEl.value : (product.bands[0] && product.bands[0].id);
+        selection.band = bandId;
+        selection.fullOnly = !!(fullOnlyEl && fullOnlyEl.checked);
+        selection.packageIds = bandPackageIds(product, bandId, selection.fullOnly);
+        var bandCount = formEl.querySelector('[data-product-input="' + productId + ':count"]');
+        selection.count = bandCount && bandCount.value !== '' ? Number(bandCount.value) : null;
       } else if (product.inputType === 'package') {
         var ps = formEl.querySelector('[data-product-input="' + productId + ':package"]');
         selection.packageId = ps ? ps.value : (product.packages[0] && product.packages[0].id);
@@ -586,7 +859,19 @@
     selections.forEach(function (sel) {
       if (Array.isArray(sel.packageIds)) {
         sel.packageIds.forEach(function (pkgId) {
-          expanded.push({ productId: sel.productId, packageId: pkgId });
+          // 🔴 `count` AND `extras` RIDE ALONG, AND THEY DID NOT UNTIL 2026-09-04.
+          // This function was written for ERISA, whose six packages take neither -- so dropping
+          // them cost nothing and nothing said they were being dropped. ACA takes BOTH: the
+          // small-group band is priced per form, and the EIN and state-filing answers are what
+          // the engine's exclusion guard reads. Fanning a band out without them would have
+          // priced the per-form option off a count of zero and left Self Service unrefusable on
+          // the re-run path, and neither failure prints an error.
+          expanded.push({
+            productId: sel.productId,
+            packageId: pkgId,
+            count: sel.count,
+            extras: sel.extras
+          });
         });
       } else {
         expanded.push(sel);
@@ -605,6 +890,26 @@
 
     if (form.selections.length === 0) {
       outputEl.innerHTML = '<div class="empty-state">Select at least one product to generate a quote.</div>';
+      return;
+    }
+
+    // ⛔ A PRODUCT WITH EVERY OPTION UNTICKED USED TO VANISH IN SILENCE. `expandSelections`
+    // fans an empty `packageIds` out to nothing, so the product simply was not in the quote --
+    // no error, no empty section, nothing to notice. That was survivable while ERISA was the
+    // only checkbox product; POP joined it on 2026-09-04 and POP is on most quotes.
+    var emptyMulti = form.selections.filter(function (s) {
+      return Array.isArray(s.packageIds) && s.packageIds.length === 0;
+    });
+    if (emptyMulti.length) {
+      var names = emptyMulti.map(function (s) {
+        var p = ABYQuote.products.find(function (x) { return x.id === s.productId; });
+        return p ? (p.shortName || p.name) : s.productId;
+      });
+      outputEl.innerHTML = '<div class="empty-state">' +
+        ABYQuote.utils.escapeHtml(names.join(' and ')) +
+        (names.length > 1 ? ' have' : ' has') + ' no options ticked, so ' +
+        (names.length > 1 ? 'they' : 'it') + ' would not appear on the quote at all. ' +
+        'Tick at least one option, or untick the product.</div>';
       return;
     }
 
@@ -805,6 +1110,12 @@
       '<div class="quote">' + html + '</div>';
 
     if (typeof abyInitSignDate === 'function') abyInitSignDate();
+
+    // ⭐ THE OPTION RADIOS, WIRED ON EVERY AUDIENCE. Unlike the headcount box below, this is not
+    // employer-only: the broker previewing a quote has to be able to see what each option does
+    // to the total, because deciding which one to recommend is the reason all three are shown.
+    // It is a no-op when nothing on the page has options.
+    if (typeof abyWireOptions === 'function') abyWireOptions();
 
     // The employer's count control only exists on a shared page, and only after this render.
     if (forEmployer) wireEmployerCounts(outputEl);
@@ -1015,7 +1326,7 @@
           '<style>' + css + '\nbody{margin:0;background:linear-gradient(180deg,#eaf3f8 0%,#f4f7f9 42%,#fff 100%);}' +
           '.wrap{max-width:1100px;margin:0 auto;padding:28px 18px 46px;}</style></head><body>' +
           '<div class="wrap">' + body + '</div>' +
-          '<scr' + 'ipt>' + ABY_COMMIT_JS + '\nabyInitSignDate();</scr' + 'ipt></body></html>';
+          '<scr' + 'ipt>' + ABY_COMMIT_JS + '\nabyInitSignDate();\nabyWireOptions();</scr' + 'ipt></body></html>';
         var blob = new Blob([html], { type: 'text/html' });
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
@@ -1376,12 +1687,48 @@
         if (sel) { sel.value = p.inputs.package; sel.dispatchEvent(new Event('change')); }
       }
 
-      // Multi-package checkboxes (ERISA)
+      // Multi-package checkboxes (ERISA, POP)
+      //
+      // 🔴 IT CLEARS BEFORE IT TICKS, AND THAT BECAME NECESSARY THE DAY `defaultAll` LANDED.
+      // Every box now starts ticked, so "tick what was saved" no longer restores the saved
+      // quote -- it restores the saved quote PLUS everything the broker had deliberately
+      // unticked. A re-run would quietly show more options than the quote it claims to reopen.
       if (p.inputs.packageIds) {
-        p.inputs.packageIds.split(',').filter(Boolean).forEach(function (pkgId) {
-          var pkgCb = document.querySelector('[data-product-input="' + p.id + ':package:' + pkgId + '"]');
-          if (pkgCb) pkgCb.checked = true;
+        var want = p.inputs.packageIds.split(',').filter(Boolean);
+        document.querySelectorAll('[data-product-input^="' + p.id + ':package:"]').forEach(function (pkgCb) {
+          pkgCb.checked = want.indexOf(pkgCb.dataset.productInput.split(':')[2]) !== -1;
         });
+      }
+
+      // Band + service level (ACA)
+      //
+      // ⚠️ THE BAND IS DERIVED FROM THE SAVED PACKAGE IDS, NOT STORED SEPARATELY. Every quote
+      // already on file predates this control, and they all carry package ids -- so reading the
+      // band back out of them is what makes 6,000-odd existing ACA quotes re-runnable. A new
+      // stored field would have restored only the quotes run from today onward.
+      var prodDef = ABYQuote.products.find(function (x) { return x.id === p.id; });
+      if (prodDef && prodDef.bands) {
+        var savedIds = String(p.inputs.packageIds || p.inputs.package || '').split(',').filter(Boolean);
+        var bandEl = document.querySelector('[data-product-input="' + p.id + ':band"]');
+        var fullOnlyEl = document.querySelector('[data-product-input="' + p.id + ':fullOnly"]');
+        var match = prodDef.bands.find(function (b) {
+          return savedIds.some(function (id) { return b.packages.full === id || b.packages.self === id; });
+        });
+        if (match && bandEl) {
+          bandEl.value = match.id;
+          // Full Service only is what was SAVED, not what is excluded now: a quote showing one
+          // option must reopen showing one option.
+          if (fullOnlyEl) {
+            fullOnlyEl.checked = !(match.packages.self && savedIds.indexOf(match.packages.self) !== -1);
+            // 🔴 AND THE SAVED STATE COUNTS AS THE BROKER'S OWN INTENT, OR THE NEXT LINE UNDOES IT.
+            // `applyServiceExclusion` restores this box from `userSet` whenever no excluding
+            // answer stands -- so without this, dispatching the change below immediately reset a
+            // Full-Service-only quote back to showing both, and the re-run displayed MORE than
+            // the quote it claims to reopen. Measured by re-running a real ?rerun= payload.
+            fullOnlyEl.dataset.userSet = fullOnlyEl.checked ? '1' : '0';
+          }
+          bandEl.dispatchEvent(new Event('change'));
+        }
       }
 
       // Participant / account / form count

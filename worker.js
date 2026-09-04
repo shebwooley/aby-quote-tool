@@ -16385,10 +16385,24 @@ function shortProductName(p) {
     const embedsName = !!(typeof entry === 'object' && entry.embedsName);
 
     if (p.inputs && p.inputs.packageIds) {
-      const labels = p.inputs.packageIds.split(',').filter(Boolean).map(function(pkgId) {
-        return (pkgs && pkgs[pkgId]) || pkgId;
+      // DEDUPED, AND embedsName IS HONOURED HERE TOO (2026-09-04).
+      // Two reasons, both arriving with the same change:
+      //  1. ACA now quotes Full Service and Self Service together, and PRODUCT_SHORT maps EVERY
+      //     ALE package to the one label "1094/1095-C" -- deliberately, on Eric 2026-08-21:
+      //     "A lot of the time we quote both full and self so it is hard to say." Two ids, one
+      //     label, so without a dedupe the log would read "1094/1095-C, 1094/1095-C".
+      //  2. pop and aca both set embedsName, meaning the package label REPLACES the product
+      //     name rather than being appended. This branch ignored that flag because until now
+      //     only ERISA reached it, and ERISA does not set it -- so a POP quote would have read
+      //     "POP - Documents Only, POP + NDT (POP and HSA)" with POP said three times.
+      const seen = [];
+      p.inputs.packageIds.split(',').filter(Boolean).forEach(function(pkgId) {
+        const t = (pkgs && pkgs[pkgId]) || pkgId;
+        if (seen.indexOf(t) === -1) seen.push(t);
       });
-      label = labels.length > 0 ? def + ' — ' + labels.join(', ') : def;
+      if (seen.length === 0) label = def;
+      else if (embedsName) label = seen.join(', ');
+      else label = def + ' — ' + seen.join(', ');
     } else if (p.inputs && p.inputs.package) {
       const pkgLabel = pkgs && pkgs[p.inputs.package];
       label = pkgLabel ? (embedsName ? pkgLabel : def + ' — ' + pkgLabel) : def;

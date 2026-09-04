@@ -72,11 +72,17 @@
     }
 
     checked.forEach(function(cb) {
-      // Skip multi-package sub-checkboxes (e.g. individual ERISA package options).
-      // These have data-product-input with 3 colon-separated parts like "erisa:package:basic".
-      // They are collected below via the item scan, not as top-level product selections.
+      // Skip every SUB-control. A checkbox inside the product list is either the product's own
+      // selector or one of its answers, and only the first is a product.
+      //
+      // 🔴 THIS USED TO TEST FOR THREE COLON-SEPARATED PARTS ("erisa:package:basic") AND THAT
+      // WAS A TEST ABOUT THE CONTROLS THAT EXISTED WHEN IT WAS WRITTEN, not about what a
+      // product is. ACA's "Full Service only" switch is `aca:fullOnly` -- two parts -- so under
+      // the old rule ticking it added a SECOND, bogus product row to the saved quote, named
+      // after whatever label the container happened to hold. The right question is not how many
+      // colons a control has; it is whether it carries `data-product-checkbox`.
       const pi = (cb.dataset && cb.dataset.productInput) ? cb.dataset.productInput : '';
-      if (pi && pi.split(':').length >= 3) return;
+      if (pi && !(cb.dataset && cb.dataset.productCheckbox)) return;
 
       // Walk up to the product container (.product-row wraps both the checkbox head
       // and the options panel; must not stop at .product-row-head which is a child)
@@ -107,13 +113,28 @@
             inputs.count = inp.value;
           }
         });
-        // Collect checked multi-package sub-checkboxes (e.g. ERISA packages selected for quoting)
+        // Collect checked multi-package sub-checkboxes (ERISA and POP packages to quote)
         const checkedPkgIds = [];
         item.querySelectorAll('input[type="checkbox"][data-product-input]:checked').forEach(function(pcb) {
           const parts = (pcb.dataset.productInput || '').split(':');
           if (parts.length === 3 && parts[1] === 'package') checkedPkgIds.push(parts[2]);
         });
         if (checkedPkgIds.length > 0) inputs.packageIds = checkedPkgIds.join(',');
+
+        // A BAND PRODUCT (ACA) HAS NO PACKAGE CHECKBOXES -- it works out its package ids from a
+        // form-count band and a service-level switch, and writes them into a hidden field.
+        // Reading that field keeps this function a scraper: the arithmetic has exactly one home,
+        // in `bandPackageIds`, and this side never learns what a band is.
+        // ⛔ It must not overwrite a real checkbox answer, hence the guard -- one product cannot
+        // have both, but a future one having both must not silently lose the ticked boxes.
+        if (!inputs.packageIds) {
+          item.querySelectorAll('input[type="hidden"][data-product-input]').forEach(function(hid) {
+            const parts = (hid.dataset.productInput || '').split(':');
+            if (parts.length === 2 && parts[1] === 'packageIds' && hid.value) {
+              inputs.packageIds = hid.value;
+            }
+          });
+        }
       }
 
       // Use data-product-checkbox attr first (gives clean IDs like 'pop', 'erisa'),

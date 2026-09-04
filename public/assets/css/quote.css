@@ -94,8 +94,59 @@
 .aby-proposal .options-table th { background: var(--soft-blue); color: var(--aby-blue-dark); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; }
 .aby-proposal .options-table tr:last-child td { border-bottom: 0; }
 .aby-proposal .options-table th:nth-child(3), .aby-proposal .options-table th:nth-child(4), .aby-proposal .options-table td:nth-child(3), .aby-proposal .options-table td:nth-child(4) { text-align: center; }
+/* A TABLE WITH A RADIO COLUMN SHIFTS EVERY OTHER COLUMN RIGHT BY ONE, so the centring rule above
+   would centre "What is included" and left-align the money. .has-picks re-points it. The two
+   rules are written separately rather than merged because the picks column is dropped in print,
+   and a merged selector would have to know that. */
+.aby-proposal .options-table.has-picks th:nth-child(3), .aby-proposal .options-table.has-picks td:nth-child(3) { text-align: left; }
+.aby-proposal .options-table.has-picks th:nth-child(4), .aby-proposal .options-table.has-picks th:nth-child(5),
+.aby-proposal .options-table.has-picks td:nth-child(4), .aby-proposal .options-table.has-picks td:nth-child(5) { text-align: center; }
+.aby-proposal .options-table .opt-pick-cell { width: 34px; padding-right: 0; text-align: center; }
+.aby-proposal .options-table .opt-pick-cell .opt-pick { width: auto; margin: 0; cursor: pointer; accent-color: var(--aby-blue-dark); }
+.aby-proposal .options-table td label { cursor: pointer; }
+.aby-proposal .options-table tr:has(.opt-pick:checked) td { background: #eef4fb; }
+.aby-proposal .options-table tr.recommended:has(.opt-pick:checked) td { background: #eff7ea; }
 .aby-proposal .options-table .recommended td { background: #f7fbf4; font-weight: 700; }
 .aby-proposal .options-table .rec-tag { display: inline-block; background: var(--aby-green); color: #fff; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; margin-left: 6px; }
+
+/* ===== Options as cards, side by side (Eric, 2026-09-04) =====
+   Used for three options or fewer; four or more keep .options-table above, because six cards
+   wrap into a cramped block and stop the eye running down one column to compare prices.
+   The whole card is a <label>, so a click anywhere on it selects that option. */
+.aby-proposal .options-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 18px; }
+.aby-proposal .options-grid.cols-1 { grid-template-columns: 1fr; }
+.aby-proposal .options-grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.aby-proposal .option-card { position: relative; display: block; border: 1px solid var(--line); border-radius: 18px;
+  padding: 18px; background: #fff; cursor: pointer; }
+.aby-proposal .option-card.recommended { border: 3px solid var(--aby-green); background: linear-gradient(180deg, #fff, #f7fbf4); }
+/* THE SELECTED CARD IS NOT ALWAYS THE RECOMMENDED ONE, so selection needs its own mark. An
+   outline rather than a border swap: a border change would move the card by the 2px difference
+   between the two rules every time the reader picked a different option. */
+.aby-proposal .option-card:has(.opt-pick:checked) { outline: 3px solid var(--aby-blue-dark); outline-offset: -3px; }
+.aby-proposal .option-card .opt-pick { width: auto; margin: 0 0 10px; cursor: pointer; accent-color: var(--aby-blue-dark); }
+/* THE BADGE IS TAKEN OUT OF THE FLOW SO IT CANNOT PUSH ONE CARD'S TITLE OUT OF LINE WITH ITS
+   NEIGHBOURS. In flow it sat beside the radio and made the recommended card's heading start
+   ~14px lower than the other two, which reads as a rendering fault rather than emphasis. */
+.aby-proposal .option-card .badge { position: absolute; top: 15px; right: 15px; margin: 0; }
+.aby-proposal .option-card.recommended { padding-top: 18px; }
+/* Room for the badge on a narrow card, where it would otherwise sit on top of the title. */
+@media (max-width: 900px) {
+  .aby-proposal .option-card .badge { position: static; display: inline-block; margin: 0 0 6px 10px; }
+}
+.aby-proposal .opt-card-name { color: var(--aby-blue-dark); font-weight: 800; font-size: 17px; line-height: 1.25; }
+.aby-proposal .opt-card-prices { margin: 10px 0 8px; }
+.aby-proposal .opt-price-line { display: flex; align-items: baseline; gap: 7px; margin-bottom: 2px; }
+.aby-proposal .opt-price-amount { color: var(--aby-blue-dark); font-size: 26px; font-weight: 900; letter-spacing: -.03em; line-height: 1.1; }
+.aby-proposal .opt-price-unit { font-size: 14px; font-weight: 700; color: var(--muted); }
+.aby-proposal .opt-card-desc { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.45; }
+.aby-proposal .options-hint { margin: 10px 0 0; color: var(--muted); font-size: 13px; }
+
+/* WHICH PACKAGE A ONE-OPTION QUOTE IS FOR. The pricing cards below it name the KIND of fee, never
+   the package, so without this an ACA quote read "$3,900 per year" and never said Full Service. */
+.aby-proposal .chosen-package { margin-top: 18px; padding: 12px 16px; border-radius: 14px;
+  background: var(--soft-blue); border: 1px solid var(--line); }
+.aby-proposal .chosen-package-name { display: block; color: var(--aby-blue-dark); font-weight: 800; font-size: 16px; }
+.aby-proposal .chosen-package-detail { display: block; margin-top: 2px; color: var(--muted); font-size: 13.5px; }
 
 .aby-proposal .fees-wrap { border: 1px solid var(--line); border-radius: 14px; margin-top: 16px; overflow: hidden; background: #fff; }
 .aby-proposal .fees-title { padding: 13px 16px; background: var(--soft-blue); color: var(--aby-blue-dark); font-weight: 800; font-size: 14px; letter-spacing: .02em; }
@@ -149,7 +200,7 @@
 @media (max-width: 800px) {
   .aby-proposal .topbar, .aby-proposal .hero-grid, .aby-proposal .two-col,
   .aby-proposal .pricing-grid, .aby-proposal .cross-sell-grid, .aby-proposal .contact-strip,
-  .aby-proposal .service-list { grid-template-columns: 1fr; }
+  .aby-proposal .options-grid, .aby-proposal .service-list { grid-template-columns: 1fr; }
   .aby-proposal .prepared-for { text-align: left; }
   .aby-proposal .topbar { align-items: flex-start; flex-direction: column; }
   .aby-proposal section, .aby-proposal .hero { padding-left: 22px; padding-right: 22px; }
@@ -176,7 +227,11 @@
   .aby-proposal .price-box, .aby-proposal .callout, .aby-proposal .hero-tile,
   .aby-proposal .contact-card, .aby-proposal .cross-sell-card, .aby-proposal .service-item,
   .aby-proposal .fee-item, .aby-proposal .guarantee, .aby-proposal .options-table tr,
+  .aby-proposal .option-card, .aby-proposal .options-grid,
   .aby-proposal .pricing-grid, .aby-proposal .two-col, .aby-proposal .ack-group { break-inside: avoid; }
+  /* A printed proposal is a document, not a form. The selected card keeps its outline so the
+     reader can see which option the total was built on; the radio itself is .no-print. */
+  .aby-proposal .option-card { cursor: auto; }
   .aby-proposal a { color: inherit; text-decoration: none; }
 }
 

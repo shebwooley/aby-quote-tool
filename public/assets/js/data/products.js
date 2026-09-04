@@ -9,11 +9,31 @@ ABYQuote.products = [
     id: 'pop',
     name: 'Section 125 Premium Only Plan (POP)',
     shortName: 'POP / Cafeteria Plan',
-    inputType: 'package', // user picks a package, no participant count
+    // ── ALL THREE OPTIONS, SIDE BY SIDE (Eric, 2026-09-04) ─────────────────────────────────
+    //
+    // "Right now we have drop-downs for the POP. We'd actually like to show all three options
+    // in a grid. Or at least have the option to."
+    //
+    // ⭐ THE MACHINERY ALREADY EXISTED -- this is the same `multi-package` type ERISA has used
+    // since it was built. What changes here is the TYPE and the DEFAULT, not the engine.
+    // `defaultAll` ticks every box when the product is selected, so the broker gets all three
+    // without doing anything and unticks whichever they do not want to show.
+    //
+    // 🔴 THE NAMES CHANGED AND THAT IS LOAD-BEARING, NOT COSMETIC. Two defects, both measured
+    // by rendering all three through the real renderer BEFORE any of this was written:
+    //   1. `splitPackageName` splits an option name on a COLON into a short name and a
+    //      description. These three had no colon, so the "What is included" column rendered
+    //      EMPTY on every row while ERISA's filled correctly. One name feeds two columns.
+    //   2. "($99/yr)" was baked into the first name AND printed again in the fee column, so
+    //      the same $99 appeared twice meaning two different things.
+    // ⛔ THE PACKAGE IDS ARE UNCHANGED (`docsOnly` / `popHsa` / `full`). They are stored on
+    // every saved quote and are what `PRODUCT_SHORT` in worker.js labels the quote log by.
+    inputType: 'multi-package',
+    defaultAll: true,
     packages: [
-      { id: 'docsOnly', name: 'POP Documents Only ($99/yr)' },
-      { id: 'popHsa', name: 'Documents + NDT for POP & HSA' },
-      { id: 'full', name: 'Documents + NDT for POP/FSA/LFSA/DCAP/HSA' }
+      { id: 'docsOnly', name: 'Documents Only: POP plan document, no nondiscrimination testing' },
+      { id: 'popHsa',   name: 'Documents + NDT: POP plan document, and annual nondiscrimination testing for POP and HSA' },
+      { id: 'full',     name: 'Documents + Full NDT: POP plan document, and annual nondiscrimination testing for POP, FSA, LFSA, DCAP and HSA' }
     ]
   },
   {
@@ -69,7 +89,11 @@ ABYQuote.products = [
     id: 'erisa',
     name: 'ERISA Wrap Document & Compliance',
     shortName: 'ERISA Wrap Document',
+    // ⭐ ALL SIX TICKED BY DEFAULT (Eric, 2026-09-04): "Same with ERISA - I would like all
+    // options shown by default." The checkboxes already existed and started EMPTY, so every
+    // ERISA quote needed six deliberate clicks before it showed anything.
     inputType: 'multi-package',
+    defaultAll: true,
     packages: [
       { id: 'basic', name: 'Basic: Electronic wrap "legal text" only' },
       { id: 'buyUp', name: 'Buy-Up: Electronic wrap "legal text" and Section 125 plan without testing' },
@@ -83,7 +107,49 @@ ABYQuote.products = [
     id: 'aca',
     name: 'ACA Forms 1094/1095 Reporting',
     shortName: 'ACA Reporting',
-    inputType: 'package-with-count',
+
+    // ── ONE BAND, BOTH SERVICE LEVELS (Eric, 2026-09-04) ───────────────────────────────────
+    //
+    // "With ACA, I'd like for it to show full service and self service both by default, but if
+    // it's multi-EIN or late, where full-service is required, I'd like the option of showing
+    // full service only."
+    //
+    // ⭐ HE HAD ALREADY SAID THE SAME THING FROM THE OTHER SIDE, 2026-08-21, when the quote-log
+    // label was designed: "A lot of the time we quote both full and self so it's hard to say."
+    // That is why `PRODUCT_SHORT` labels every ALE package `1094/1095-C` with no service tier --
+    // the log was built for this before the quote form could do it.
+    //
+    // 🔴 THE NINE PACKAGES ARE FOUR FORM-COUNT BANDS CROSSED WITH TWO SERVICE LEVELS, PLUS THE
+    // SMALL-GROUP B FORM. A flat list of nine made the broker pick ONE, which is why quoting
+    // both meant running the quote twice. The form now asks the two questions that actually
+    // vary -- WHICH BAND, and BOTH LEVELS OR JUST FULL -- and computes the package ids from
+    // them. ⛔ The output is still `packageIds`, exactly what ERISA emits, so the engine, the
+    // renderer, `save-hook.js` and the worker's log label all keep working untouched.
+    //
+    // ⚠️ `smallB` HAS NO SERVICE LEVEL AND IS NOT AN ALE PRODUCT. It is the non-ALE B-form
+    // filing, priced per form, so it is a band with one package and a count. Offering "both
+    // service levels" there would invent a product ABY does not sell.
+    inputType: 'package-band',
+    serviceLevels: [
+      { id: 'full', label: 'Full Service' },
+      { id: 'self', label: 'Self Service' }
+    ],
+    // 🔴 THE DEFAULT BAND IS AN ALE ONE, AND IT HAS TO BE FOR THE ASK TO HOLD. `smallB` is first
+    // in the list because that is the order the rate sheet reads, and it was also what the old
+    // dropdown defaulted to -- but it is the ONE band with no service levels, so leaving the
+    // default there would mean a new ACA quote showed a single option and Eric's "full service
+    // and self service both by default" would be true of every band except the one you land on.
+    // ⛔ Named rather than fixed by reordering the list: the reading order is a separate decision
+    // from the default, and merging them means changing one to change the other.
+    defaultBand: 'lt100',
+    bands: [
+      { id: 'smallB', label: 'Small group / self, level or balance funded: 1094/1095-B, per form',
+        packages: { full: 'smallB' }, requiresCount: true },
+      { id: 'lt100',  label: 'ALE: up to 100 forms',       packages: { full: 'fullLt100', self: 'selfLt100' } },
+      { id: 'mid',    label: 'ALE: 101 to 250 forms',      packages: { full: 'fullMid',   self: 'selfMid'   } },
+      { id: 'high',   label: 'ALE: 251 to 500 forms',      packages: { full: 'fullHigh',  self: 'selfHigh'  } },
+      { id: 'xl',     label: 'ALE: 501 to 1,000 forms',    packages: { full: 'fullXL',    self: 'selfXL'    } }
+    ],
     countLabel: 'forms',
 
     // ── EXTRA QUESTIONS ON THIS PRODUCT (Eric, 2026-08-26) ──────────────────────────────────
@@ -129,6 +195,15 @@ ABYQuote.products = [
     // ⛔ NOT GREYED OUT AND NOT FOOTNOTED -- ABSENT. A disabled option still tells the employer a
     // cheaper thing exists that they are being refused, which is a conversation ABY does not want
     // to have on a proposal.
+    //
+    // ⭐ WHAT MOVED ON 2026-09-04, AND WHAT DID NOT. The rule is unchanged and still fires on the
+    // same three answers. What it now withdraws is the SELF SERVICE LEVEL rather than four
+    // options from a dropdown, because the form no longer has that dropdown. The broker's
+    // "show both" switch locks to Full Service only, says why, and cannot be switched back while
+    // an excluding answer stands -- which is the same outcome by a mechanism the new form has.
+    // ⚠️ Eric asked for "the OPTION of showing full service only". That switch is available on
+    // EVERY quote, not only the excluded ones: a broker can choose to show Full Service alone
+    // for a group with one EIN filing on time. The exclusion FORCES it; the switch OFFERS it.
     excludeWhenAnyOf: ['einLarge', 'einSmall', 'priorYears'],
     excludedPackages: ['selfLt100', 'selfMid', 'selfHigh', 'selfXL'],
     excludedReason: 'Self Service is not available to an employer with more than one EIN, or when a prior year is being filed late.',

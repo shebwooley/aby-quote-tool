@@ -282,7 +282,107 @@ ABYQuote.renderer = (function () {
     return '<div class="pricing-grid' + cls + '">\n' + html + '\n</div>';
   }
 
-  function renderOptionsTable(group, meta, recommendedPackageId) {
+  // -------------------------------------------------------------
+  // OPTIONS SHOWN SIDE BY SIDE (Eric, 2026-09-04)
+  //
+  // "We'd actually like to show all three options in a grid."
+  //
+  // ⭐ CARDS FOR THREE OR FEWER, THE TABLE FOR FOUR OR MORE, and that split is his call. Three
+  // cards read as a CHOICE; six of them wrap into a cramped 3+3 block and stop the eye running
+  // down a single column to compare prices, which is the one thing a six-option list is for.
+  // -------------------------------------------------------------
+
+  var CARD_LIMIT = 3;
+
+  /**
+   * WHAT ONE OPTION COSTS, PRINTED FROM THE SAME TWO FUNCTIONS THAT BUILD THE TOTAL.
+   *
+   * 🔴🔴 THIS IS DERIVED FROM `productAnnual` AND `productOneTime` ON PURPOSE, AND THE FIRST
+   * VERSION OF IT WAS NOT. That version read the fee fields directly and printed POP's
+   * Documents + NDT as "$350 one-time setup" AND "$350 per year" -- which reads as $700 in year
+   * one -- while the Estimated Annual Total for the same option said $350. Caught by rendering
+   * it, not by reading it.
+   *
+   * ⭐ WHY THEY DISAGREED, AND IT IS A REAL RULE RATHER THAN AN OVERSIGHT: `productOneTime`
+   * counts a setup fee ONLY when it is not already the recurring annual fee -- "renewal is $0 or
+   * absent, the HSA case". POP charges $350 setup in year one and $350 renewal after, so the
+   * employer pays $350 a year from the first year. "$350 per year" states that completely; a
+   * separate setup line double-counts it.
+   *
+   * ⛔ A CARD THAT DISAGREES WITH THE TOTAL BESIDE IT IS WORSE THAN EITHER NUMBER BEING WRONG,
+   * because the reader cannot tell which one to believe. Deriving both from one place is what
+   * stops that, so do not "improve" this by reading the fee fields again.
+   */
+  function optionPriceLines(r) {
+    var lines = [];
+    if (r.monthlyFee && !r.monthlyFee.tierExceeded) {
+      lines.push({ amount: u.money(r.monthlyFee.amount), unit: 'per month' });
+    }
+    var perYear = (r.annualFee != null ? r.annualFee.amount : 0) +
+                  (r.renewalFee != null ? r.renewalFee.amount : 0);
+    if (perYear > 0) lines.push({ amount: u.money(perYear), unit: 'per year' });
+    var one = productOneTime(r);
+    if (one > 0) lines.push({ amount: u.money(one), unit: 'one-time setup' });
+    if (!lines.length) lines.push({ amount: 'On request', unit: '' });
+    return lines;
+  }
+
+  /**
+   * The options as cards, each with a radio that drives the Estimated Annual Total.
+   *
+   * ⭐ THE RADIO IS THE WHOLE POINT OF THE `data-opt-*` ATTRIBUTES. Eric: "Perhaps by pre-checking
+   * an option and changing the total if someone selects a different option instead." The figures
+   * are computed HERE, by the engine, and carried on the element -- so the page never re-prices
+   * anything in the reader's browser. It picks between numbers ABY already produced.
+   * ⛔ `no-print` on the radio column: a printed proposal is a document, not a form, and a
+   * half-inked radio button beside every option reads as something the employer failed to fill in.
+   */
+  function renderOptionCards(group, meta, recommendedPackageId, defaultPackageId) {
+    var cards = group.results.map(function (r) {
+      var pkg = findPackage(meta, r.packageId) || {};
+      var parsed = splitPackageName(pkg.name || r.packageLabel || r.packageId);
+      var isRec = recommendedPackageId && r.packageId === recommendedPackageId;
+      var isDefault = r.packageId === defaultPackageId;
+      var prices = optionPriceLines(r).map(function (l) {
+        return '<div class="opt-price-line"><span class="opt-price-amount">' + l.amount + '</span>' +
+               (l.unit ? '<span class="opt-price-unit">' + esc(l.unit) + '</span>' : '') + '</div>';
+      }).join('');
+      var desc = parsed.detail || pkg.description || r.packageLabel || '';
+      var id = 'opt-' + group.productId + '-' + r.packageId;
+      return '<label class="option-card' + (isRec ? ' recommended' : '') + '" for="' + esc(id) + '"' +
+               ' data-option-card="' + esc(group.productId) + '">' +
+        (isRec ? '<span class="badge">Recommended</span>' : '') +
+        '<input type="radio" class="opt-pick no-print" id="' + esc(id) + '"' +
+          ' name="aby-opt-' + esc(group.productId) + '"' +
+          ' data-opt-product="' + esc(group.productId) + '"' +
+          ' data-opt-package="' + esc(r.packageId) + '"' +
+          ' data-opt-annual="' + esc(String(productAnnual(r))) + '"' +
+          ' data-opt-onetime="' + esc(String(productOneTime(r))) + '"' +
+          ' data-opt-label="' + esc(parsed.name) + '"' +
+          (isDefault ? ' checked' : '') + '>' +
+        '<div class="opt-card-body">' +
+          '<div class="opt-card-name">' + esc(parsed.name) + '</div>' +
+          '<div class="opt-card-prices">' + prices + '</div>' +
+          (desc ? '<p class="opt-card-desc">' + esc(desc) + '</p>' : '') +
+        '</div>' +
+      '</label>';
+    }).join('\n');
+    return '<div class="options-grid cols-' + group.results.length + '">\n' + cards + '\n</div>' +
+      '<p class="options-hint no-print">Select an option to see what it makes the estimated annual total.</p>';
+  }
+
+  /**
+   * The same option list as a table, for four options or more.
+   *
+   * ⭐⭐ IT CARRIES THE SAME RADIO AS THE CARDS, AND THAT IS NOT DECORATION. Without it the two
+   * layouts would BEHAVE differently: a reader could switch the option on the signature page of
+   * a six-option ERISA quote and the Estimated Annual Total above would sit still, because
+   * nothing on the page held that option's figures. The card path would re-figure and the table
+   * path would not, for no reason a reader could see.
+   * ⛔ So the split Eric chose is about LAYOUT ONLY. Anything a reader can do to one list they
+   * can do to the other.
+   */
+  function renderOptionsTable(group, meta, recommendedPackageId, defaultPackageId) {
     // Products with a single annual fee (e.g. ERISA) show one "Annual fee"
     // column instead of separate setup + renewal.
     var annualOnly = group.results.every(function (r) { return !r.setupFee && r.renewalFee == null && r.annualFee != null; });
@@ -291,26 +391,50 @@ ABYQuote.renderer = (function () {
       var parsed = splitPackageName(pkg.name || r.packageLabel || r.packageId);
       var isRec = recommendedPackageId && r.packageId === recommendedPackageId;
       var recTag = isRec ? '<span class="rec-tag">Recommended</span>' : '';
-      var included = '<td>' + esc(parsed.detail || pkg.description || '') + '</td>';
-      var nameCell = '<td>' + esc(parsed.name) + recTag + '</td>';
+      // ⭐ THE SAME THREE-STEP FALLBACK THE CARDS USE, and the third step is the one that matters:
+      // `r.packageLabel` is the description out of pricing.js. Without it this column depends on
+      // every package name in products.js containing a colon -- which is exactly how POP rendered
+      // three blank "What is included" cells. A layout should not be able to lose a description
+      // that the price tables have all along.
+      var included = '<td>' + esc(parsed.detail || pkg.description || r.packageLabel || '') + '</td>';
+      var rid = 'opt-' + group.productId + '-' + r.packageId;
+      var pickCell = '<td class="opt-pick-cell no-print">' +
+        '<input type="radio" class="opt-pick" id="' + esc(rid) + '"' +
+          ' name="aby-opt-' + esc(group.productId) + '"' +
+          ' data-opt-product="' + esc(group.productId) + '"' +
+          ' data-opt-package="' + esc(r.packageId) + '"' +
+          ' data-opt-annual="' + esc(String(productAnnual(r))) + '"' +
+          ' data-opt-onetime="' + esc(String(productOneTime(r))) + '"' +
+          ' data-opt-label="' + esc(parsed.name) + '"' +
+          (r.packageId === defaultPackageId ? ' checked' : '') + '></td>';
+      var nameCell = '<td><label for="' + esc(rid) + '">' + esc(parsed.name) + '</label>' + recTag + '</td>';
       if (annualOnly) {
-        return '<tr' + (isRec ? ' class="recommended"' : '') + '>' + nameCell + included +
+        return '<tr' + (isRec ? ' class="recommended"' : '') + '>' + pickCell + nameCell + included +
           '<td>' + (r.annualFee != null ? u.money(r.annualFee.amount) : 'n/a') + '</td></tr>';
       }
-      var setup = r.setupFee ? u.money(r.setupFee.amount) : (r.annualFee ? u.money(r.annualFee.amount) : 'n/a');
-      var renew = (r.renewalFee != null) ? u.money(r.renewalFee.amount) : 'n/a';
-      return '<tr' + (isRec ? ' class="recommended"' : '') + '>' + nameCell + included +
+      // 🔴 AN ANNUAL FEE IS NOT A SETUP FEE, AND THIS COLUMN USED TO SAY IT WAS.
+      // The old fallback printed `annualFee` in the SETUP column when there was no setup fee,
+      // and then "n/a" under Annual renewal. POP Documents Only is $99 A YEAR, so a mixed table
+      // told an employer it was a one-time charge that never renews. Nothing showed it while POP
+      // was a dropdown; it appears the moment two options with different fee shapes sit together.
+      // ⛔ Measured on the rendered page before this was written, not reasoned about.
+      var setup = r.setupFee ? u.money(r.setupFee.amount) : '—';
+      var renew = (r.renewalFee != null) ? u.money(r.renewalFee.amount)
+                : (r.annualFee != null) ? u.money(r.annualFee.amount)
+                : 'n/a';
+      return '<tr' + (isRec ? ' class="recommended"' : '') + '>' + pickCell + nameCell + included +
         '<td>' + setup + '</td>' +
         '<td>' + renew + '</td></tr>';
     }).join('\n');
     var head = annualOnly
-      ? '  <thead><tr><th>Option</th><th>What is included</th><th>Annual fee</th></tr></thead>'
-      : '  <thead><tr><th>Option</th><th>What is included</th><th>Setup fee</th><th>Annual renewal</th></tr></thead>';
+      ? '  <thead><tr><th class="opt-pick-cell no-print"></th><th>Option</th><th>What is included</th><th>Annual fee</th></tr></thead>'
+      : '  <thead><tr><th class="opt-pick-cell no-print"></th><th>Option</th><th>What is included</th><th>Setup fee</th><th>Annual renewal</th></tr></thead>';
     return [
-      '<table class="options-table">',
+      '<table class="options-table has-picks">',
       head,
       '  <tbody>' + rows + '</tbody>',
-      '</table>'
+      '</table>',
+      '<p class="options-hint no-print">Select an option to see what it makes the estimated annual total.</p>'
     ].join('\n');
   }
 
@@ -372,15 +496,70 @@ ABYQuote.renderer = (function () {
     ].filter(Boolean).join('\n');
   }
 
+  /**
+   * WHICH OPTION THE QUOTE ASSUMES UNTIL SOMEBODY PICKS A DIFFERENT ONE.
+   *
+   * ⭐⭐ ONE DEFINITION, THREE READERS -- the pre-checked radio, the Estimated Annual Total, and
+   * the authorization page's Option dropdown. Eric asked for the total to follow a pre-checked
+   * option, and three places each deciding for themselves what "pre-checked" means is exactly
+   * how a quote ends up with the total naming one option and the signature page naming another.
+   *
+   * 🔴 THE BROKER'S RECOMMENDATION WINS, AND LOWEST-COST IS THE FALLBACK. That is a change: the
+   * total used to ALWAYS take the lowest option and say so. On a POP quote showing all three,
+   * lowest-cost means the headline number is $99 -- the document-only package -- whatever the
+   * broker actually recommended. The old behaviour survives untouched for any quote where no
+   * recommendation was set, which is every quote run before today.
+   */
+  function defaultOptionFor(group, form) {
+    if (group.results.length <= 1) return group.results[0] ? group.results[0].packageId : null;
+    var rec = (form && form.recommendedPackages || {})[group.productId];
+    var hasRec = rec && group.results.some(function (r) { return r.packageId === rec; });
+    if (hasRec) return rec;
+    return group.results.reduce(function (a, b) {
+      return productAnnual(b) < productAnnual(a) ? b : a;
+    }).packageId;
+  }
+
+  /**
+   * WHICH PACKAGE A ONE-OPTION QUOTE IS ACTUALLY FOR.
+   *
+   * 🔴 `renderPricingCards` NAMES THE KIND OF FEE, NEVER THE PACKAGE. It prints "Annual Fee
+   * $3,900" and nothing else, so a single-option ACA quote never said whether that was Full
+   * Service or Self Service -- two products more than two thousand dollars apart.
+   *
+   * ⭐⭐ FOUND BY A CHECKER RULE THAT WAS ITSELF WRONG, WHICH IS WHY IT IS WORTH RECORDING. The
+   * rule asserted the client document contained "ALE Full Service" on a refused-Self-Service
+   * quote. It did not -- and the reason was not the exclusion logic under test but this, sitting
+   * underneath it and older than the change.
+   *
+   * ⚠️ IT IS IN SCOPE BECAUSE IT IS HALF OF WHAT ERIC ASKED FOR. "If it is multi-EIN or late,
+   * where full-service is required, I'd like the option of showing full service only" -- a quote
+   * that shows Full Service ONLY and never says the words "Full Service" has not done that.
+   * ⛔ Only for products that HAVE packages: a tiered product like FSA has no package to name,
+   * and printing an empty heading there would be a blank line on every quote in the book.
+   */
+  function namedPackageLine(result, meta) {
+    if (!meta.packages || !result.packageId) return '';
+    var pkg = findPackage(meta, result.packageId);
+    var parsed = splitPackageName((pkg && pkg.name) || result.packageLabel || '');
+    if (!parsed.name) return '';
+    var detail = parsed.detail || result.packageLabel || '';
+    return '<div class="chosen-package"><span class="chosen-package-name">' + esc(parsed.name) + '</span>' +
+           (detail ? '<span class="chosen-package-detail">' + esc(detail) + '</span>' : '') +
+           '</div>';
+  }
+
   function renderProductSection(group, form) {
     var meta = findProduct(group.productId);
     if (!meta) return '';
     var lang = L.products[group.productId] || {};
     var recMap = form.recommendedPackages || {};
     var isOptions = group.results.length > 1;
-    var pricing = isOptions
-      ? renderOptionsTable(group, meta, recMap[group.productId])
-      : renderPricingCards(group.results[0], meta);
+    var pricing = !isOptions
+      ? namedPackageLine(group.results[0], meta) + renderPricingCards(group.results[0], meta)
+      : (group.results.length <= CARD_LIMIT
+          ? renderOptionCards(group, meta, recMap[group.productId], defaultOptionFor(group, form))
+          : renderOptionsTable(group, meta, recMap[group.productId], defaultOptionFor(group, form)));
     var first = group.results[0];
     var notes = (first.notes || []).filter(function (n) { return n && n.indexOf('TODO') !== 0; });
     var notesHtml = notes.length
@@ -598,17 +777,28 @@ ABYQuote.renderer = (function () {
       var name = meta ? (meta.shortName || meta.name) : g.productId;
       var tier = '', desc = '';
       if (g.results.length > 1) {
-        var rec = (form.recommendedPackages || {})[g.productId];
+        // 🔴 THE PRE-SELECTED OPTION IS THE ONE THE TOTAL IS BUILT ON, NOT MERELY THE
+        // RECOMMENDED ONE. This used to select the broker's recommendation and nothing else,
+        // so a quote with NO recommendation opened its signature page on whichever option
+        // happened to be first while the Estimated Annual Total was built on the cheapest.
+        // The employer would then have signed for one option having read a total for another.
+        // `defaultOptionFor` is the single answer to "which one does this quote assume".
+        var pre = defaultOptionFor(g, form);
         var opts = g.results.map(function (r) {
           var pkg = findPackage(meta, r.packageId) || {};
           var parsed = splitPackageName(pkg.name || r.packageId);
           var label = parsed.name + (parsed.detail ? ': ' + parsed.detail : '');
           var fs = feeSummary(r, meta);
           if (fs) label += '  (' + fs + ')';
-          var sel = (rec && r.packageId === rec) ? ' selected' : '';
-          return '<option value="' + esc(parsed.name) + '"' + sel + '>' + esc(label) + '</option>';
+          var sel = (r.packageId === pre) ? ' selected' : '';
+          // `value` stays the SHORT NAME: it is what `abyElectedProducts()` appends to the
+          // product label on the signed record, and changing it would change what a signature
+          // says. The package id rides alongside it, for the sync script only.
+          return '<option value="' + esc(parsed.name) + '"' +
+                 ' data-opt-package="' + esc(r.packageId) + '"' + sel + '>' + esc(label) + '</option>';
         }).join('');
-        tier = '<div class="opt-tier"><label>Option:</label><select class="opt-tier-select">' + opts + '</select></div>';
+        tier = '<div class="opt-tier"><label>Option:</label><select class="opt-tier-select"' +
+               ' data-opt-product="' + esc(g.productId) + '">' + opts + '</select></div>';
       } else {
         var fs2 = feeSummary(g.results[0], meta);
         if (fs2) desc = '<div class="opt-desc">' + esc(fs2) + '</div>';
@@ -803,17 +993,20 @@ ABYQuote.renderer = (function () {
     return total;
   }
 
-  function computeTotals(groups) {
+  function computeTotals(groups, form) {
     var t = { recurring: 0, oneTime: 0, hasMonthly: false, monthlyIncomplete: false, anyMultiOption: false, rows: [] };
     groups.forEach(function (g) {
       var meta = findProduct(g.productId);
       var name = meta ? (meta.shortName || meta.name) : g.productId;
       var r;
-      if (g.results.length > 1) {
+      var multi = g.results.length > 1;
+      if (multi) {
         t.anyMultiOption = true;
-        // No single option chosen yet → use the lowest-cost option for the estimate.
-        r = g.results.reduce(function (a, b) { return productAnnual(b) < productAnnual(a) ? b : a; });
-        name += ' (lowest option)';
+        // ⭐ THE PRE-CHECKED OPTION, WHICH IS THE BROKER'S RECOMMENDATION WHERE THEY SET ONE.
+        // `defaultOptionFor` is the single definition -- the radio on the card reads the same
+        // function, so the highlighted card and this number cannot name different options.
+        var wantId = defaultOptionFor(g, form);
+        r = g.results.filter(function (x) { return x.packageId === wantId; })[0] || g.results[0];
       } else {
         r = g.results[0];
       }
@@ -821,44 +1014,52 @@ ABYQuote.renderer = (function () {
       t.recurring += ann;
       t.oneTime += one;
       if (r.monthlyFee) { t.hasMonthly = true; if (r.monthlyFee.countMissing) t.monthlyIncomplete = true; }
-      t.rows.push({ name: name, annual: ann, oneTime: one });
+      t.rows.push({ productId: g.productId, name: name, annual: ann, oneTime: one, multi: multi });
     });
     return t;
   }
 
-  function renderTotalsSummary(groups) {
+  function renderTotalsSummary(groups, form) {
     if (!groups || !groups.length) return '';
-    var t = computeTotals(groups);
+    var t = computeTotals(groups, form);
     if (t.recurring <= 0 && t.oneTime <= 0) return '';
 
     var notes = [];
     if (t.hasMonthly) notes.push('Includes 12 months of administration.');
-    if (t.oneTime > 0) notes.push('A one-time setup of ' + u.money(t.oneTime) + ' applies in the first year (shown separately below).');
+    if (t.oneTime > 0) notes.push('A one-time setup of <span data-aby-onetime-note>' + u.money(t.oneTime) + '</span> applies in the first year (shown separately below).');
     if (t.monthlyIncomplete) notes.push('Some monthly fees use a starting-tier estimate until participant counts are confirmed.');
-    if (t.anyMultiOption) notes.push('Where several options are offered, the lowest-cost option is used for this estimate.');
+    // 🔴 THIS SENTENCE USED TO SAY "the lowest-cost option is used for this estimate" AND IT IS
+    // NO LONGER TRUE. The total now follows the option selected on the page. A caveat left
+    // standing after the behaviour under it moved is worse than none: a reader who trusts it
+    // is told the headline is the cheapest thing on offer when it may be the dearest.
+    if (t.anyMultiOption) notes.push('Where several options are offered, this total follows the option selected above. Select a different one and it will re-figure.');
 
     var big =
       '<div class="price-box featured">' +
         '<div class="price-label">Estimated Annual Total</div>' +
-        '<div class="price">' + u.money(Math.round(t.recurring)) + ' <small>per year</small></div>' +
-        (t.oneTime > 0 ? '<p class="muted">plus ' + u.money(t.oneTime) + ' one-time setup (year one only)</p>' : '') +
+        '<div class="price"><span data-aby-total-annual>' + u.money(Math.round(t.recurring)) + '</span> <small>per year</small></div>' +
+        '<p class="muted" data-aby-onetime-line' + (t.oneTime > 0 ? '' : ' style="display:none;"') + '>plus <span data-aby-total-onetime>' +
+          u.money(t.oneTime) + '</span> one-time setup (year one only)</p>' +
       '</div>';
 
+    // ⭐ EVERY ROW IS ADDRESSABLE BY PRODUCT ID, so the switching script can rewrite one line
+    // rather than re-render the section. The `multi` rows are the only ones that ever move.
     var rows = t.rows.map(function (row) {
-      return '<tr><td>' + esc(row.name) + '</td>' +
-        '<td style="text-align:right;">' + u.money(Math.round(row.annual)) + '</td>' +
-        '<td style="text-align:right;">' + (row.oneTime > 0 ? u.money(row.oneTime) : '—') + '</td></tr>';
+      return '<tr data-aby-row="' + esc(row.productId) + '"><td>' + esc(row.name) + '</td>' +
+        '<td style="text-align:right;" data-aby-row-annual>' + u.money(Math.round(row.annual)) + '</td>' +
+        '<td style="text-align:right;" data-aby-row-onetime>' + (row.oneTime > 0 ? u.money(row.oneTime) : '—') + '</td></tr>';
     }).join('\n');
-    var tfootOne = t.oneTime > 0
-      ? '<tr><td><strong>One-time setup (year one)</strong></td><td></td><td style="text-align:right;"><strong>' + u.money(t.oneTime) + '</strong></td></tr>'
-      : '';
+    var tfootOne =
+      '<tr data-aby-foot-onetime' + (t.oneTime > 0 ? '' : ' style="display:none;"') + '>' +
+      '<td><strong>One-time setup (year one)</strong></td><td></td>' +
+      '<td style="text-align:right;"><strong data-aby-total-onetime>' + u.money(t.oneTime) + '</strong></td></tr>';
     var table =
       '<table class="options-table" style="margin-top:16px;">' +
       '<thead><tr><th>Service</th><th style="text-align:right;">Est. annual</th><th style="text-align:right;">One-time</th></tr></thead>' +
       '<tbody>' + rows + '</tbody>' +
       '<tfoot><tr><td><strong>Estimated annual total</strong></td>' +
-      '<td style="text-align:right;"><strong>' + u.money(Math.round(t.recurring)) + '</strong></td>' +
-      '<td style="text-align:right;">' + (t.oneTime > 0 ? '' : '—') + '</td></tr>' + tfootOne + '</tfoot>' +
+      '<td style="text-align:right;"><strong data-aby-total-annual>' + u.money(Math.round(t.recurring)) + '</strong></td>' +
+      '<td style="text-align:right;" data-aby-foot-dash>' + (t.oneTime > 0 ? '' : '—') + '</td></tr>' + tfootOne + '</tfoot>' +
       '</table>';
 
     return [
@@ -867,7 +1068,13 @@ ABYQuote.renderer = (function () {
       '    <div class="section-head hero-head"><h2>Estimated Annual Cost</h2><p>A summary estimate based on the services and counts entered. Final cost may vary with actual enrollment and elections.</p></div>',
       '    <div class="section-body">',
       '      <div class="pricing-grid cols-1">' + big + '</div>',
-      (notes.length ? '      <p class="muted" style="margin-top:10px;">' + esc(notes.join(' ')) + '</p>' : ''),
+      // ⚠️ NOT ESCAPED, AND THAT IS A DELIBERATE NARROWING RATHER THAN A RELAXATION. Every
+      // entry in `notes` is a literal string written above plus `u.money()` output, which is
+      // formatted from a number and cannot carry markup. One of them now has to contain a span
+      // so the switching script can rewrite the figure inside it. ⛔ Nothing broker-typed or
+      // employer-typed may ever be pushed into this array; if that changes, escape at the point
+      // the value goes in, not here.
+      (notes.length ? '      <p class="muted" style="margin-top:10px;">' + notes.join(' ') + '</p>' : ''),
       table,
       '    </div>',
       '  </div>',
@@ -884,6 +1091,28 @@ ABYQuote.renderer = (function () {
       if (last && last.productId === r.productId) last.results.push(r);
       else groups.push({ productId: r.productId, results: [r] });
     });
+
+    // ── A REFUSED OPTION IS ABSENT FROM THE DOCUMENT, NOT PRINTED AS A REFUSAL ─────────────
+    //
+    // Eric's ruling on Self Service, and it has not changed: multi-EIN or a late filing means it
+    // "should not be included on the quote" -- "NOT GREYED OUT AND NOT FOOTNOTED -- ABSENT."
+    //
+    // 🔴 THIS BECAME REACHABLE ON 2026-09-04, when ACA started quoting two options at once. The
+    // engine REFUSES an excluded package rather than substituting one, which is right, and until
+    // now that refusal always applied to the only option a quote had -- so there was never a
+    // group with one good option and one refused one. Now there can be, and the refused one
+    // would have rendered as a priced option beside the good one.
+    //
+    // ⛔ ONLY WHEN SOMETHING SURVIVES. If every option for a product is refused, the group is
+    // left exactly as it was: an empty section is a product silently missing from the quote,
+    // which is the failure this repo has recorded more than once. Better the loud refusal.
+    // ⚠️ The warnings box still names every refusal, because it is built from `results`, not
+    // from these groups -- so ABY and the broker see what the employer does not.
+    groups.forEach(function (g) {
+      var kept = g.results.filter(function (r) { return !r.blocked; });
+      if (kept.length && kept.length !== g.results.length) g.results = kept;
+    });
+
     var body = [];
     body.push(renderTopbar(form));
     body.push(renderHero(form, groups, quoteNumber));
@@ -891,7 +1120,7 @@ ABYQuote.renderer = (function () {
     body.push(renderAboutABY());
     body.push(renderStandardServices());
     groups.forEach(function (g) { body.push(renderProductSection(g, form)); });
-    body.push(renderTotalsSummary(groups));
+    body.push(renderTotalsSummary(groups, form));
     body.push(renderDisclosures());
     body.push(renderFileFeed());
     body.push(renderCrossSell(results.map(function (r) { return r.productId; })));

@@ -187,6 +187,27 @@ const rendererSrc = readFileSync(join(root, "public/assets/js/lib/renderer.js"),
 const appSrc = readFileSync(join(root, "public/assets/js/app.js"), "utf8");
 
 console.log("F-481 -- a signed proposal shows the signature and retires the button\n");
+// -- A NEWLINE-TOLERANT ANCHOR, BECAUSE THIS WORKING TREE IS CRLF ---------------------------
+//
+// TWO SABOTAGES BELOW SPANNED A NEWLINE AND SILENTLY STOPPED MATCHING. core.autocrlf=true, so
+// the checkout is CRLF -- 945 CRLF pairs and zero bare LF in renderer.js, measured with a raw
+// byte reader -- and a literal carrying a raw newline matches NOTHING there. The sabotage then
+// changes nothing, the rule under it stays green, and the harness says BROKEN if you are lucky
+// and nothing at all if you are not.
+//
+// THEY PASSED UNTIL THE DAY THESE FILES WERE CHECKED OUT WITH LF ENDINGS, which is what makes
+// this class of fault expensive: it turns on how the tree was WRITTEN, not on the code. A
+// single `git stash` round-trip flips it, because git normalises on the way through.
+// TRAPS #246, #299 and #378 are all this same fault. Never put a raw newline in an anchor.
+function anchor(literal) {
+  const NEWLINE = String.fromCharCode(10), ESC = String.fromCharCode(92);
+  const SPECIAL = '.*+?^${}()|[]' + ESC;
+  const quote = (t) => t.split('').map(function (ch) {
+    return SPECIAL.indexOf(ch) === -1 ? ch : ESC + ch;
+  }).join('');
+  return new RegExp(literal.split(NEWLINE).map(quote).join(ESC + 'r?' + ESC + 'n'));
+}
+
 run(rendererSrc, appSrc);
 const realFailures = fail.length;
 
@@ -201,7 +222,7 @@ if (selfTest) {
     // certifies nothing (TRAPS #243).
     ["renderer", "the Submit button comes back on a signed page",
       (s) => s.replace(
-        "      (signed\n        ? '      <div class=\"ack-submit\"><div style=\"padding:14px",
+        anchor("      (signed\n        ? '      <div class=\"ack-submit\"><div style=\"padding:14px"),
         "      (false\n        ? '      <div class=\"ack-submit\"><div style=\"padding:14px")],
     ["renderer", "field() stops preferring the signed value",
       (s) => s.replace(
@@ -228,7 +249,7 @@ if (selfTest) {
         "signed: null,")],
     ["app", "the on-screen render stops going through the builder",
       (s) => s.replace(
-        "    var html = renderFn(form, results, quoteNumber,\n      authRenderOpts({ employerEditableCounts: forEmployer }));",
+        anchor("    var html = renderFn(form, results, quoteNumber,\n      authRenderOpts({ employerEditableCounts: forEmployer }));"),
         "    var html = renderFn(form, results, quoteNumber, { includeAuthorization: true });")],
   ];
 
