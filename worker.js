@@ -18852,6 +18852,30 @@ const ABY_INTERNAL_JS = `
           copy.monthlyFee.adjusted = true;
         }
       }
+      // A PRICE ABY HAS TYPED IS A PRICE, AND THE QUOTE MUST STOP BEHAVING LIKE ONE NOBODY HAS
+      // PRICED (F-486). Eric, 2026-09-04: send the broker the quote link *"instead of it saying
+      // contact aby"*.
+      //
+      // 🔴 THE FLAG OUTLIVED THE CONDITION. tierExceeded means "this count is off the published
+      // ladder", which stays true -- but everything DOWNSTREAM reads it as "nobody has priced
+      // this": productAnnual() drops the monthly out of the Estimated Annual Total, the renderer
+      // prints contact-ABY wording, and the internal box goes red. So an agreed price still
+      // produced a quote with a short total and a refusal on it.
+      //
+      // ⛔ ONLY WHEN A MONTHLY PRICE WAS ACTUALLY SET. Typing a setup fee says nothing about the
+      // monthly administration, which is the figure the ceiling is about -- clearing the flag on
+      // any edit at all would publish an unpriced monthly under an agreed setup.
+      // ⚠️ The WARNING STRING is dropped with it. It is matched by text in collectWarnings(), so
+      // leaving it behind keeps the red note on a quote that no longer has anything wrong with it.
+      var pricedMonthly = (p.monthlyFee != null && !isNaN(p.monthlyFee))
+                       || (p.monthlyRate != null && !isNaN(p.monthlyRate));
+      if (pricedMonthly && copy.monthlyFee && copy.monthlyFee.tierExceeded) {
+        copy.monthlyFee.tierExceeded = false;
+        copy.monthlyFee.pricedAboveCeiling = true;
+        copy.warnings = (copy.warnings || []).filter(function (w) {
+          return String(w).indexOf('exceeds the highest defined pricing tier') === -1;
+        });
+      }
       copy.adjusted = true;
       return copy;
     });

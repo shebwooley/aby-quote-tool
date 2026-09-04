@@ -379,4 +379,40 @@ button.print:hover { background: var(--aby-shaded); }
   margin-bottom: 16px;
 }
 
+/* ── The broker-facing refusal for a group above the published tiers (F-486) ──────────────────
+   ⛔ IT LIVES IN app.css, NOT quote.css, AND THAT IS THE POINT. Eric, 2026-09-04: the message is
+   for the BROKER and must never appear on a client document — quote.css is the stylesheet that
+   ships inside a downloaded quote, so anything defined there travels to the employer.
+   ⚠️ It is styled rather than left bare like `.empty-state`, which matches no rule anywhere in this
+   repo and renders as unformatted text. A refusal nobody notices sends the broker hunting for a
+   quote that was never built. */
+.over-ceiling-notice {
+  border: 2px solid #b3261e;
+  border-left-width: 8px;
+  border-radius: var(--aby-radius);
+  background: #fff8f7;
+  padding: 20px 24px;
+  color: #4a1512;
+  max-width: 780px;
+}
+
+.over-ceiling-notice h3 {
+  margin: 0 0 10px;
+  font-size: 17px;
+  color: #b3261e;
+}
+
+.over-ceiling-notice ul { margin: 0 0 12px; padding-left: 20px; }
+.over-ceiling-notice li { margin-bottom: 4px; }
+.over-ceiling-notice p { margin: 0 0 10px; line-height: 1.5; }
+.over-ceiling-notice p:last-child { margin-bottom: 0; }
+
+.over-ceiling-notice .over-ceiling-contact {
+  background: #fff;
+  border: 1px solid #e6c9c6;
+  border-radius: var(--aby-radius-sm);
+  padding: 12px 14px;
+  line-height: 1.7;
+}
+
 /* Quote container styling lives in quote.css so it can also be used standalone */

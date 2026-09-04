@@ -245,7 +245,23 @@ ABYQuote.renderer = (function () {
       if (result.formulaBreakdown) aNote = result.formulaBreakdown;
       cards.push({ label: result.annualFee.label || 'Annual fee', price: u.money(result.annualFee.amount), note: aNote });
     }
-    if (result.monthlyFee) {
+    // ── AN OVER-CEILING MONTHLY IS OMITTED FROM A CLIENT DOCUMENT ENTIRELY (F-486) ───────────
+    //
+    // ⭐⭐ ERIC, 2026-09-04: *"I don't want it to show up on the quote that it's above the published
+    // pricing tier ... there should be no employer facing text - it should be broker facing text."*
+    //
+    // 🔴 THE REFUSAL ITSELF LIVES IN `generateQuote()`, before a document exists — so on any quote
+    // built from today this branch is unreachable. **It is a BACKSTOP for stored quotes**, which
+    // the shared `/q/<token>` page renders from a saved payload and which may predate that guard.
+    //
+    // ⛔ IT PRINTS NEITHER THE NUMBER NOR AN EXPLANATION, and both halves are deliberate. The
+    // number is the top tier's rate times the count — a figure ABY never agreed, and the thing a
+    // broker could be held to. The explanation is the internal rate ladder, which is not the
+    // employer's business. **Saying nothing is the only option that is neither.**
+    // ⚠️ The broker still sees it: `renderWarnings` is `includeWarnings`-gated and untouched.
+    if (result.monthlyFee && result.monthlyFee.tierExceeded) {
+      // nothing — see above
+    } else if (result.monthlyFee) {
       var mNote = [];
       if (result.monthlyFee.tierLabel) mNote.push(esc(result.monthlyFee.tierLabel));
       if (result.monthlyFee.breakdown) mNote.push(esc(result.monthlyFee.breakdown));

@@ -127,12 +127,38 @@ ABYQuote.engine = (function () {
     }
 
     // Count exceeds all defined tiers → flag for follow-up
+    //
+    // 🔴🔴 `_m` IS CARRIED HERE, AND ITS ABSENCE WAS THE WHOLE REASON A BIG GROUP COULD NOT BE
+    // HAND-PRICED (F-486, Eric 2026-09-04: *"would it be possible for those bigger groups to enter
+    // the count and the monthly pppm?"*).
+    //
+    // ⭐ THE ANSWER WAS NO, AND NOT FOR THE REASON ANYBODY ASSUMED. `/aby`'s Set mode has carried a
+    // **Per participant** box for weeks and `applySetPrice` handles a typed rate properly — but its
+    // whole branch is guarded on `copy.monthlyFee._m`, which is where the COUNT lives. Every other
+    // return in this function attaches `_m`; this one did not, so the one population the box exists
+    // for was the one population it silently skipped. **A typed rate did nothing and said nothing.**
+    //
+    // ⚠️ `lo` IS ONE PAST THE LADDER AND `hi` IS OPEN, deliberately: the band being priced is
+    // "larger than anything published", so an employer who later corrects the headcount upward is
+    // still inside the band ABY agreed a rate for, and F-367's count box re-prices at that rate
+    // rather than deferring. ⛔ It must not claim the LAST PUBLISHED band — that is the band this
+    // group is not in.
     var lastTier = monthlyTiers[monthlyTiers.length - 1];
+    var exceededKind = lastTier.type === 'flat' ? 'flat' : 'pppm';
     return {
       amount: lastTier.type === 'flat' ? lastTier.amount : (lastTier.amount * count),
       tierLabel: 'count exceeds defined tiers',
       breakdown: 'Pricing for ' + count + ' exceeds defined tiers — contact ABY for custom quote',
-      tierExceeded: true
+      tierExceeded: true,
+      count: count,
+      _m: {
+        kind: exceededKind,
+        rate: lastTier.amount,
+        min: lastTier.minMonthly || 0,
+        count: count,
+        lo: (lastTier.maxCount || 0) + 1,
+        hi: null
+      }
     };
   }
 

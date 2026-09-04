@@ -884,6 +884,63 @@
   // Generate quote
   // -------------------------------------------------------------
 
+  /**
+   * THE BROKER-FACING REFUSAL. Never rendered into a client document (F-486).
+   *
+   * ⛔ IT NAMES THE PRODUCTS AND THE COUNT, because "this group is too large" with no detail sends
+   * the broker back to the form to guess which line caused it. A refusal that does not say what to
+   * change is a dead end.
+   * ⭐ AND IT SAYS SOMETHING DIFFERENT TO ABY, because ABY can fix it on this very screen — the Set
+   * mode's Setup and Monthly boxes are what Eric asked to be able to use. A broker cannot, so they
+   * get the contact details instead.
+   */
+  function renderOverCeilingNotice(overCeiling) {
+    var esc = ABYQuote.utils.escapeHtml;
+    var items = overCeiling.map(function (r) {
+      var p = ABYQuote.products.find(function (x) { return x.id === r.productId; });
+      var name = p ? (p.shortName || p.name) : r.productId;
+      var noun = (p && p.countLabel) || 'participants';
+      var n = r.monthlyFee && r.monthlyFee.count;
+      return '<li><strong>' + esc(name) + '</strong>' +
+             (n != null ? ' — ' + esc(String(n)) + ' ' + esc(noun) : '') + '</li>';
+    }).join('');
+
+    // ⭐ NIELS FIRST, THEN ERIC — Eric's own call, 2026-09-04: *"can you put Niels' name on top and
+    // mine below?"* ⛔ Expressed as an explicit ID ORDER rather than by reordering `reps.js`,
+    // because that array also drives the rep PICKER on the form and reordering it would quietly
+    // change which rep a new quote defaults to. Two different orderings, one list.
+    //
+    // ⚠️ THE NUMBERS ARE READ FROM `reps.js`, NEVER TYPED HERE. They were hardcoded on the first
+    // pass, which is a second copy of a phone number: change it in `reps.js` and this notice keeps
+    // handing brokers the old one, with nothing going red.
+    var CONTACT_ORDER = ['niels', 'eric'];
+    var reps = ABYQuote.salesReps || [];
+    var contacts = CONTACT_ORDER
+      .map(function (id) { return reps.find(function (r) { return r.id === id; }); })
+      .filter(Boolean)
+      // Anyone added to reps.js later still appears, just after the two named above.
+      .concat(reps.filter(function (r) { return CONTACT_ORDER.indexOf(r.id) === -1; }))
+      .map(function (r) {
+        return '<strong>' + esc(r.name) + '</strong> ' + esc(r.phone) + ' · ' + esc(r.email);
+      })
+      .join('<br>');
+
+    var internal = !!window.ABY_INTERNAL;
+    var what = internal
+      ? '<p>Set a price for it below — <strong>Set mode</strong> takes a setup fee, a monthly ' +
+        'admin fee, or a per participant rate — then run the quote again. Once a price is set the ' +
+        'quote builds normally and can be shared with the broker.</p>'
+      : '<p>ABY prices groups this size individually, so this quote has not been created. ' +
+        'Contact ABY and we will price it for you, usually the same day.</p>' +
+        (contacts ? '<p class="over-ceiling-contact">' + contacts + '</p>' : '');
+
+    return '<div class="over-ceiling-notice">' +
+      '<h3>This group is larger than our published pricing tiers</h3>' +
+      '<ul>' + items + '</ul>' +
+      what +
+      '</div>';
+  }
+
   function generateQuote(e) {
     if (e) e.preventDefault();
     var form = readForm();
@@ -1021,6 +1078,33 @@
     }
 
     var results = ABYQuote.engine.calculateAll(expanded, form.commissioned);
+
+    // ── A GROUP ABOVE THE PUBLISHED TIERS DOES NOT PRODUCE A QUOTE AT ALL (F-486) ───────────
+    //
+    // ⭐⭐ ERIC, 2026-09-04, correcting an earlier attempt at this: *"I don't want it to show up on
+    // the quote that it's above the published pricing tier, i want it to show up for the broker
+    // when they try to quote a group above the published pricing tier. It shouldn't create the
+    // quote at all - it should direct them to us."*
+    //
+    // 🔴 THE FIRST VERSION PUT THE MESSAGE ON THE EMPLOYER'S DOCUMENT, and that was wrong twice
+    // over: it told the employer about ABY's internal rate ladder, and it still produced a
+    // SENDABLE quote for a group ABY has not priced. **The refusal belongs here, before a
+    // document exists** — which is also the only place that stops the download, PDF, save and
+    // share paths without each of them needing a guard of its own.
+    //
+    // ⭐ ONE TEST SERVES BOTH AUDIENCES, and that falls out of where the ABY overlay sits: it
+    // patches `calculateAll` and runs `applySetPrice` INSIDE it, so by the time results arrive
+    // here an ABY-priced group has already had `tierExceeded` cleared and passes straight through.
+    // A broker, and an ABY user who has not typed a price yet, are stopped identically — and the
+    // message tells each of them the thing they can actually do about it.
+    var overCeiling = results.filter(function (r) {
+      return r.monthlyFee && r.monthlyFee.tierExceeded;
+    });
+    if (overCeiling.length) {
+      outputEl.innerHTML = renderOverCeilingNotice(overCeiling);
+      return;
+    }
+
     var quoteNumber = resolveQuoteNumber(carriedQuoteNumber, form.commissioned, function () {
       return ABYQuote.utils.generateQuoteNumber(form.effectiveDate, form.commissioned);
     });
