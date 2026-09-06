@@ -6975,9 +6975,14 @@ ${abyAdminNav('/admin/brokers')}
           <p class="sub" style="margin:0 0 8px">Everything else on this page is organized by firm.
             <strong>This is the flat list</strong> &mdash; one row per person, whether or not we
             know where they work &mdash; and the only place somebody with no firm on file appears
-            at all. <strong>Set <em>Firm: none on file</em> and work down the list:</strong> start
-            typing a firm beside a name and it offers the ones we already have, so nobody gets a
-            second record and no firm gets a second spelling. Anybody marked <em>do not contact</em>
+            at all. <strong>A blank firm is normal here and is not a gap to close.</strong> Eric,
+            2026-09-05: these are licensed agents in other states, added to the prospect list, and
+            <em>we do not know and cannot find out what firm they are with</em> &mdash; which is why
+            they are listed apart from the firms. About a quarter of the register is like this
+            permanently, so there is nothing to work down. <strong>Use the firm picker when you
+            LEARN where somebody works</strong> &mdash; you meet them, or they mail from a firm
+            domain: start typing beside their name and it offers the ones we already have, so
+            nobody gets a second record and no firm gets a second spelling. Anybody marked <em>do not contact</em>
             or <em>deceased</em> is never in these results; their record is still on their firm's
             panel, which is where the reason is kept. <strong>Browsing hides people somebody has
             already taken off the list</strong> &mdash; searching by name finds them anyway, because
