@@ -460,3 +460,23 @@ button.print:hover { background: var(--aby-shaded); }
 }
 
 /* Quote container styling lives in quote.css so it can also be used standalone */
+
+/* THE BROKER'S DOOR, top right. The header is already flex / space-between, so this needs
+   no layout change - only a look. Deliberately QUIET: it is an invitation, not a call to
+   action, because quoting is not gated on it and a loud button would imply that it is. */
+.app-account {
+  flex: 0 0 auto;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--aby-blue-dark);
+  text-decoration: none;
+  border: 1px solid var(--aby-border);
+  border-radius: 8px;
+  padding: 7px 14px;
+  white-space: nowrap;
+  background: #fff;
+}
+.app-account:hover { background: var(--aby-blue); color: #fff; border-color: var(--aby-blue); }
+/* NEVER ON A PRINTED PROPOSAL. This page's output is handed to an employer, and the ABY
+   admin bar above it hides itself in print for exactly the same reason. */
+@media print { .app-account { display: none; } }

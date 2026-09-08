@@ -17,6 +17,13 @@
       <h1>ABY Quote Tool <span class="state-tag">Texas</span></h1>
       <div class="subtitle">Generate a client-ready proposal</div>
     </div>
+    <!-- THE BROKER'S DOOR. The account system at /broker has been live since 2026-08-18
+         and NOTHING on this site pointed at it, which is why `brokers` holds zero rows.
+         Measured on the live page 2026-09-08: three href values, all stylesheets, and the
+         words sign in / log in / create an account appear zero times.
+         It does NOT gate anything - quoting still works signed out. -->
+    <a class="app-account" id="abyAccountLink" href="/broker"
+       title="Sign in or create an account to keep your details and see your quotes">Broker sign in</a>
   </header>
 
   <form id="quoteForm">
@@ -151,6 +158,7 @@
 <script src="assets/js/app.js"></script>
 
 <!-- Backend integration: saves each quote to the database -->
+<script src="assets/js/account-link.js"></script>
 <script src="save-hook.js"></script>
 
 </body>
