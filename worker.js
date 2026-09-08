@@ -19,6 +19,25 @@ const COOKIE_NAME = 'aby_admin';
 // it can be shared with brokers. Flip to false (and redeploy) to reopen the tool.
 const SITE_LOCKED = false;
 
+// BROKER LOGIN REQUIRED TO QUOTE. Eric, 2026-09-08: 'I would like to set it up where a broker
+// has to log in in order to quote. That way, we will know who is running the quote.'
+//
+// SHIPS OFF. The mechanism is built and tested; turning it on puts a wall on a live tool, which
+// is a decision rather than a deployment. Flip to true and redeploy - there is nothing else to
+// do, and nothing to undo but this line.
+//
+// WHY IT IS SAFE TO TURN ON, AND BOTH HALVES WERE MEASURED ON 2026-09-08:
+//   1. ABY STAFF ARE NOT AFFECTED. They quote through /aby, a separate route behind the admin
+//      cookie which serves this same page with the internal overlay injected. This gate is on
+//      the PUBLIC form only. That is the fact that would have made switching it on dangerous,
+//      and it is not true.
+//   2. NO BROKER IS USING THE PUBLIC FORM. Of 6,191 saved quotes, 6,190 are ran_by = ABY and
+//      exactly one is ran_by = broker, from 2026-08-26.
+//
+// WHAT IT BUYS: a saved quote can finally NAME the broker who ran it. Today a broker-run quote
+// stores ran_by = broker and ran_by_who = null, because there is no session to read a name from.
+const BROKER_LOGIN_REQUIRED = false;
+
 // The admin guide, GENERATED from docs/admin-guide.md by scripts/build_guide.mjs.
 // Eric, 2026-08-23, asked for the explanation to live in the app rather than only in the notes.
 // It is imported rather than written here because the markdown is the only copy: two hand-kept
@@ -349,6 +368,18 @@ export default {
       }
     }
 
+    // ── The broker gate, on the PUBLIC quote form only ─────────────────────────
+    // OFF unless BROKER_LOGIN_REQUIRED is true. It sends a signed-out visitor to the door
+    // rather than showing a dead end, and it deliberately does NOT touch /aby, /admin, the
+    // shared /q/ proposal links, the assets, or any API the page needs to render.
+    if (BROKER_LOGIN_REQUIRED && (path === '/' || path === '/index.html')) {
+      const who = await currentBroker(request, env);
+      const staff = who ? null : await isAuthed(request, env);
+      if (!who && !staff) {
+        return Response.redirect(new URL('/broker?next=quote', request.url).toString(), 302);
+      }
+    }
+
     // ── Static assets ───────────────────────────────────────────────────────────
     return env.ASSETS.fetch(request);
   }
@@ -357,6 +388,14 @@ export default {
 // ─── Quote: save ───────────────────────────────────────────────────────────────
 
 async function handleSaveQuote(request, env, ctx) {
+  // THE GATE IS ON THE SAVE TOO, NOT ONLY THE PAGE. A wall on the form with an open endpoint
+  // underneath is not a refusal - TRAPS #386: a refusal that still produces the document has
+  // not refused. Anyone could post straight to this route.
+  const me = await currentBroker(request, env);
+  if (BROKER_LOGIN_REQUIRED && !me && !(await isAuthed(request, env))) {
+    return jsonResp({ error: 'Please sign in to save a quote.' }, 401);
+  }
+
   let body;
   try { body = await request.json(); }
   catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
