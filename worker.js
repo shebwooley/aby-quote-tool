@@ -16618,7 +16618,12 @@ td.repcell{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
 .ip-failed{background:#fdecea;box-shadow:inset 0 0 0 2px #c0392b}
 /* The placeholder is a SIBLING, not the field's own text: text inside a contenteditable would be
    saved as the value the moment somebody clicked in and out again. */
-.ip-ph{color:#bbb;font-style:italic;pointer-events:none}
+/* ⭐ Pointer events ON, and a text cursor, because the placeholder IS what a person aims at on an
+   empty field. It used to be click-through, which made a blank cell unreachable: the editor beside
+   it is only two characters wide when empty. A mousedown handler focuses the real editor, so the
+   placeholder behaves like the thing it stands in for. It is still hidden on hover and on focus.
+   NOTE, no backticks anywhere in this file: it is one giant template literal. */
+.ip-ph{color:#bbb;font-style:italic;pointer-events:auto;cursor:text}
 .ip:focus + .ip-ph,.ip:hover + .ip-ph{display:none}
 tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px solid #d4ead9}
 .detail-inner{max-width:none}
@@ -16980,6 +16985,26 @@ document.addEventListener('DOMContentLoaded', function () {
   // the click here does not stop you editing.)
   tb.addEventListener('click', function (e) {
     if (e.target.closest('.ip')) e.stopPropagation();
+  }, true);
+
+  // 🔴 AN EMPTY FIELD WAS EFFECTIVELY UNEDITABLE, AND IT READ AS "the log will not let me edit it".
+  // Eric, 09-10-2026, on a quote with no employer name: "it won't let me edit it, even though most
+  // other fields on the log are editable."
+  // ⭐ THE FIELD WAS ALWAYS EDITABLE. The editor is a contenteditable span with min-width 2ch, and
+  // when it is EMPTY that is the entire click target - a sliver about two characters wide. The
+  // words a person actually aims at are the placeholder beside it, which had pointer events turned
+  // OFF, so the click fell straight through to the row and expanded it instead.
+  // ⛔ So this was not a missing feature and not a permissions problem: it was a target you could
+  // not hit. Widening the editor was the other option and it would push every populated row's
+  // layout around to fix a case that only shows on blank ones.
+  tb.addEventListener('mousedown', function (e) {
+    var ph = e.target.closest('.ip-ph');
+    if (!ph) return;
+    var el = ph.previousElementSibling;
+    if (!el || !el.classList.contains('ip')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    el.focus();
   }, true);
 
   tb.addEventListener('keydown', function (e) {
