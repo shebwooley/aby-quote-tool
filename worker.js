@@ -2225,7 +2225,14 @@ async function withAuth(request, env, handler) {
   // it; one that does not, does not. ⛔ It is NOT put on `request` -- a handler reading identity
   // off a request object is a handler that can be given one by a caller who should not.
   const who = await tokenIdentity(token, env);
-  if (who) return withSessionGuard(await handler(who));
+  // ⛔ withSessionGuard IS DISCONNECTED, 09-10-2026, MINUTES AFTER IT SHIPPED. Eric: "The
+  // commitments page is messed up again." It rewrote every authed HTML response to inject a
+  // redirect-on-401, and that is too much machinery to have in the path of every admin page for a
+  // convenience feature. The function is kept below with its reasoning so the idea is not lost,
+  // but nothing calls it: restoring the page mattered more than diagnosing it in place.
+  // ▶️ If it is tried again, do it WITHOUT touching the response body - a small script included by
+  // each page, or a client-side wrapper in ABY_INTERNAL_JS, which is already loaded everywhere.
+  if (who) return handler(who);
 
   // API routes: return JSON 401 so the admin JS can show a real error message
   if (new URL(request.url).pathname.startsWith('/api/')) {
@@ -17034,18 +17041,21 @@ ${abyAdminNav('/admin')}
   <table id="ctable" style="width:100%;border-collapse:collapse;font-size:13px">
     <thead>
       <tr>
-        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0;white-space:nowrap">Submitted</th>
+        <!-- ⭐ SIX COLUMNS, DOWN FROM NINE, ON ERIC'S INSTRUCTION 09-10-2026: "you have too much
+             stuff side by side instead of having it stacked like on the quote log page."
+             The quote log's pattern is one column per THING, with the detail stacked under it in
+             smaller muted text - broker name with the agency beneath it. This now does the same:
+             the quote number carries the submitted date, and the signer carries the title, email
+             and phone. ⛔ Nothing was removed except the address (see the row builder). -->
         <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Quote #</th>
         <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Employer</th>
         <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Broker</th>
-        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Auth Signer</th>
-        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Email / Phone</th>
-        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Start Date</th>
-        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Products</th>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Signed by</th>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0;white-space:nowrap">Start / Products</th>
         <th style="padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0"></th>
       </tr>
     </thead>
-    <tbody id="ctbody"><tr><td colspan="9" style="padding:20px;color:#888;text-align:center">Loading…</td></tr></tbody>
+    <tbody id="ctbody"><tr><td colspan="6" style="padding:20px;color:#888;text-align:center">Loading…</td></tr></tbody>
   </table>
 </div>
 </main>
@@ -18437,14 +18447,14 @@ async function loadCommitments() {
       var eact = res.status === 401
         ? ' <a href="/admin" style="color:#0b5fff;text-decoration:underline">Sign in again</a>'
         : '';
-      ctbody.innerHTML = '<tr><td colspan="9" style="padding:16px;color:#c00;text-align:center">'
+      ctbody.innerHTML = '<tr><td colspan="6" style="padding:16px;color:#c00;text-align:center">'
         + emsg + eact + '</td></tr>';
       return;
     }
     const data = await res.json();
     const rows = data.commitments || [];
     document.getElementById('count').textContent = rows.length + ' commitment' + (rows.length !== 1 ? 's' : '');
-    if (!rows.length) { ctbody.innerHTML = '<tr><td colspan="9" style="padding:20px;color:#888;text-align:center">No commitments yet.</td></tr>'; return; }
+    if (!rows.length) { ctbody.innerHTML = '<tr><td colspan="6" style="padding:20px;color:#888;text-align:center">No commitments yet.</td></tr>'; return; }
     ctbody.innerHTML = rows.map(function(c) {
       var dt = new Date(c.submitted_at);
       var dateStr = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -18468,18 +18478,38 @@ async function loadCommitments() {
         return out;
       };
       var productNames = products.map(function(p){ return p.name || String(p); }).join('<br>');
+      // ⭐ SUB-LINE: the quote log's own pattern - the detail sits UNDER the thing it belongs to,
+      // muted and smaller, instead of claiming a column of its own.
+      var sub = function(v) {
+        return v ? '<br><span style="color:#777;font-size:12px">' + v + '</span>' : '';
+      };
       return '<tr class="c-row">' +
-        td(dateStr, ';white-space:nowrap') +
-        td('<strong>' + (c.quote_number || '') + '</strong>') +
-        td((c.employer_name || '') + (c.address ? '<br><span style="color:#777;font-size:12px">' + c.address + (c.city_state_zip ? ', ' + c.city_state_zip : '') + '</span>' : '')) +
+        // Submitted date moved UNDER the quote number. It is a fact ABOUT the quote and it was
+        // taking a whole nowrap column at the left of the table.
+        td('<strong>' + (c.quote_number || '') + '</strong>' + sub(dateStr)) +
+        // ⛔ THE ADDRESS IS GONE. Eric, 09-10-2026: "Not sure why we need the address to show under
+        // the company name, that's weird." It is on the signed document and in the JSON export,
+        // which is where an address is actually used; on a list of who has signed it is noise
+        // under every row. Nothing is lost - the row still opens to the full record.
+        td(c.employer_name || '') +
         // Broker. Named on the row itself for anything signed after the migration; recovered
         // through the quote only for older rows, which is why the agency line is muted and
         // why an unknown broker prints an em dash rather than being left blank.
         td(brokerCellFor(c)) +
-        td((c.auth_signer || '') + (c.auth_title ? '<br><span style="color:#777;font-size:12px">' + c.auth_title + '</span>' : '')) +
-        td((c.auth_email ? '<a href="mailto:' + c.auth_email + '">'  + c.auth_email + '</a>' : '') + (c.auth_phone ? '<br>' + c.auth_phone : '')) +
-        td(c.start_date || '') +
-        td(productNames) +
+        // ⭐ SIGNER, TITLE, EMAIL AND PHONE IN ONE STACKED CELL. They are four facts about one
+        // person and they were spread across two columns.
+        // 🔴 THE overflow-wrap RULE IS THE FIX FOR ERIC'S SECOND POINT: "some text from the email
+        // goes over the start date." An address like debbiec@schaeferadvertising.com has no space
+        // in it, so a table cell will not break it and it simply runs into the next column. A
+        // width cap alone would not help - the word still has to be allowed to break.
+        td((c.auth_signer || '') + sub(c.auth_title) +
+           (c.auth_email ? '<br><a href="mailto:' + c.auth_email + '" style="font-size:12px">'
+              + c.auth_email + '</a>' : '') +
+           sub(c.auth_phone),
+           ';max-width:240px;overflow-wrap:anywhere') +
+        // Start date with the products stacked beneath it, muted - the same shape as the broker
+        // cell on the quote log.
+        td('<span style="white-space:nowrap">' + (c.start_date || '—') + '</span>' + sub(productNames)) +
         '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top;white-space:nowrap">' +
           // ⭐⭐ THE SIGNED PROPOSAL ITSELF (F-416). Eric asked for the proposal LINK to come back
           // with the signature -- "so we receive the proposal link with the original quote and the
@@ -18509,7 +18539,7 @@ async function loadCommitments() {
     }).join('');
     commitmentsLoaded = true;
   } catch(err) {
-    ctbody.innerHTML = '<tr><td colspan="9" style="padding:16px;color:#c00;text-align:center">Network error.</td></tr>';
+    ctbody.innerHTML = '<tr><td colspan="6" style="padding:16px;color:#c00;text-align:center">Network error.</td></tr>';
   }
 }
 
