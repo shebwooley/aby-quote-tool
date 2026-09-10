@@ -619,22 +619,74 @@ async function handleSaveQuote(request, env, ctx) {
       // `id`, `quote_number` and `created_at` are deliberately NOT updated. The number keeps its
       // ORIGINAL creation date because that date is embedded in it -- a moving date is a moving
       // number, which is the bug (Eric raised this himself).
+      // 🔴🔴 A BLANK POSTED VALUE MUST NOT ERASE A VALUE THAT IS ALREADY THERE.
+      //
+      // Eric, 09-10-2026: "Why the hell did everything disappear when it went to in process? It
+      // doesn't have my name as the rep and doesn't have the effective date and didn't have the
+      // name. I put everything on the proposal, but it's not in the log."
+      //
+      // ⭐ HE DID PUT THEM IN. This statement used to set every column from the posted body
+      // unconditionally, so ANY re-save that did not repopulate the form wrote empty strings over
+      // good data - the employer name, the effective date, the rep, the broker. TX260908-5560-C
+      // reached revision 2 with all four blank and a signed commitment against it.
+      // ⛔ AND IT TOOK THE ATTRIBUTION WITH IT: `ran_by` was overwritten too, so a quote correctly
+      // saved as ABY/eric came back as broker with no name the moment it was re-saved without a
+      // session. That is the "why does it say broker when I ran it" question, and it is not the
+      // 2026-08-28 session bug returning - it is this line.
+      //
+      // ⭐ THE GUARD ALREADY EXISTED, ON EXACTLY ONE COLUMN. `client_id` has always been written
+      // as CASE WHEN ? <> '' THEN ? ELSE client_id END. Somebody understood the hazard and fixed
+      // the field in front of them rather than the shape - TRAPS #197 / #411.
+      //
+      // ⚠️ THE TRADE, STATED: you can no longer CLEAR one of these from the quoting form by
+      // blanking it and re-saving. That is deliberate. Clearing is a deliberate act and it belongs
+      // on the log, where `handleQuoteEdit` already has the right rule - absent means leave it,
+      // and an explicitly sent empty string clears it. Silent loss on every re-save is much worse
+      // than needing a second screen to blank a field on purpose.
+      //
+      // ⚠️ `commission_included`, `products`, `state` and the adjustment are NOT guarded, on
+      // purpose: those are the quote's actual content, they are always posted by the pricing form,
+      // and "no products" is a real answer rather than an absence.
+      const keep = function (v) { return String(v == null ? '' : v).trim(); };
       await env.DB.prepare(`
         UPDATE quotes SET
-          client_name = ?, client_match_key = ?, effective_date = ?,
-          broker_name = ?, broker_agency = ?, broker_phone = ?, broker_email = ?,
-          rep_name = ?, rep_phone = ?, rep_email = ?, commission_included = ?, products = ?,
-          ran_by = ?, ran_by_who = ?, state = ?, adjustment = ?, adjustment_note = ?,
+          client_name      = CASE WHEN ? <> '' THEN ? ELSE client_name END,
+          client_match_key = CASE WHEN ? <> '' THEN ? ELSE client_match_key END,
+          effective_date   = CASE WHEN ? <> '' THEN ? ELSE effective_date END,
+          broker_name      = CASE WHEN ? <> '' THEN ? ELSE broker_name END,
+          broker_agency    = CASE WHEN ? <> '' THEN ? ELSE broker_agency END,
+          broker_phone     = CASE WHEN ? <> '' THEN ? ELSE broker_phone END,
+          broker_email     = CASE WHEN ? <> '' THEN ? ELSE broker_email END,
+          rep_name         = CASE WHEN ? <> '' THEN ? ELSE rep_name END,
+          rep_phone        = CASE WHEN ? <> '' THEN ? ELSE rep_phone END,
+          rep_email        = CASE WHEN ? <> '' THEN ? ELSE rep_email END,
+          commission_included = ?, products = ?,
+          ran_by     = CASE WHEN ? <> '' THEN ? ELSE ran_by END,
+          ran_by_who = CASE WHEN ? <> '' THEN ? ELSE ran_by_who END,
+          state = ?, adjustment = ?, adjustment_note = ?,
           client_id = CASE WHEN ? <> '' THEN ? ELSE client_id END,
           revision = COALESCE(revision, 1) + 1
         WHERE quote_number = ?
       `).bind(
-        clientName, normName(clientName), effectiveDate,
-        brokerName, brokerAgency, brokerPhone, brokerEmail,
-        repName, repPhone, repEmail,
+        keep(clientName), clientName,
+        keep(clientName), normName(clientName),
+        keep(effectiveDate), effectiveDate,
+        keep(brokerName), brokerName,
+        keep(brokerAgency), brokerAgency,
+        keep(brokerPhone), brokerPhone,
+        keep(brokerEmail), brokerEmail,
+        keep(repName), repName,
+        keep(repPhone), repPhone,
+        keep(repEmail), repEmail,
         commissionIncluded ? 1 : 0,
         productsJson,
-        ranBy, ranByWho, stateCode, adjustmentJson, adjustmentNoteVal,
+        // ⛔ ONLY AN AUTHENTICATED SAVE MAY RESTAMP ATTRIBUTION. `ranBy` is 'broker' whenever there
+        // is no session, so passing it unguarded is what downgraded ABY quotes to broker. A save
+        // with no session now leaves the existing attribution alone rather than overwriting it
+        // with the absence of a login.
+        ranByWho ? 'ABY' : '', ranBy,
+        ranByWho, ranByWho,
+        stateCode, adjustmentJson, adjustmentNoteVal,
         String(clientId || ''), String(clientId || ''),
         quoteNumber
       ).run();
@@ -2098,7 +2150,16 @@ async function handleLogin(request, env) {
   return new Response(JSON.stringify({ ok: true, who }), {
     headers: {
       'Content-Type': 'application/json',
-      'Set-Cookie': `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400`,
+      // ⭐ THIRTY DAYS, RAISED FROM ONE ON ERIC'S INSTRUCTION 09-10-2026: "Yes I'd like to stay
+      // signed in longer." The old 86400 expired the session daily, silently, on a page that
+      // stayed open and looked signed in - which cost a "the commitments are broken" report and,
+      // worse, quotes saved with no attribution and no rep because the save could not see a login.
+      // ⚠️ WHAT MAKES A LONG SESSION DEFENSIBLE IS THE THROTTLE ABOVE, not the length. The cookie
+      // is HttpOnly, Secure and SameSite=Strict, so it is not readable by script and does not
+      // travel cross-site. The real exposure a 30-day cookie adds is a lost or shared device.
+      // ⛔ Do not raise it further without saying so: the broker cookie is 30 days for the same
+      // reason and these two should not drift apart quietly.
+      'Set-Cookie': `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${60 * 60 * 24 * 30}`,
     },
   });
 }
@@ -2112,6 +2173,49 @@ function handleLogout() {
   });
 }
 
+/**
+ * WHEN THE SESSION LAPSES, GO BACK TO THE LOGIN INSTEAD OF SITTING THERE LOOKING FINE.
+ *
+ * ⭐⭐ ERIC, 09-10-2026: "if it lapses, it would be nice if it went back to the login screen
+ * instead of staying open."
+ *
+ * 🔴 THE FAILURE THIS ENDS. An admin page that is open when the cookie expires still LOOKS signed
+ * in - the markup is already rendered. Every fetch it makes then 401s, and each screen decides for
+ * itself how to say so. That is how "the commitments are broken" happened: the server said the
+ * session had expired and one list turned that into a loading error.
+ *
+ * ⛔ INJECTED IN ONE PLACE, NOT FIFTEEN. Every admin page is served through withAuth, so patching
+ * it here means a new page cannot be added without the guard. Fifteen copies of a rule is fifteen
+ * chances for the sixteenth to be forgotten.
+ *
+ * ⚠️ HTML ONLY. withAuth also wraps JSON API routes, and rewriting one of those would corrupt it.
+ * ⚠️ It reads the response body, so it is confined to text/html - the pages are a few hundred KB
+ * and already fully buffered.
+ */
+async function withSessionGuard(resp) {
+  try {
+    const ct = resp.headers.get('Content-Type') || '';
+    if (!ct.includes('text/html')) return resp;
+    const body = await resp.text();
+    if (!body.includes('</body>')) return new Response(body, resp);
+    // No backticks anywhere: this whole file is one template literal.
+    const guard =
+      '<script>(function(){' +
+        'var f=window.fetch;' +
+        'window.fetch=function(){' +
+          'return f.apply(this,arguments).then(function(r){' +
+            'if(r&&r.status===401){try{sessionStorage.setItem("aby_lapsed","1");}catch(e){}' +
+            'location.href="/admin";}' +
+            'return r;});' +
+        '};' +
+      '})();</script>';
+    return new Response(body.replace('</body>', guard + '</body>'), resp);
+  } catch {
+    // A guard that cannot be added must never cost the page. Serve it unmodified.
+    return resp;
+  }
+}
+
 async function withAuth(request, env, handler) {
   const cookies = parseCookies(request.headers.get('Cookie') || '');
   const token   = cookies[COOKIE_NAME];
@@ -2121,7 +2225,7 @@ async function withAuth(request, env, handler) {
   // it; one that does not, does not. ⛔ It is NOT put on `request` -- a handler reading identity
   // off a request object is a handler that can be given one by a caller who should not.
   const who = await tokenIdentity(token, env);
-  if (who) return handler(who);
+  if (who) return withSessionGuard(await handler(who));
 
   // API routes: return JSON 401 so the admin JS can show a real error message
   if (new URL(request.url).pathname.startsWith('/api/')) {
@@ -2303,8 +2407,15 @@ async function sendCommitmentEmail(env, c) {
  * sent" would let this endpoint write `status`, `first_year_value`, `source_tag` or `client_id`
  * -- fields that other code DERIVES and that a person editing a name must not be able to reach.
  */
+// ⭐ `rep_name` AND `ran_by_who` ADDED 09-10-2026, ON ERIC'S INSTRUCTION. A quote saved without a
+// session lost its rep and its attribution, and there was nowhere to put them back: the rep was on
+// the quoting form only, and who-ran-it was server-stamped and never editable. Eric: "Make it
+// editable."
+// ⚠️ `ran_by` ITSELF IS NOT EDITABLE, AND THAT IS THE POINT. It is derived: setting a person
+// implies ABY, and clearing the person implies broker. Two typed columns that must agree is how
+// they come to disagree - see the note in handleQuoteEdit where that derivation lives.
 const QUOTE_EDITABLE = ['client_name', 'broker_name', 'broker_agency', 'broker_email',
-                        'broker_phone', 'effective_date'];
+                        'broker_phone', 'effective_date', 'rep_name', 'ran_by_who'];
 
 async function handleQuoteEdit(request, id, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
@@ -2346,6 +2457,18 @@ async function handleQuoteEdit(request, id, env) {
       if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v)) {
         return jsonResp({ error: 'Effective date must be a real date.' }, 400);
       }
+    }
+
+    // ⭐ SETTING WHO RAN IT ALSO SETS WHICH LOGIN IT CAME THROUGH, because one implies the other.
+    // Naming a person means an ABY login; clearing the person means it did not come through one.
+    // ⛔ `ran_by` is NOT separately editable. Two typed columns that must agree is exactly how they
+    // come to disagree, and this pair already did: the whole reason a correction is needed here is
+    // that a re-save wrote 'broker' while the person column was blanked in the same statement.
+    // ⚠️ The vocabulary is fixed by everything that reads it - the log filter, the origin badge and
+    // the roll-ups - so a name is accepted but the LOGIN is only ever ABY or broker.
+    if (col === 'ran_by_who') {
+      sets.push('ran_by = ?');
+      vals.push(v ? 'ABY' : 'broker');
     }
     if (col === 'broker_email') v = v.toLowerCase();
     sets.push(col + ' = ?');
