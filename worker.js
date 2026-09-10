@@ -18276,7 +18276,23 @@ async function loadCommitments() {
   const ctbody = document.getElementById('ctbody');
   try {
     const res = await fetch('/api/commitments');
-    if (!res.ok) { ctbody.innerHTML = '<tr><td colspan="9" style="padding:16px;color:#c00;text-align:center">Error loading commitments.</td></tr>'; return; }
+    // THE SERVER ALREADY SAYS WHY, AND THIS THREW IT AWAY. Eric hit it 09-10-2026: the admin
+    // cookie is Max-Age 86400, so a tab left open overnight fetches with no cookie, gets a 401
+    // carrying {error: Session expired - please log in again}, and the screen said
+    // "Error loading commitments." - which reads as a broken feature rather than a signed-out
+    // session, and sends the reader looking for a bug that is not there.
+    // Nearly every other loader in this file already shows d.error. This one did not.
+    // TRAPS #82: a UI that collapses every failure into one sentence is undiagnosable.
+    if (!res.ok) {
+      var derr = await res.json().catch(function(){ return {}; });
+      var emsg = esc(derr.error || ('Error loading commitments (HTTP ' + res.status + ').'));
+      var eact = res.status === 401
+        ? ' <a href="/admin" style="color:#0b5fff;text-decoration:underline">Sign in again</a>'
+        : '';
+      ctbody.innerHTML = '<tr><td colspan="9" style="padding:16px;color:#c00;text-align:center">'
+        + emsg + eact + '</td></tr>';
+      return;
+    }
     const data = await res.json();
     const rows = data.commitments || [];
     document.getElementById('count').textContent = rows.length + ' commitment' + (rows.length !== 1 ? 's' : '');

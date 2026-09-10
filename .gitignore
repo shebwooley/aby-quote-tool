@@ -17,3 +17,14 @@ scripts/.crm-sabotage.*
 
 # The CRM checker's single-run lock.
 scripts/.crm-check.lock
+
+# ⛔ SCRATCH CREDENTIAL FILES. A session that needs CLOUDFLARE_API_TOKEN or API_KEY in the shell
+# writes it to a file here, and `git add -A` will commit it. That happened on 09-10-2026 and only
+# GitHub's push protection stopped it leaving the machine - the repo ROOT is this worker's public
+# asset directory (TRAPS #340 / F-365), so a credential sitting here is one deploy from being
+# served. Ignored by NAME, because the next one will have a different name only if somebody
+# remembers to add it.
+.cft
+.apikey
+.token
+*.secret
