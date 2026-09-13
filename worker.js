@@ -18958,7 +18958,13 @@ const ABY_INTERNAL_JS = `
   var STATES = [{ code: 'TX', name: 'Texas' }, { code: 'OUTSIDE', name: 'Outside Texas' }];
 
   window.ABY_STATE = 'TX';
-  window.ABY_ADJUSTMENT = null;   // { mode:'percent'|'flat', amount:Number, scope:'all'|productId }
+  // { mode:'flat'|'set', amount:Number, scope:'all'|productId }
+  // NO PERCENT MODE CAN BE ENTERED ANY MORE. Eric, 2026-09-13: We will never do a percentage
+  // discount. We will only do fixed dollar discounts. The option is gone from the panel below.
+  // A quote SAVED with mode 'percent' before that date is still honoured on re-run (the rerun
+  // check keeps 'percent' in its list on purpose) - a document an agent was already sent must
+  // reopen at the price it was sent at, and history is never rewritten.
+  window.ABY_ADJUSTMENT = null;
   window.ABY_ADJ_NOTE = '';
 
   // 0) A RE-RUN STARTS AS THE SAME QUOTE, DISCOUNT INCLUDED (Eric, 2026-08-31).
@@ -19175,7 +19181,7 @@ const ABY_INTERNAL_JS = `
       if (negatives.length) {
         window.ABY_ADJUSTMENT = null;
         summary.textContent = 'Not applied — a set price cannot be negative (' + negatives.join(', ') +
-          '). To take money OFF the standard price, use Percent or Flat, where a negative amount is a discount.';
+          '). To take money OFF the standard price, use Flat, where a negative amount is a discount.';
         return;
       }
       // Eric, 2026-08-21, describing what he actually adjusts: "if we lower the per
@@ -19230,8 +19236,8 @@ const ABY_INTERNAL_JS = `
       '<p style="margin:0 0 12px;color:#4a5568;font-size:12.5px;">State pricing and price adjustments. An adjustment changes the quoted price; the adjustment itself is recorded internally and never appears on the client proposal or PDF.</p>' +
       '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">' +
         '<label style="font-size:12px;color:#143c73;">State<br><select id="abyState" style="padding:6px;min-width:150px;">' + stateOpts + '</select></label>' +
-        '<label style="font-size:12px;color:#143c73;">Price Adjustment<br><select id="abyMode" style="padding:6px;"><option value="none">None</option><option value="percent">Percent (%)</option><option value="flat">Flat ($)</option><option value="set">Set price ($)</option></select></label>' +
-        '<label style="font-size:12px;color:#143c73;">Amount<br><input id="abyAmt" type="number" step="0.01" placeholder="e.g. 10 or -15" style="padding:6px;width:130px;"></label>' +
+        '<label style="font-size:12px;color:#143c73;">Price Adjustment<br><select id="abyMode" style="padding:6px;"><option value="none">None</option><option value="flat">Flat ($)</option><option value="set">Set price ($)</option></select></label>' +
+        '<label style="font-size:12px;color:#143c73;">Amount<br><input id="abyAmt" type="number" step="0.01" placeholder="e.g. -250" style="padding:6px;width:130px;"></label>' +
         '<label style="font-size:12px;color:#143c73;">Applies to<br><select id="abyScope" style="padding:6px;min-width:150px;">' + scopeOpts + '</select></label>' +
         '<label style="font-size:12px;color:#143c73;flex:1;min-width:180px;">Reason (internal note)<br><input id="abyNote" type="text" placeholder="e.g. DFW regional / ABC brokerage discount" style="padding:6px;width:100%;box-sizing:border-box;"></label>' +
       '</div>' +
