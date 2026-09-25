@@ -1896,10 +1896,21 @@ async function handleSaveCommitment(request, env, ctx) {
     // ② Tell ABY. Until 2026-08-18 a signed authorization emailed NOBODY -- it landed in the
     // database and waited for somebody to look, which made the strongest buying signal in the
     // system its quietest event.
+    // ⭐⭐ SEND, THEN RECORD WHAT HAPPENED - AS ONE UNIT INSIDE `waitUntil` (09-25-2026).
+    // 🔴 THE RECORDING MUST BE INSIDE THE SAME PROMISE. `waitUntil` keeps the worker alive for the
+    // promise it is HANDED; hand it only the send and the response returns, the worker is free to
+    // shut down, and the UPDATE that was chained on afterwards may never run. Then the row says
+    // a blank status for a send that succeeded, which is a worse lie than the silence this
+    // replaces. So the two are one async function and `waitUntil` gets that.
+    const notify = async () => {
+      const outcome = await sendCommitmentEmail(env, {
+        quoteNumber, employerName, authSigner, authEmail, authPhone, brokerEmail, products,
+        origin: new URL(request.url).origin,
+      });
+      await recordNotifyOutcome(env, id, outcome);
+    };
     try {
-      ctx && ctx.waitUntil
-        ? ctx.waitUntil(sendCommitmentEmail(env, { quoteNumber, employerName, authSigner, authEmail, authPhone, brokerEmail, products, origin: new URL(request.url).origin }))
-        : await sendCommitmentEmail(env, { quoteNumber, employerName, authSigner, authEmail, authPhone, brokerEmail, products, origin: new URL(request.url).origin });
+      ctx && ctx.waitUntil ? ctx.waitUntil(notify()) : await notify();
     } catch (err) {
       console.error('commitment: could not send email:', err);
     }
@@ -2367,11 +2378,21 @@ async function benefitlabAccounts(env, emails) {
  * separated secret means that switch is a one-line change with no deploy, and Niels starts hearing
  * about his own quotes the moment it is set.
  */
+// ⭐⭐ IT RETURNS AN OUTCOME NOW, AND THE CALLER WRITES IT ONTO THE ROW (09-25-2026).
+// 🔴 It used to return `undefined` on every path, success and failure alike, and report its
+// failures to `console.error`. That made the send unobservable: 8 signed authorizations went
+// unnotified between 08-27 and 09-25 and the only reason anybody found out was Eric noticing the
+// absence of mail. ⛔ A function whose job is to break a silence must say whether it managed it.
+// ▶️ Every return is `{ ok, at, error }` - `error` is a SHORT human sentence, because it is going
+// onto a screen, not into a log.
 async function sendCommitmentEmail(env, c) {
-  if (!env.RESEND_API_KEY) { console.warn('RESEND_API_KEY not set -- commitment email skipped'); return; }
+  if (!env.RESEND_API_KEY) {
+    console.warn('RESEND_API_KEY not set -- commitment email skipped');
+    return { ok: false, error: 'No Resend API key is set on the worker, so nothing was sent.' };
+  }
   const to = String(env.NOTIFY_EMAILS || 'eric@comedyce.com')
     .split(',').map((x) => x.trim()).filter(Boolean);
-  if (!to.length) return;
+  if (!to.length) return { ok: false, error: 'NOTIFY_EMAILS is set but empty, so there was nobody to send to.' };
 
   const lines = (Array.isArray(c.products) ? c.products : []).map((p) => `<li>${esc(String(p))}</li>`).join('');
   const html =
@@ -2393,8 +2414,41 @@ async function sendCommitmentEmail(env, c) {
       body: JSON.stringify({ from: `ABY Quote Tool <${env.FROM_EMAIL || 'onboarding@resend.dev'}>`,
         to, subject: `Authorization signed: ${c.employerName || 'employer'} (${c.quoteNumber || ''})`, html }),
     });
-    if (!res.ok) console.error('commitment email failed:', res.status, await res.text());
-  } catch (err) { console.error('commitment email threw:', err); }
+    if (!res.ok) {
+      const detail = (await res.text() || '').slice(0, 300);
+      console.error('commitment email failed:', res.status, detail);
+      // ⭐ THE STATUS IS THE PART THAT DIAGNOSES IT, so it leads. 401/403 is the key or the sending
+      // domain; 422 is the address; anything else is Resend itself. Naming the recipients matters
+      // too: "sent to nobody useful" and "not sent" look identical on a screen otherwise.
+      return { ok: false, error: 'Resend refused it (' + res.status + '): ' + detail };
+    }
+    return { ok: true, at: new Date().toISOString(), to: to.join(', ') };
+  } catch (err) {
+    console.error('commitment email threw:', err);
+    // ⚠️ A THROW HERE IS THE NETWORK, not the mail: it never reached Resend at all.
+    return { ok: false, error: 'Could not reach Resend: ' + String(err).slice(0, 200) };
+  }
+}
+
+/**
+ * Write the notification outcome onto the commitment row.
+ *
+ * ⛔ IT NEVER THROWS, AND THAT IS DELIBERATE. The signature is already saved by the time this runs;
+ * failing to record whether the email went must not be able to undo a commitment. A lost status
+ * line is a gap, a lost authorization is a defect.
+ * ⚠️ Wrapped so a PRE-MIGRATION database - one where the two columns do not exist yet - degrades to
+ * the old behaviour instead of erroring on every signature.
+ */
+async function recordNotifyOutcome(env, id, outcome) {
+  if (!id || !outcome) return;
+  try {
+    await env.DB.prepare('UPDATE commitments SET notified_at = ?, notify_error = ? WHERE id = ?')
+      .bind(outcome.ok ? (outcome.at || new Date().toISOString()) : null,
+            outcome.ok ? null : String(outcome.error || 'Unknown failure').slice(0, 400),
+            id).run();
+  } catch (err) {
+    console.error('commitment: could not record the notification outcome:', err);
+  }
 }
 
 /**
@@ -15118,6 +15172,23 @@ const MIGRATIONS = [
   { sql: "ALTER TABLE commitments ADD COLUMN client_id TEXT",    table: "commitments", column: "client_id" },
   { sql: "ALTER TABLE commitments ADD COLUMN broker_email TEXT", table: "commitments", column: "broker_email" },
 
+  // Added 09-25-2026. WHETHER ABY WAS ACTUALLY TOLD, recorded on the row.
+  //
+  // 🔴🔴 THIS EXISTS BECAUSE THE NOTIFICATION FAILED SILENTLY FOR A MONTH AND NOBODY COULD SEE IT.
+  // Eric, 09-25-2026: "doesn't look like Niels and I are getting emails when someone submits a
+  // commitment to ABY." Measured that morning: 8 signed authorizations since 08-27, and Resend had
+  // never recorded a single send -- the call was being rejected before it reached them.
+  // ⛔ THE FAILURE PATH WAS A `console.error` INTO WORKER LOGS NOBODY READS, which is the exact
+  // shape the email was built to fix: before 08-18 a signed authorization told nobody and waited in
+  // the database for somebody to look. **The email was the fix, and the email could fail the same
+  // way.** A feature whose whole job is to break a silence must not be able to fail silently.
+  // ⭐ `notified_at` is the fact; `notify_error` is why not. Both NULL on every row signed before
+  // this shipped, and the screen stays SILENT for those rather than calling them failures -- an absence
+  // of evidence about the past is not evidence of failure (`TRAPS.md` #7: unanswered must never
+  // read as an answer).
+  { sql: "ALTER TABLE commitments ADD COLUMN notified_at TEXT",  table: "commitments", column: "notified_at" },
+  { sql: "ALTER TABLE commitments ADD COLUMN notify_error TEXT", table: "commitments", column: "notify_error" },
+
   // ── Broker accounts (F-6 / F-53) ────────────────────────────────────────────────────────────
   //
   // ⭐⭐ ERIC CHOSE OPTION (a), 2026-08-18: a SEPARATE ABY login, joined to BenefitLab BY EMAIL.
@@ -18483,10 +18554,42 @@ async function loadCommitments() {
       var sub = function(v) {
         return v ? '<br><span style="color:#777;font-size:12px">' + v + '</span>' : '';
       };
+      // ⭐⭐ WAS ABY ACTUALLY TOLD? (09-25-2026). Two marks and a deliberate SILENCE.
+      //
+      // ⛔ THE SILENCE IS THE PART THAT TOOK A SECOND ATTEMPT, AND ERIC HAS ALREADY PAID FOR THIS
+      // LESSON ONCE. The first version printed a grey "no notification on file" on every row where
+      // neither field was set - which, on the day it shipped, is EVERY row, because nothing was
+      // recorded before then. The checker scripts/check_admin_render.mjs carries his objection to
+      // exactly that shape from the brokers page: a line that printed under all 665 firms because
+      // none of them had a status, and he asked what it was for. **A label identical on every row
+      // is noise, and it teaches people to stop reading the column.**
+      // ⛔ NO BACKTICK ANYWHERE IN THIS COMMENT - not even around a filename. This whole function
+      // sits inside the admin page's template literal, so one backtick ends it and the failure
+      // surfaces as a parse error blaming an innocent word much further down. It happened writing
+      // THIS comment, and node --check passed the broken file (see the file header).
+      // ⭐ So an unknown renders NOTHING. The two states that carry information are the only ones
+      // that speak, and neither can be confused with the other: a tick is a fact, a warning is a
+      // job. Blank says what it should say, which is nothing.
+      // ⛔ Concatenation, never a template literal - this function lives inside the page's own
+      // template string and a backtick here ends it (see the file header).
+      var notifyCell = function(row) {
+        if (row.notified_at) {
+          return '<br><span style="color:#1a5c3a;font-size:12px" title="ABY was emailed at '
+            + row.notified_at + '">&#10003; ABY notified</span>';
+        }
+        if (row.notify_error) {
+          return '<br><span style="color:#c0392b;font-size:12px;font-weight:600" title="'
+            + String(row.notify_error).replace(/"/g, '&quot;')
+            + '">&#9888; NOT NOTIFIED</span>'
+            + '<br><span style="color:#c0392b;font-size:11px">'
+            + String(row.notify_error).slice(0, 90) + '</span>';
+        }
+        return '';
+      };
       return '<tr class="c-row">' +
         // Submitted date moved UNDER the quote number. It is a fact ABOUT the quote and it was
         // taking a whole nowrap column at the left of the table.
-        td('<strong>' + (c.quote_number || '') + '</strong>' + sub(dateStr)) +
+        td('<strong>' + (c.quote_number || '') + '</strong>' + sub(dateStr) + notifyCell(c)) +
         // ⛔ THE ADDRESS IS GONE. Eric, 09-10-2026: "Not sure why we need the address to show under
         // the company name, that's weird." It is on the signed document and in the JSON export,
         // which is where an address is actually used; on a list of who has signed it is noise
