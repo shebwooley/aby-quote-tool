@@ -2,13 +2,14 @@
 //
 // ERIC, 2026-09-08: "I would like to set it up where a broker has to log in in order to quote."
 //
-// THE GATE SHIPS OFF. This checker exists because a gate that is off is invisible: nothing exercises
+// THE GATE IS ARMED SINCE 09-25-2026 (it shipped off for sixteen days, deliberately). This checker exists because a gate that is off is invisible: nothing exercises
 // it, so it can rot for weeks and then fail to hold on the day somebody turns it on. That is the
 // shape of TRAPS #333 - a gate that fails closed is invisible when it breaks, because broken and
 // not-yet-applicable look identical.
 //
 // THE RULES, AND RULE 2 IS THE ONE THAT MATTERS:
-//   1. the flag exists and DEFAULTS TO FALSE - turning it on must stay a deliberate act
+//   1. the flag exists and is ARMED - inverted 09-25-2026 on Eric's decision, so switching the gate
+//      back OFF now reaches a person instead of passing quietly
 //   2. BOTH the page and the SAVE are gated. A wall on the form with an open endpoint underneath is
 //      not a refusal (TRAPS #386), and anyone can post straight to /api/quotes
 //   3. the gate lets ABY STAFF through - they quote at /aby behind the admin cookie, and a gate that
@@ -53,13 +54,19 @@ function run(src) {
   }
   ok("worker.js slices into the page half and handleSaveQuote");
 
-  // ---- 1. the flag, and its default
+  // ---- 1. the flag, and it is now ARMED
+  //
+  // ⭐⭐ THIS RULE WAS INVERTED ON 09-25-2026 AND THE INVERSION IS THE RECORD OF A DECISION. It used to
+  // require the flag to be FALSE, because arming a wall on a live tool is a decision rather than a
+  // deployment. Eric made it: *"yes I want /broker closed"* and *"the main abyquotes.com page needs to
+  // be a login."* ⛔ Leaving the old rule would have made his own decision fail the build.
+  // ⚠️ It is asserted rather than merely allowed, so switching the gate back OFF also reaches a person.
   const m = src.match(/const BROKER_LOGIN_REQUIRED\s*=\s*(true|false)\s*;/);
   if (!m) bad("BROKER_LOGIN_REQUIRED is declared", "the gate has no switch");
-  else if (m[1] !== "false")
-    bad("BROKER_LOGIN_REQUIRED defaults to false",
-        "it is TRUE in the committed source - turning the gate on must be a deliberate, separate act");
-  else ok("the gate has a switch and it defaults to off");
+  else if (m[1] !== "true")
+    bad("BROKER_LOGIN_REQUIRED is ARMED",
+        "it is FALSE in the committed source - the gate Eric asked for on 09-25 is switched off again");
+  else ok("the gate has a switch and it is armed");
 
   // ---- 2. BOTH halves are gated
   const pageGated = /BROKER_LOGIN_REQUIRED && \(path === '\/'/.test(page);
@@ -144,24 +151,61 @@ function run(src) {
     else ok("the invited person reaches the CRM directory too");
   }
 
-  // ---- 5f. THE BASELINE PIN, AND A RED HERE IS A SIGNAL RATHER THAN A FAULT ---------------------
-  // Self-signup is OPEN today: anyone who reaches /broker can create an account and, with the gate
-  // armed, sign in and quote. That is the state Eric asked about, and it is pinned so that CLOSING it
-  // reaches a person instead of being discovered later. ⭐ When it is closed, this rule goes red: read
-  // it, confirm the change was deliberate, and DELETE the rule rather than softening it - the same
-  // discipline check_share_guard.mjs uses for its measured split.
-  if (!/path === '\/api\/broker\/signup'\s+&& method === 'POST'\) return handleBrokerSignup/.test(src))
-    bad("SIGNAL, not a fault: self-signup is no longer open",
-        "the signup route has changed shape. If it was deliberately closed or gated, that is the decision Eric was weighing on 09-25 - delete this rule");
-  else ok("self-signup is still open (pinned): inviting is a gate only once signup is closed too");
+  // ---- 6. SELF-SIGNUP IS CLOSED. ACCOUNTS COME FROM ABY. ---------------------------------------
+  //
+  // ⭐⭐ THIS REPLACED A RULE THAT PINNED SIGNUP AS OPEN, AND THE REPLACEMENT IS THE POINT. That pin was
+  // written the same evening on the premise that closing it was still an open question. It was not:
+  // Eric had asked for invitations that afternoon and said so again plainly - *"I told you I want to be
+  // able to invite them and don't want them to sign themselves up. so yes I want /broker closed."*
+  // ⛔ The pin was deleted rather than softened, which is what its own note said to do.
+  const upFlag = /const BROKER_SELF_SIGNUP = (true|false);/.exec(src);
+  if (!upFlag) bad("BROKER_SELF_SIGNUP is declared", "closing signup has no switch, so the decision is invisible and reversing it is a rebuild");
+  else if (upFlag[1] !== "false") bad("BROKER_SELF_SIGNUP is false", "self-signup is switched back ON in the committed source");
+  else ok("self-signup has a switch and it is closed");
+
+  // THE ENDPOINT REFUSES ON ITS OWN ACCOUNT. A page with no sign-up tab and an open POST underneath is
+  // not a refusal - anyone can post straight at it (#386, the same lesson that put the quote gate on
+  // the save as well as the form).
+  const upAt = src.indexOf("async function handleBrokerSignup(");
+  const upEnd = upAt < 0 ? -1 : src.indexOf("\nasync function ", upAt + 10);
+  const signup = upAt < 0 ? "" : src.slice(upAt, upEnd < 0 ? undefined : upEnd);
+  if (signup.length < 400) {
+    bad("FLOOR: handleBrokerSignup was sliced", "got " + signup.length + " chars, so the rules below measure nothing");
+  } else if (!/if \(!BROKER_SELF_SIGNUP\)/.test(signup)) {
+    bad("the signup ENDPOINT refuses, not just the page", "the handler never reads the switch");
+  } else if (signup.indexOf("if (!BROKER_SELF_SIGNUP)") > signup.indexOf("await request.json()")) {
+    bad("the refusal comes BEFORE the body is read", "it is after, so a refused request still parses whatever was posted at it");
+  } else if (!/invitation/i.test(signup.slice(0, signup.indexOf("let body")))) {
+    bad("the refusal says where to go", "a refusal with no door is a dead end - the quote gate redirects rather than answering 403");
+  } else ok("the signup endpoint refuses first, before the body, and names the way in");
+
+  // AND THE PAGE OFFERS NO DOOR THAT REFUSES. ⛔ Plus the mirror hazard, which is the one that would
+  // actually break something: removing markup and leaving its handler behind throws on a missing
+  // element and takes the WHOLE script down, sign-in included.
+  const bpAt = src.indexOf("function brokerPageHTML(");
+  const bpEnd = bpAt < 0 ? -1 : src.indexOf("\nfunction ", bpAt + 10);
+  const bp = bpAt < 0 ? "" : src.slice(bpAt, bpEnd < 0 ? undefined : bpEnd);
+  if (bp.length < 2000) {
+    bad("FLOOR: brokerPageHTML was sliced", "got " + bp.length + " chars");
+  } else {
+    const offersTab = /id="tabUp"/.test(bp);
+    // ⚠️ AN ASSIGNMENT, NOT A MENTION. Its first version matched $('tabUp') anywhere and went red on the
+    // COMMENT that explains why the handler was removed - #126, a negative assertion satisfied by the
+    // prose describing the thing it forbids. The hazard is a handler being BOUND, so that is the test.
+    const handlesTab = /\$\('tabUp'\)\s*\.\s*on\w+\s*=/.test(bp);
+    if (offersTab) bad("the page offers no sign-up tab", "id=\"tabUp\" is still on the page while the endpoint refuses, so it is a door that says no");
+    else if (handlesTab) bad("no handler survives for a control that is gone", "a $('tabUp') handler remains - it throws on a missing element and takes sign-in down with it (#356)");
+    else if (!/Accounts are set up by ABY/.test(bp)) bad("the page SAYS where accounts come from", "the tab is gone and nothing explains it, which reads as a broken page");
+    else ok("the page offers no sign-up tab, keeps no orphaned handler, and says accounts come from ABY");
+  }
 }
 
 const src = readFileSync(W, "utf8");
 
 if (process.argv.includes("--self-test")) {
   const sabotages = [
-    ["the gate was left switched ON in the committed source",
-      (s) => s.replace("const BROKER_LOGIN_REQUIRED = false;", "const BROKER_LOGIN_REQUIRED = true;")],
+    ["the gate was switched back OFF in the committed source",
+      (s) => s.replace("const BROKER_LOGIN_REQUIRED = true;", "const BROKER_LOGIN_REQUIRED = false;")],
     ["the save endpoint stopped checking the flag",
       (s) => s.replace("if (BROKER_LOGIN_REQUIRED && !me &&", "if (false && !me &&")],
     ["the page stopped checking the flag",
@@ -189,6 +233,22 @@ if (process.argv.includes("--self-test")) {
     // ⚠️ MUTATED INSIDE THE HANDLER'S OWN SLICE, because `linkBrokerIntoDirectory(env, {` appears in
     // signup and in the agency invite as well - a bare replace hits the FIRST one, in another
     // function, and tests nothing while scoring as a MISS (#361). Its first version did exactly that.
+    // ---- the 09-25 signup closure (rule group 6)
+    ["self-signup was switched back on",
+      (s) => s.replace("const BROKER_SELF_SIGNUP = false;", "const BROKER_SELF_SIGNUP = true;")],
+    ["the signup endpoint stopped refusing, leaving the page as the only wall",
+      (s) => s.replace("  if (!BROKER_SELF_SIGNUP) {", "  if (false) {")],
+    ["a sign-up tab was put back on the page while the endpoint still refuses",
+      (s) => s.replace('<h2 id="authTitle">Sign in</h2>', '<button id="tabUp">Create an account</button><h2 id="authTitle">Sign in</h2>')],
+    // ⚠️ Mutated inside brokerPageHTML's own slice: $('go') is not unique across the worker's pages, and
+    // a bare replace would land on another one and test nothing (#361).
+    ["markup removed and its handler left behind, which throws and kills sign-in",
+      (s) => {
+        const a = s.indexOf("function brokerPageHTML(");
+        const b = s.indexOf("\nfunction ", a + 10);
+        const seg = s.slice(a, b);
+        return s.slice(0, a) + seg.replace("$('go').onclick=async function(){", "$('tabUp').onclick=function(){};\n $('go').onclick=async function(){") + s.slice(b);
+      }],
     ["the invited person stopped reaching the CRM directory",
       (s) => {
         const a = s.indexOf("async function handleAdminInviteBroker(");
@@ -228,4 +288,5 @@ if (process.argv.includes("--self-test")) {
 console.log("\nBROKER LOGIN GATE - wired, scoped, and off\n");
 run(src);
 if (failed) { console.log(`\n  ${failed} failed\n`); process.exit(1); }
-console.log("\n  ok - the gate is built and OFF. Flip BROKER_LOGIN_REQUIRED and redeploy to arm it.\n");
+console.log("\n  ok - the gate is ARMED, self-signup is CLOSED, and accounts come from ABY by invitation.");
+console.log("       ABY staff are unaffected: they quote at /aby behind the admin cookie.\n");

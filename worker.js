@@ -22,9 +22,18 @@ const SITE_LOCKED = false;
 // BROKER LOGIN REQUIRED TO QUOTE. Eric, 2026-09-08: 'I would like to set it up where a broker
 // has to log in in order to quote. That way, we will know who is running the quote.'
 //
-// SHIPS OFF. The mechanism is built and tested; turning it on puts a wall on a live tool, which
-// is a decision rather than a deployment. Flip to true and redeploy - there is nothing else to
-// do, and nothing to undo but this line.
+// ARMED 09-25-2026 ON ERIC'S DECISION, and the SHIPS OFF note that stood here is retired with it.
+// He asked for it on 09-08, again on 09-25 afternoon (*"I want to gate abyquotes.com - require login
+// in order to quote"*), and settled the shape that evening: *"so the main abyquotes.com page needs to
+// be a login where it asks for user name and password, right?"* Yes - the public form now redirects to
+// /broker?next=quote, so somebody signs in once and lands back on the quote they came for.
+//
+// ⛔ A COMMENT SAYING A FLAG SHIPS OFF, BESIDE A FLAG THAT IS ON, IS THE STALE-WARNING SHAPE THIS
+// PROJECT HAS PAID FOR TWICE (#329, #517): a reader believes the prose and stops reading the value.
+//
+// WHY IT COULD NOT BE ARMED BEFORE TODAY, and this is the ordering that matters rather than a caveat:
+// accounts now come from ABY by invitation (BROKER_SELF_SIGNUP), so a gate with nobody able to obtain
+// a login would have been a locked door with no key cut. The invite came first, deliberately.
 //
 // WHY IT IS SAFE TO TURN ON, AND BOTH HALVES WERE MEASURED ON 2026-09-08:
 //   1. ABY STAFF ARE NOT AFFECTED. They quote through /aby, a separate route behind the admin
@@ -36,7 +45,24 @@ const SITE_LOCKED = false;
 //
 // WHAT IT BUYS: a saved quote can finally NAME the broker who ran it. Today a broker-run quote
 // stores ran_by = broker and ran_by_who = null, because there is no session to read a name from.
-const BROKER_LOGIN_REQUIRED = false;
+const BROKER_LOGIN_REQUIRED = true;
+
+// ── SELF-SIGNUP IS CLOSED. ACCOUNTS COME FROM ABY, BY INVITATION. ────────────────────────────────
+//
+// ERIC, 09-25-2026, and he had already said the substance of it that afternoon: *"I told you I want to
+// be able to invite them and don't want them to sign themselves up. so yes I want /broker closed."*
+//
+// WHY THIS IS ITS OWN SWITCH RATHER THAN A DELETED ROUTE: it is reversible, one line, and a checker
+// can read it. Deleting the handler would make the decision invisible and the reversal a rebuild.
+//
+// ⛔ IT IS ENFORCED IN THE ENDPOINT, NOT ONLY ON THE PAGE. A page with no sign-up tab and an open
+// POST underneath is not a refusal - anyone can post straight at it (TRAPS #386, the same lesson that
+// put the quote gate on the save as well as the form).
+//
+// ⭐ THE BOOTSTRAP STILL WORKS, which is what makes closing this safe: the FIRST account is created by
+// ABY from /admin/brokers, so there is no state in which nobody can get in. That is also why this
+// could not have been closed before the invite existed.
+const BROKER_SELF_SIGNUP = false;
 
 // The admin guide, GENERATED from docs/admin-guide.md by scripts/build_guide.mjs.
 // Eric, 2026-08-23, asked for the explanation to live in the app rather than only in the notes.
@@ -11959,14 +11985,16 @@ function brokerPageHTML() {
   <a href="/">New quote</a><button id="out" style="display:none">Sign out</button></header>
 <main>
   <div id="authCard" class="card">
-    <div class="tabs"><button id="tabIn" class="on">Sign in</button><button id="tabUp">Create an account</button></div>
+    <!-- SELF-SIGNUP IS CLOSED (Eric, 09-25-2026). The "Create an account" tab is GONE rather than
+         hidden: a disabled control invites a question, and an absent one says accounts come from
+         somewhere else. ⛔ The endpoint refuses on its own account - see BROKER_SELF_SIGNUP - because
+         a page with no tab and an open POST underneath is not a refusal (TRAPS #386).
+         ⭐ The name, agency and phone inputs go with it: they existed only for the sign-up path, and
+         an invited broker's name and firm are set by ABY. They edit them under their own profile. -->
     <h2 id="authTitle">Sign in</h2>
     <p class="sub" id="authSub">Your details fill in automatically on every quote you run.</p>
-    <div id="upOnly" style="display:none">
-      <label>Your name</label><input type="text" id="sName" autocomplete="name">
-      <label>Agency</label><input type="text" id="sAgency" autocomplete="organization">
-      <label>Phone</label><input type="tel" id="sPhone" autocomplete="tel">
-    </div>
+    <p class="sub" style="margin-top:-6px">Accounts are set up by ABY. If you need one, ask us and we will
+      email you a link to set your password.</p>
     <label>Email</label><input type="email" id="sEmail" autocomplete="email">
     <label>Password</label><input type="password" id="sPass" autocomplete="current-password">
     <button class="primary" id="go">Sign in</button>
@@ -12032,15 +12060,19 @@ function brokerPageHTML() {
   </div>
 </main>
 <script>
- var $=function(id){return document.getElementById(id)}, mode='in', logoData='';
+ // The mode variable went with the sign-up tab. A dead variable that once chose between two endpoints
+ // is the fingerprint of a half-removed feature (#356), so it is gone rather than left at 'in'.
+ // (No backticks in here: this whole function is one template literal and one ends it early - #248.)
+ var $=function(id){return document.getElementById(id)}, logoData='';
  function show(el,text,cls){el.textContent=text;el.className='msg '+cls;el.style.display='block'}
  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
- $('tabIn').onclick=function(){mode='in';$('tabIn').className='on';$('tabUp').className='';$('upOnly').style.display='none';$('authTitle').textContent='Sign in';$('go').textContent='Sign in';$('sPass').autocomplete='current-password';$('authMsg').style.display='none'};
- $('tabUp').onclick=function(){mode='up';$('tabUp').className='on';$('tabIn').className='';$('upOnly').style.display='block';$('authTitle').textContent='Create an account';$('go').textContent='Create account';$('sPass').autocomplete='new-password';$('authMsg').style.display='none'};
+ // THE SIGN-UP TAB AND ITS THREE EXTRA FIELDS ARE GONE (Eric, 09-25-2026: accounts come from ABY).
+ // ⛔ THE HANDLERS HAD TO GO WITH THEM, and that is not tidying: $('tabUp').onclick on a missing
+ // element throws, and a throw here would take the whole script down WITH THE SIGN-IN BUTTON ON IT.
+ // Removing markup and leaving its script behind is how a page that looks simpler stops working.
  $('go').onclick=async function(){
    var body={email:$('sEmail').value,password:$('sPass').value};
-   if(mode==='up'){body.name=$('sName').value;body.agency=$('sAgency').value;body.phone=$('sPhone').value}
-   var r=await fetch('/api/broker/'+(mode==='up'?'signup':'login'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+   var r=await fetch('/api/broker/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
    var d=await r.json().catch(function(){return{}});
    if(!r.ok){show($('authMsg'),d.error||'Something went wrong.','err');return}
    enter(d.broker);
@@ -12293,6 +12325,15 @@ function sessionCookie(value, maxAgeSeconds) {
 }
 
 async function handleBrokerSignup(request, env) {
+  // THE REFUSAL COMES FIRST, BEFORE THE BODY IS EVEN READ. Accounts come from ABY by invitation
+  // (Eric, 09-25-2026), and this is the half that makes the sign-up tab's absence mean something.
+  // ⭐ It names where to go: a refusal with no door is a dead end, which is the rule the quote gate
+  // already follows by redirecting to /broker rather than answering 403.
+  if (!BROKER_SELF_SIGNUP) {
+    return jsonResp({
+      error: 'Accounts are set up by ABY. Ask us for an invitation and you will get an email with a link to set your password.',
+    }, 403);
+  }
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
   const email = String(body.email || '').trim().toLowerCase();
   const password = String(body.password || '');
