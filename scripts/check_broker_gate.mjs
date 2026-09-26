@@ -91,6 +91,69 @@ function run(src) {
     bad("a refused visitor is sent to the door", "refusing without naming where to go is a dead end");
   else ok("a refused visitor is redirected to /broker");
 
+  // ---- 5. WHO CAN GET AN ACCOUNT AT ALL (Eric, 09-25-2026) ------------------------------------
+  //
+  // HIS QUESTION IS WHAT MADE THESE RULES: "So if an agent goes to the /broker link, they can sign up
+  // for access to run quotes? Is there a way for us (ABY) to create an invite link? So that not just
+  // anyone can sign up to quote?" The gate above only decides whether quoting needs A LOGIN. It says
+  // nothing about who may OBTAIN one, so with self-signup open the gate is a sign-up form in front of
+  // the same door.
+  const inviteAt = src.indexOf("async function handleAdminInviteBroker(");
+  const inviteEnd = inviteAt < 0 ? -1 : src.indexOf("\nasync function ", inviteAt + 10);
+  const invite = inviteAt < 0 ? "" : src.slice(inviteAt, inviteEnd < 0 ? undefined : inviteEnd);
+
+  if (invite.length < 800) {
+    // A FLOOR (#360): every rule below asks "does this text contain X", so an empty slice makes them
+    // all vacuously satisfiable and the block would tick while checking nothing.
+    bad("FLOOR: the ABY invite handler was sliced", "got " + invite.length + " chars - rules 5a-5e would be measuring nothing");
+  } else {
+    ok("the ABY invite handler sliced (" + invite.length + " chars)");
+
+    if (!/path === '\/api\/admin\/brokers\/invite'[^\n]*withAuth/.test(src))
+      bad("the ABY invite is behind withAuth", "deciding who may quote through ABY's tool is ABY's, and an open invite route is worse than an open signup");
+    else ok("the ABY invite is behind the admin password");
+
+    // IT ATTACHES TO A FIRM AND NEVER MINTS ONE. Signup minting an agency per person is what fills the
+    // CRM with duplicates and leaves the broker with no logo; doing it here as a side effect of an
+    // invite would bring that back through a second door.
+    if (!/FROM agencies WHERE id = \?/.test(invite) || !/not in the CRM/.test(invite))
+      bad("an unknown firm is REFUSED", "the invite does not look up the agency and refuse it");
+    else ok("an unknown firm is refused rather than created");
+    if (/INSERT INTO agencies/.test(invite))
+      bad("the invite never creates an agency", "it does - that is the duplicate-firm problem arriving through a second door");
+    else ok("the invite creates no agency");
+
+    // THE ROLE IS DERIVED, AND IT MUST CARRY FORWARD WITHIN THE BATCH. Read once before the loop and
+    // never updated, this made EVERY person in a paste of five an administrator of the same firm,
+    // because none of them existed when the question was asked. This rule exists because that was the
+    // first version.
+    if (!/adminExists/.test(invite))
+      bad("the first person into a firm becomes its administrator, derived", "no such derivation - a typed role is a question Eric should not have to answer");
+    else if (!/role === 'admin'\) adminExists = true/.test(invite))
+      bad("the administrator carries forward WITHIN a batch", "it does not, so every person in one paste would be made an administrator");
+    else ok("the role is derived and the administrator carries forward within a batch");
+
+    // A LOCKED ACCOUNT, NOT AN OPEN ONE. verifyPassword refuses an empty stored hash, so this creates
+    // an invitation; a generated password would create an account somebody else could hold.
+    if (!/\.bind\(id, email, '',/.test(invite))
+      bad("the invited account is LOCKED until they set a password", "it is not created with an empty password hash");
+    else ok("the invited account is locked until they set their own password");
+
+    if (!/linkBrokerIntoDirectory/.test(invite))
+      bad("the invited person reaches the directory ABY works from", "only `brokers` is written, and the CRM does not read it");
+    else ok("the invited person reaches the CRM directory too");
+  }
+
+  // ---- 5f. THE BASELINE PIN, AND A RED HERE IS A SIGNAL RATHER THAN A FAULT ---------------------
+  // Self-signup is OPEN today: anyone who reaches /broker can create an account and, with the gate
+  // armed, sign in and quote. That is the state Eric asked about, and it is pinned so that CLOSING it
+  // reaches a person instead of being discovered later. ⭐ When it is closed, this rule goes red: read
+  // it, confirm the change was deliberate, and DELETE the rule rather than softening it - the same
+  // discipline check_share_guard.mjs uses for its measured split.
+  if (!/path === '\/api\/broker\/signup'\s+&& method === 'POST'\) return handleBrokerSignup/.test(src))
+    bad("SIGNAL, not a fault: self-signup is no longer open",
+        "the signup route has changed shape. If it was deliberately closed or gated, that is the decision Eric was weighing on 09-25 - delete this rule");
+  else ok("self-signup is still open (pinned): inviting is a gate only once signup is closed too");
 }
 
 const src = readFileSync(W, "utf8");
@@ -111,6 +174,28 @@ if (process.argv.includes("--self-test")) {
     ["a refused visitor got no redirect",
       (s) => s.replace("return Response.redirect(new URL('/broker?next=quote', request.url).toString(), 302);",
                        "return new Response('no', { status: 403 });")],
+    // ---- the 09-25 invite (rule group 5)
+    ["the ABY invite route lost withAuth",
+      (s) => s.replace("if (path === '/api/admin/brokers/invite' && method === 'POST') return withAuth(request, env, () => handleAdminInviteBroker(request, env));",
+                       "if (path === '/api/admin/brokers/invite' && method === 'POST') return handleAdminInviteBroker(request, env);")],
+    ["the invite started creating the firm instead of refusing it",
+      (s) => s.replace("  if (!agency) return jsonResp({ error: 'That firm is not in the CRM. Add it there first, then invite.' }, 400);",
+                       "  if (!agency) { await env.DB.prepare('INSERT INTO agencies (id, name) VALUES (?,?)').bind(agencyId, 'New').run(); }")],
+    ["the administrator stopped carrying forward within a batch",
+      (s) => s.replace("    if (role === 'admin') adminExists = true;", "")],
+    ["the invited account was created with a usable password",
+      (s) => s.replace(").bind(id, email, '', name, agency.name, '', agencyId, role, new Date().toISOString()).run();",
+                       ").bind(id, email, 'x', name, agency.name, '', agencyId, role, new Date().toISOString()).run();")],
+    // ⚠️ MUTATED INSIDE THE HANDLER'S OWN SLICE, because `linkBrokerIntoDirectory(env, {` appears in
+    // signup and in the agency invite as well - a bare replace hits the FIRST one, in another
+    // function, and tests nothing while scoring as a MISS (#361). Its first version did exactly that.
+    ["the invited person stopped reaching the CRM directory",
+      (s) => {
+        const a = s.indexOf("async function handleAdminInviteBroker(");
+        const b = s.indexOf("\nasync function ", a + 10);
+        const seg = s.slice(a, b);
+        return s.slice(0, a) + seg.replace("await linkBrokerIntoDirectory(env, {", "await Promise.resolve({") + s.slice(b);
+      }],
 ];
   // A RED BASELINE SWALLOWS SABOTAGES: every mutation then 'fails' for the reason already
   // there, and the harness reports full marks. THIS ONE DID EXACTLY THAT - it printed 7/7 while

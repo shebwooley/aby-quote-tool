@@ -98,6 +98,9 @@ export default {
     if (path === '/api/agency/role'     && method === 'POST') return handleAgencyRole(request, env);
     // ABY's own admin views (Eric, 2026-08-18). Admin-gated, not broker-gated.
     if (path === '/api/admin/brokers' && method === 'GET')  return withAuth(request, env, () => handleAdminBrokers(request, env));
+    // ABY invites a broker into a firm that already exists (F-6). Behind withAuth: deciding who may
+    // quote through ABY's tool is ABY's, and this is the route that makes the login gate mean anything.
+    if (path === '/api/admin/brokers/invite' && method === 'POST') return withAuth(request, env, () => handleAdminInviteBroker(request, env));
     if (path === '/api/admin/assign'  && method === 'POST') return withAuth(request, env, () => handleAdminAssign(request, env));
     if (path === '/api/admin/stats'   && method === 'GET')  return withAuth(request, env, () => handleAdminStats(request, env));
     // The CRM (F-383). Every one is behind withAuth: these are ABY's own notes about who they
@@ -7004,6 +7007,11 @@ ${ADMIN_HEADER_CSS}
     after the month reads as broken data rather than as a narrow column. It is a fixed
     width string, so it should simply never wrap. */
  td.date,th.date{white-space:nowrap;width:1%}
+ /* The firm suggestions on the invite card. A class with no rule anywhere renders as nothing a
+    person can see and nothing fails, so it gets one (TRAPS #91 / #195). */
+ .ivPick{margin:0 6px 6px 0;padding:5px 9px;border:1px solid #cfd8e3;background:#fff;border-radius:6px;
+   cursor:pointer;font:13px inherit}
+ .ivPick:hover{background:#eef2f7;border-color:#1a5c3a}
  /* Collapsible sections. Eric: "I'd like to be able to collapse each section of that
     page." Five stacked tables is a long scroll when four of them are not what you came
     for. ⭐ The state is REMEMBERED, because a section you collapse every visit is one
@@ -7157,6 +7165,26 @@ ${abyAdminNav('/admin/brokers')}
     <p class="sub">Everything before 2026, newest first. Aging buckets say nothing across fifteen
       years; a year count does.</p>
     <div id="historic"><p class="muted">Loading...</p></div></div>
+  <!-- ABY INVITES A BROKER (F-6, Eric 09-25-2026): "Is there a way for us (ABY) to create an invite
+       link? So that not just anyone can sign up to quote?" Sits with the accounts table because that
+       is what it adds to. ⛔ It never creates a FIRM - an unknown one is refused, because signup
+       minting a new agency every time is what fills the CRM with duplicates and leaves the broker
+       with no logo. -->
+  <div class="card"><h2>Invite a broker to quote</h2>
+    <p class="sub">Creates a locked account inside a firm that is already in the CRM and emails that
+      person a link to set their own password. They inherit the firm's logo, so their quotes carry it.
+      The first person you put into a firm becomes its administrator and can invite their own
+      colleagues after that. &#9888; While the login requirement is off, anyone can still sign
+      themselves up at /broker - inviting is only a gate once that is armed.</p>
+    <input id="ivFirm" placeholder="Start typing the firm's name" autocomplete="off"
+           style="width:340px;padding:7px 9px;border:1px solid #cfd8e3;border-radius:6px">
+    <div id="ivHits" style="margin:8px 0"></div>
+    <p id="ivChosen" class="muted" style="font-size:13px;margin:6px 0"></p>
+    <textarea id="ivBox" rows="4" placeholder="One per line: Jane Smith, jane@firm.com&#10;An email on its own is fine."
+              style="width:100%;padding:8px 9px;border:1px solid #cfd8e3;border-radius:6px;font:14px inherit"></textarea>
+    <div style="margin-top:8px"><button id="ivGo">Send the invitations</button></div>
+    <p id="ivMsg" style="font-size:13px;margin:8px 0 0"></p></div>
+
   <div class="card"><h2>Registered brokers</h2>
     <p class="sub">Everyone with an ABY account. Assign each one to whoever owns the relationship.</p>
     <div id="brokers"><p class="muted">Loading...</p></div></div>
@@ -7364,6 +7392,82 @@ ${abyAdminNav('/admin/brokers')}
  var rep='';
  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
  function day(s){return s?String(s).slice(0,10):'\u2014'}
+
+ // \u2500\u2500 ABY INVITES A BROKER (F-6) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+ // The firm is CHOSEN from the CRM's own suggester rather than typed, because the whole point is
+ // attaching the person to a firm that already exists. No id, no send.
+ var ivAgencyId='';
+ (function(){
+   var box=document.getElementById('ivFirm'); if(!box) return;
+   var hits=document.getElementById('ivHits'), chosen=document.getElementById('ivChosen'), t=null;
+   box.oninput=function(){
+     // Typing again CLEARS the choice. Without this, editing the name after picking leaves the old id
+     // attached and the invitation quietly goes to the firm you just stopped naming.
+     ivAgencyId=''; chosen.textContent='';
+     var q=box.value.trim();
+     if(t) clearTimeout(t);
+     if(q.length<2){ hits.innerHTML=''; return; }
+     t=setTimeout(function(){
+       fetch('/api/admin/crm/firm-suggest?q='+encodeURIComponent(q))
+         .then(function(r){return r.json()})
+         .then(function(d){
+           var fs=(d&&d.firms)||[];
+           if(!fs.length){ hits.innerHTML='<span class="muted" style="font-size:13px">No firm matches that. Add it in the CRM first, then invite.</span>'; return; }
+           hits.innerHTML=fs.map(function(f){
+             return '<button type="button" class="ivPick" data-id="'+esc(f.id)+'" data-name="'+esc(f.name)+'">'+esc(f.name)+'</button>';
+           }).join('');
+           Array.prototype.forEach.call(hits.querySelectorAll('.ivPick'),function(b){
+             b.onclick=function(){
+               ivAgencyId=b.getAttribute('data-id');
+               box.value=b.getAttribute('data-name');
+               chosen.textContent='Inviting into: '+b.getAttribute('data-name');
+               hits.innerHTML='';
+             };
+           });
+         }).catch(function(){ hits.innerHTML=''; });
+     },220);
+   };
+ })();
+ (function(){
+   var go=document.getElementById('ivGo'); if(!go) return;
+   go.onclick=async function(){
+     var msg=document.getElementById('ivMsg'), boxEl=document.getElementById('ivBox');
+     if(!ivAgencyId){ msg.textContent='Pick the firm first: start typing its name and choose it from the list.'; return; }
+     // A LINE WITH NO EMAIL BLOCKS THE WHOLE SEND AND IS NAMED BACK, and the box is left alone so the
+     // typo can be fixed in place. Inviting the good ones and dropping the rest is the partial-send
+     // failure the agency invite already learned, in its own words.
+     // String.fromCharCode(10) rather than a backslash escape: this page is a template literal and it
+     // eats lone backslashes (TRAPS #224).
+     var people=[], unusable=[];
+     boxEl.value.split(String.fromCharCode(10)).forEach(function(raw){
+       var line=raw.trim(); if(!line) return;
+       var parts=line.split(','), email='', name='';
+       if(parts.length>1){ name=parts[0].trim(); email=parts[parts.length-1].trim(); }
+       else { email=line; }
+       if(email.indexOf('@')<0){ unusable.push(line); return; }
+       people.push({name:name,email:email});
+     });
+     if(unusable.length){ msg.textContent='Nothing was sent. These lines have no email address in them: '+unusable.join('; '); return; }
+     if(!people.length){ msg.textContent='Nobody to invite yet.'; return; }
+     go.disabled=true;
+     var r=await fetch('/api/admin/brokers/invite',{method:'POST',headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({agencyId:ivAgencyId,people:people})});
+     var d=await r.json().catch(function(){return{}});
+     go.disabled=false;
+     if(!r.ok){ msg.textContent=d.error||'Could not send the invitations.'; return; }
+     // EVERY OUTCOME IS NAMED, not only the happy one: a count of invitations with the skips left out
+     // reads as "all done" when half of them already had accounts.
+     var bits=[];
+     if(d.invited&&d.invited.length) bits.push('Invited '+d.invited.length+' into '+d.agency+': '+d.invited.map(function(x){return x.email+' ('+x.role+')'}).join(', '));
+     if(d.skipped&&d.skipped.length) bits.push('Skipped '+d.skipped.length+': '+d.skipped.map(function(x){return x.email+' \u2014 '+x.why}).join(', '));
+     if(d.failed&&d.failed.length) bits.push('Failed '+d.failed.length+': '+d.failed.map(function(x){return x.email+' \u2014 '+x.why}).join(', '));
+     msg.textContent=bits.join(' | ')||'Nothing happened.';
+     // The box empties only when EVERY line landed, so a refused or skipped one survives to be seen.
+     if(d.invited&&d.invited.length&&!(d.skipped||[]).length&&!(d.failed||[]).length) boxEl.value='';
+     load();
+   };
+ })();
+
  Array.prototype.forEach.call(document.querySelectorAll('.filters button'),function(b){
    b.onclick=function(){
      rep=b.getAttribute('data-rep');
@@ -12389,6 +12493,89 @@ async function handleAgencyInvite(request, env) {
     (ok ? invited : failed).push(ok ? { email } : { email, why: 'account created, but the email could not be sent' });
   }
   return jsonResp({ ok: true, invited, skipped, failed });
+}
+
+/**
+ * ABY INVITES A BROKER INTO AN AGENCY THAT ALREADY EXISTS (F-6, Eric 09-25-2026).
+ *
+ * ERIC'S QUESTION, WHICH FOUND THE HOLE: *"So if an agent goes to the /broker link, they can sign up
+ * for access to run quotes? Is there a way for us (ABY) to create an invite link? So that not just
+ * anyone can sign up to quote?"* Today anyone can: /api/broker/signup is behind nothing, and the only
+ * invite that existed works one level down - an AGENCY's own administrator inviting their colleagues.
+ * So arming BROKER_LOGIN_REQUIRED would have put a sign-up form in front of the same open door.
+ *
+ * WHY IT ATTACHES TO AN EXISTING FIRM RATHER THAN MINTING ONE, and this is the half that matters
+ * beyond gatekeeping: handleBrokerSignup creates a NEW agency every time, so ten people from one firm
+ * make ten firms in a table ABY's CRM works from (2,375 rows). Worse, a brand-new agency has no logo,
+ * so the thing Eric asked for in the same breath - "it will display their logo automatically" - cannot
+ * happen for a self-signed-up broker even now that a quote records its agency. Invited into the REAL
+ * firm, they inherit the logo ABY already uploaded, and agencyLogoChain walks the parent too.
+ *
+ * NO AGENCY IS EVER CREATED HERE. An unknown firm is a refusal, not a new row: adding a firm is the
+ * CRM's job and doing it as a side effect of an invite is how the duplicate problem comes back.
+ *
+ * THE ROLE IS DERIVED, NEVER TYPED. The FIRST person ABY puts into a firm becomes its administrator,
+ * so that firm can then grow itself through /api/agency/invite without ABY being asked again; anybody
+ * after that is a member. Eric never has to answer a question about roles.
+ *
+ * THE ACCOUNT IS LOCKED UNTIL THEY SET A PASSWORD -- password_hash is '' and verifyPassword refuses
+ * an empty stored hash, so this creates an invitation and never an open account.
+ */
+async function handleAdminInviteBroker(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const agencyId = String(body.agencyId || '').trim();
+  if (!agencyId) return jsonResp({ error: 'Pick the firm this person belongs to first.' }, 400);
+
+  const agency = await env.DB.prepare('SELECT id, name FROM agencies WHERE id = ?').bind(agencyId).first();
+  if (!agency) return jsonResp({ error: 'That firm is not in the CRM. Add it there first, then invite.' }, 400);
+
+  const rows = Array.isArray(body.people) ? body.people.slice(0, 50) : [];
+  if (!rows.length) return jsonResp({ error: 'No names and emails were supplied.' }, 400);
+
+  const firstAdmin = await env.DB.prepare(
+    "SELECT 1 AS yes FROM brokers WHERE agency_id = ? AND role = 'admin' LIMIT 1").bind(agencyId).first();
+  // WITHIN THE BATCH TOO, and that is not a detail: read once before the loop, this made EVERY person
+  // in a paste of five an administrator of the same firm, because none of them existed when it was
+  // asked. It is carried forward instead.
+  let adminExists = !!firstAdmin;
+
+  const origin = new URL(request.url).origin;
+  const invited = [], skipped = [], failed = [];
+
+  for (const p of rows) {
+    const email = String(p.email || '').trim().toLowerCase();
+    const name = String(p.name || '').trim().slice(0, 120);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { failed.push({ email: email || '(blank)', why: 'not a valid email' }); continue; }
+
+    const existing = await env.DB.prepare('SELECT id, agency_id FROM brokers WHERE lower(trim(email)) = ?').bind(email).first();
+    if (existing) {
+      skipped.push({ email, why: existing.agency_id === agencyId ? 'already in this firm' : 'already has an account under another firm' });
+      continue;
+    }
+
+    const role = adminExists ? 'member' : 'admin';
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      'INSERT INTO brokers (id, email, password_hash, name, agency, phone, agency_id, role, created_at) VALUES (?,?,?,?,?,?,?,?,?)'
+    ).bind(id, email, '', name, agency.name, '', agencyId, role, new Date().toISOString()).run();
+    if (role === 'admin') adminExists = true;
+
+    // Into the directory ABY actually works from, the same second act the agency invite performs --
+    // without it the invite writes only to `brokers`, which the CRM does not read.
+    await linkBrokerIntoDirectory(env, {
+      email, name, phone: '', agencyId, agencyName: agency.name, source: 'aby-invite',
+    });
+
+    const token = await issueResetToken(env, id);
+    const sent = await sendSetPasswordEmail(env, {
+      to: email, link: origin + '/broker/set-password?token=' + token,
+      agencyName: agency.name, invited: true,
+    });
+    if (sent) invited.push({ email, role });
+    else failed.push({ email, why: 'the account was created, but the email could not be sent' });
+  }
+
+  return jsonResp({ ok: true, agency: agency.name, invited, skipped, failed });
 }
 
 async function handleForgotPassword(request, env) {
