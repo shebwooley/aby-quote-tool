@@ -149,6 +149,22 @@ function run(src) {
     if (!/linkBrokerIntoDirectory/.test(invite))
       bad("the invited person reaches the directory ABY works from", "only `brokers` is written, and the CRM does not read it");
     else ok("the invited person reaches the CRM directory too");
+
+    // NO MAIL LEAVES THE SITE. Eric, 09-25-2026: "I don't think I want an email to come from the site.
+    // I think I'd prefer that we create an invite link from the site that we can copy and email."
+    if (/sendSetPasswordEmail/.test(invite))
+      bad("the ABY invite sends NO email", "it calls sendSetPasswordEmail - Eric asked for a link he sends himself");
+    else if (!/link: origin \+ '\/broker\/set-password\?token=' \+ token/.test(invite))
+      bad("the ABY invite RETURNS the link", "no link in the response, so there is nothing to copy and the account is unreachable");
+    else ok("the ABY invite sends no email and returns a link to copy");
+
+    // A LOST LINK MUST BE RECOVERABLE. The link exists only on the screen that produced it, so a locked
+    // account with no way to re-issue is a dead end nothing else can fix.
+    if (!/issueResetToken\(env, existing\.id\)/.test(invite))
+      bad("a LOCKED account can be re-invited for a fresh link", "it cannot, so a link lost before it is emailed leaves that person permanently locked out");
+    else if (!/existing && !existing\.locked/.test(invite))
+      bad("somebody who HAS set a password is still skipped", "re-inviting them would mint a reset token against a live account");
+    else ok("a locked account gets a fresh link; an active account is still skipped");
   }
 
   // ---- 6. SELF-SIGNUP IS CLOSED. ACCOUNTS COME FROM ABY. ---------------------------------------
@@ -272,6 +288,20 @@ if (process.argv.includes("--self-test")) {
         const seg = s.slice(a, b);
         return s.slice(0, a) + seg.replace("$('go').onclick=async function(){", "$('tabUp').onclick=function(){};\n $('go').onclick=async function(){") + s.slice(b);
       }],
+    // ⚠️ A SINGLE-LINE ANCHOR. The two-line version matched nothing because a comment block sits between
+    // the two statements - a multi-line anchor breaks the moment anything is written between the lines
+    // (#361), and this file has been edited three times tonight.
+    ["the ABY invite went back to emailing from the site",
+      (s) => s.replace("invited.push({ email, role, link:",
+                       "await sendSetPasswordEmail(env, { to: email }); invited.push({ email, role, link:")],
+    ["the invite stopped returning the link, leaving nothing to copy",
+      (s) => s.replace("invited.push({ email, role, link: origin + '/broker/set-password?token=' + token });",
+                       "invited.push({ email, role });")],
+    ["a locked account went back to being skipped, so a lost link is a dead end",
+      (s) => s.replace("      const again = await issueResetToken(env, existing.id);",
+                       "      skipped.push({ email, why: 'already invited' }); const again = String('');")],
+    ["an ACTIVE account could be re-invited, minting a reset token against a live login",
+      (s) => s.replace("if (existing && !existing.locked) {", "if (false) {")],
     ["the invite card was moved back inside a view, where the other view cannot see it",
       (s) => {
         const a = s.indexOf("function adminBrokersHTML(");

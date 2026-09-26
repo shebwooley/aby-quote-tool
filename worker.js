@@ -7145,10 +7145,11 @@ ${abyAdminNav('/admin/brokers')}
        ⛔ It never creates a FIRM - an unknown one is refused, because signup minting a new agency every
        time is what fills the CRM with duplicates and leaves the broker with no logo. -->
   <div class="card"><h2>Invite a broker to quote</h2>
-    <p class="sub">Creates a locked account inside a firm that is already in the CRM and emails that
-      person a link to set their own password. They inherit the firm's logo, so their quotes carry it.
-      The first person you put into a firm becomes its administrator and can invite their own
-      colleagues after that. <strong>Signing up is closed, so this is the only way in.</strong></p>
+    <p class="sub">Creates a locked account inside a firm that is already in the CRM and gives you a
+      <strong>link to copy and email them yourself</strong> - nothing is sent from this site. Each link
+      lasts seven days and works once. They inherit the firm's logo, so their quotes carry it. The first
+      person you put into a firm becomes its administrator and can invite their own colleagues after
+      that. <strong>Signing up is closed, so this is the only way in.</strong></p>
     <input id="ivFirm" placeholder="Start typing the firm's name" autocomplete="off"
            style="width:340px;padding:7px 9px;border:1px solid #cfd8e3;border-radius:6px">
     <div id="ivHits" style="margin:8px 0"></div>
@@ -7484,15 +7485,34 @@ ${abyAdminNav('/admin/brokers')}
      var d=await r.json().catch(function(){return{}});
      go.disabled=false;
      if(!r.ok){ msg.textContent=d.error||'Could not send the invitations.'; return; }
-     // EVERY OUTCOME IS NAMED, not only the happy one: a count of invitations with the skips left out
-     // reads as "all done" when half of them already had accounts.
-     var bits=[];
-     if(d.invited&&d.invited.length) bits.push('Invited '+d.invited.length+' into '+d.agency+': '+d.invited.map(function(x){return x.email+' ('+x.role+')'}).join(', '));
-     if(d.skipped&&d.skipped.length) bits.push('Skipped '+d.skipped.length+': '+d.skipped.map(function(x){return x.email+' \u2014 '+x.why}).join(', '));
-     if(d.failed&&d.failed.length) bits.push('Failed '+d.failed.length+': '+d.failed.map(function(x){return x.email+' \u2014 '+x.why}).join(', '));
-     msg.textContent=bits.join(' | ')||'Nothing happened.';
-     // The box empties only when EVERY line landed, so a refused or skipped one survives to be seen.
-     if(d.invited&&d.invited.length&&!(d.skipped||[]).length&&!(d.failed||[]).length) boxEl.value='';
+     // THE LINKS ARE THE DELIVERABLE NOW, so they are RENDERED rather than summarised in a sentence.
+     // \u26d4 textContent would print them as unusable text; each one gets its own row with a Copy button.
+     // EVERY OUTCOME IS STILL NAMED, not only the happy one: a count with the skips left out reads as
+     // "all done" when half of them already had accounts.
+     var html='';
+     if(d.invited&&d.invited.length){
+       html+='<p style="margin:10px 0 4px"><strong>'+d.invited.length+' into '+esc(d.agency)+'.</strong> Copy each link and email it to that person. Seven days, one use each.</p>';
+       d.invited.forEach(function(x){
+         html+='<div style="display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap">'
+           +'<span style="min-width:230px">'+esc(x.email)+' <span class="muted" style="font-size:12px">('+esc(x.role)+(x.reissued?', new link':'')+')</span></span>'
+           +'<input readonly value="'+esc(x.link)+'" style="flex:1;min-width:260px;padding:5px 7px;border:1px solid #cfd8e3;border-radius:5px;font:12px monospace">'
+           +'<button type="button" class="ivPick ivCopy" data-link="'+esc(x.link)+'">Copy</button></div>';
+       });
+     }
+     if(d.skipped&&d.skipped.length) html+='<p class="muted" style="font-size:13px;margin:8px 0 0">Skipped '+d.skipped.length+': '+esc(d.skipped.map(function(x){return x.email+' \u2014 '+x.why}).join('; '))+'</p>';
+     if(d.failed&&d.failed.length) html+='<p style="color:#a12622;font-size:13px;margin:8px 0 0">Failed '+d.failed.length+': '+esc(d.failed.map(function(x){return x.email+' \u2014 '+x.why}).join('; '))+'</p>';
+     msg.innerHTML=html||'Nothing happened.';
+     Array.prototype.forEach.call(msg.querySelectorAll('.ivCopy'),function(b){
+       b.onclick=function(){
+         var v=b.getAttribute('data-link');
+         // A copy that silently fails is worse than no button, so the outcome is said either way.
+         if(navigator.clipboard&&navigator.clipboard.writeText){
+           navigator.clipboard.writeText(v).then(function(){b.textContent='Copied'}).catch(function(){b.textContent='Copy failed - select it'});
+         } else { b.textContent='Select it and copy'; }
+       };
+     });
+     // \u26d4 THE BOX IS NEVER EMPTIED NOW. The links are on screen and nowhere else - clearing the input
+     // that produced them invites somebody to lose both at once.
      load();
    };
  })();
@@ -12591,9 +12611,26 @@ async function handleAdminInviteBroker(request, env) {
     const name = String(p.name || '').trim().slice(0, 120);
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { failed.push({ email: email || '(blank)', why: 'not a valid email' }); continue; }
 
-    const existing = await env.DB.prepare('SELECT id, agency_id FROM brokers WHERE lower(trim(email)) = ?').bind(email).first();
+    const existing = await env.DB.prepare(
+      "SELECT id, agency_id, CASE WHEN password_hash = '' THEN 1 ELSE 0 END AS locked FROM brokers WHERE lower(trim(email)) = ?"
+    ).bind(email).first();
+
+    // ⭐⭐ A LOCKED ACCOUNT GETS A FRESH LINK RATHER THAN BEING SKIPPED, and that is not a nicety - it is
+    // the difference between a recoverable mistake and a dead end. The link is handed over for ABY to
+    // paste into their own email, so it can be lost before it is sent; nothing else can re-issue one,
+    // and the account would sit locked forever with no way to fix it. ⛔ Somebody who has ALREADY set a
+    // password is still skipped, always: re-inviting them would mint a reset token for a live account.
+    if (existing && !existing.locked) {
+      skipped.push({ email, why: 'already has an account and has set a password' });
+      continue;
+    }
+    if (existing && String(existing.agency_id) !== agencyId) {
+      skipped.push({ email, why: 'invited under another firm already - sort that out before re-inviting' });
+      continue;
+    }
     if (existing) {
-      skipped.push({ email, why: existing.agency_id === agencyId ? 'already in this firm' : 'already has an account under another firm' });
+      const again = await issueResetToken(env, existing.id);
+      invited.push({ email, role: 'member', reissued: true, link: origin + '/broker/set-password?token=' + again });
       continue;
     }
 
@@ -12610,13 +12647,17 @@ async function handleAdminInviteBroker(request, env) {
       email, name, phone: '', agencyId, agencyName: agency.name, source: 'aby-invite',
     });
 
+    // ⛔ NO EMAIL IS SENT FROM HERE. ERIC, 09-25-2026: *"I don't think I want an email to come from the
+    // site. I think I'd prefer that we create an invite link from the site that we can copy and email."*
+    // ⭐ It is his call and it is also the sturdier one: the afternoon's Resend repair proved that mail
+    // from this worker can be refused for reasons nothing on the screen explains (#520), and a link ABY
+    // pastes into their own email cannot fail silently - either they have it or they do not.
+    // ⚠️ THE TOKEN LASTS SEVEN DAYS (issueResetToken), which is what makes copy-and-send-later safe.
+    // ⚠️ AND IT IS STILL SINGLE USE: handleSetPassword clears the token in the same statement that sets
+    // the password, so whoever opens it first spends it. A corporate mail scanner that follows links can
+    // spend it before the person does (#117) - that risk moved to ABY's own mail, it did not vanish.
     const token = await issueResetToken(env, id);
-    const sent = await sendSetPasswordEmail(env, {
-      to: email, link: origin + '/broker/set-password?token=' + token,
-      agencyName: agency.name, invited: true,
-    });
-    if (sent) invited.push({ email, role });
-    else failed.push({ email, why: 'the account was created, but the email could not be sent' });
+    invited.push({ email, role, link: origin + '/broker/set-password?token=' + token });
   }
 
   return jsonResp({ ok: true, agency: agency.name, invited, skipped, failed });
