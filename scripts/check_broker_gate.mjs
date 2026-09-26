@@ -182,7 +182,29 @@ function run(src) {
     if (!dflt) bad("there is a default invitation to edit", "no ABY_INVITE_EMAIL_DEFAULT - Eric asked for it pre-written");
     else if (/https?:|\{link\}|set-password/.test(dflt[1]))
       bad("the default invitation contains NO link", "it does - the button is added by the sender so an edited message can never be linkless");
-    else ok("the default invitation is pre-written and carries no link of its own");
+    else {
+      ok("the default invitation is pre-written and carries no link of its own");
+
+      // ---- AND IT STAYS IN HIS VOICE. Two corrections of his, 09-25-2026, each a standing rule.
+      //
+      // ⭐ BRITISH IDIOM, NOT JUST SPELLING: *"I've never said straight away in my life. We live in the
+      // United States and don't talk like that."* Every phrase below is one that has actually been
+      // written by me and corrected by him, or is unambiguously British. SOURCE-OF-TRUTH decision 10
+      // says the rule applies to EVERYTHING we write, and he has raised it seven times.
+      const brit = ["straight away", "sort it out", "whilst", "amongst", "organise", "realise",
+                    "enrolment", "favour", "behaviour", "colour", "apologise", "have a look at it"];
+      const hits = brit.filter((p) => new RegExp(p, "i").test(dflt[1]));
+      if (hits.length) bad("the default invitation reads as American", "British idiom in it: " + hits.join(", "));
+      else ok("the default invitation carries no British idiom");
+
+      // ⭐ AND IT NAMES NO PRODUCTS. *"We don't sell 5500s separately."* My draft listed three services
+      // and got one wrong. What ABY sells is a COMMERCIAL FACT and never mine to infer, so the default
+      // enumerates nothing. ⛔ If Eric wants a product line in it, that is his edit and this rule goes
+      // with it - it guards against ME putting a guessed list back, not against him adding a real one.
+      if (/\b5500\b/.test(dflt[1]))
+        bad("the default invitation names no products", "it names 5500, which Eric corrected: ABY does not sell those separately");
+      else ok("the default invitation names no products, so no product fact is being guessed");
+    }
 
     // A LOST LINK MUST BE RECOVERABLE. The link exists only on the screen that produced it, so a locked
     // account with no way to re-issue is a dead end nothing else can fix.
@@ -320,9 +342,19 @@ if (process.argv.includes("--self-test")) {
       (s) => s.replace("const row = { email, role, link: linkFor };", "const row = { email, role };")],
     ["the send outcome stopped being recorded per person",
       (s) => s.replace("if (wantsEmail) row.emailed = await sendSetPasswordEmail(env, {", "if (wantsEmail) await sendSetPasswordEmail(env, {")],
+    ["British idiom came back into the invitation",
+      (s) => s.replace("If you have any trouble getting in, let us know.", "If you have any trouble getting in, we will sort it out straight away.")],
+    // ⚠️ ANCHORED ON THE DECLARATION, NOT THE SENTENCE. Eric's words are QUOTED VERBATIM in the doc
+    // comment above the constant, so a search for the sentence finds the COMMENT first and mutates
+    // prose the rules never read - it reports "landed" and changes nothing that matters (#361, and the
+    // same family as #126). Quoting a user's words next to the string that holds them makes a decoy of
+    // every anchor. The "= '" prefix exists only at the declaration.
+    ["a guessed product list came back into the invitation",
+      (s) => s.replace("= 'ABY now gives you the ability to run quotes yourself!",
+                       "= 'ABY now gives you the ability to run COBRA, FSA and 5500 quotes yourself!")],
     ["the default invitation grew a link of its own, which an edit could delete",
-      (s) => s.replace("'If you have any trouble getting in, let us know and we will sort it out.';",
-                       "'Set your password here: https://abyquotes.com/broker/set-password';")],
+      (s) => s.replace("+ 'If you have any trouble getting in, let us know.';",
+                       "+ 'Set your password here: https://abyquotes.com/broker/set-password';")],
     // (A sabotage that removed the link from a single push line lived here until the email option was
     //  added and the code moved to a `row` object. It was DELETED rather than repointed: "the link became
     //  conditional on the email" below covers the same invariant against the code as it is now.)

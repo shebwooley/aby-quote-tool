@@ -12635,24 +12635,41 @@ async function handleAgencyInvite(request, env) {
  * an empty stored hash, so this creates an invitation and never an open account.
  */
 /**
- * THE DEFAULT INVITATION, AND THE WORDS ARE CLAUDE'S FOR ERIC TO CORRECT.
+ * THE DEFAULT INVITATION. THE OPENING SENTENCE IS ERIC'S, VERBATIM, AND IT REPLACED MINE.
+ *
+ * ⭐⭐ HE REWROTE IT AND THE REASON IS WORTH MORE THAN THE WORDS: *"Why would you say quoting now needs
+ * a login if they've never been able to quote before? You're making it sound like a negative - like
+ * they could quote without a login and now they need one. Why can't we phrase it like a positive
+ * instead? ABY now gives you the ability to run quotes yourself! It's fast and easy, so you can get
+ * rates for your clients without waiting."*
+ *
+ * ⛔ MY DRAFT DESCRIBED THE GATE, NOT THE OFFER. I had just spent an hour arming a login requirement,
+ * so I wrote *"quoting now needs a login"* - true from inside this session and meaningless to the
+ * reader, who has never been able to quote at all. For them this is a new CAPABILITY, not a new
+ * restriction. **A message written from the sender's context reads as a warning.**
+ *
+ * ⛔ TWO OTHER CORRECTIONS OF HIS, BOTH STANDING RULES:
+ *   1. *"We don't sell 5500s separately"* - my draft listed products. It names none now, and a list is
+ *      not to be reintroduced without him, because it is a commercial fact and never mine to infer.
+ *   2. *"I've never said straight away in my life. We live in the United States and don't talk like
+ *      that."* The house rule covers IDIOM as well as spelling: *straight away* and *sort it out* are
+ *      both British, and both were mine. `SOURCE-OF-TRUTH.md` decision 10 - in EVERYTHING we write.
  *
  * ⛔ IT CONTAINS NO LINK ON PURPOSE. sendSetPasswordEmail always adds the button and the seven-day
  * line, so no edit on the screen can produce a friendly invitation that lets nobody in.
- * ⚠️ NO REPLY ADDRESS OR PHONE IS ASSERTED HERE. Mail leaves as quotes@abybenefits.com and nothing on
- * record says that inbox is read - the documented ABY quote inbox is eric@ and niels@. Inventing a
- * contact line would be inventing a promise, so the last sentence is deliberately vague and Eric can
- * put the right address in on the screen.
+ * ⚠️ NO REPLY ADDRESS OR PHONE IS ASSERTED. Mail leaves as quotes@abybenefits.com and nothing on record
+ * says that inbox is read - the documented ABY quote inbox is eric@ and niels@. Inventing a contact
+ * line would be inventing a promise, so the closing line is deliberately plain.
  */
 // ⚠️ THE VALUE STARTS ON THIS LINE DELIBERATELY. check_worker_pages.mjs pulls a page's module-scope
 // dependencies in by matching "const NAME = ", so a value beginning on the next line is invisible to it
 // and the page then fails to evaluate with "not defined".
-const ABY_INVITE_EMAIL_DEFAULT = 'We have set up an account for you on the ABY Quote Tool, so you can price COBRA, FSA, 5500 and the '
-  + 'rest yourself and see the numbers straight away.\n\n'
-  + 'Quoting now needs a login, so this is your way in. Choose a password with the button below and you '
-  + 'are set. After that your name and agency fill in automatically on every quote you run, and your '
-  + 'agency logo appears on the quotes you share with your clients.\n\n'
-  + 'If you have any trouble getting in, let us know and we will sort it out.';
+const ABY_INVITE_EMAIL_DEFAULT = 'ABY now gives you the ability to run quotes yourself! It is fast and '
+  + 'easy, so you can get rates for your clients without waiting.\n\n'
+  + 'We have set up an account for you. Choose a password with the button below and you are in. After '
+  + 'that your name and agency fill in automatically on every quote, and your agency logo appears on the '
+  + 'quotes you share with your clients.\n\n'
+  + 'If you have any trouble getting in, let us know.';
 
 async function handleAdminInviteBroker(request, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
