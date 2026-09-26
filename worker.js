@@ -7104,7 +7104,7 @@ ${ADMIN_HEADER_CSS}
  .site:hover{text-decoration:underline}
  /* ⛔ NOT UNDERLINED. Eric: "since every single agency will open when clicked, do we really need
     them all underlined?" No -- when a whole column is links, underlining every one is noise on
-    1,552 rows. Weight and colour carry the affordance; the underline arrives on hover. */
+    1,552 rows. Weight and color carry the affordance; the underline arrives on hover. */
  .firmname{color:#12263f;font-weight:600;text-decoration:none}
  .firmname:hover{color:#1a5c3a;text-decoration:underline}
  .firmmeta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-top:2px}
@@ -12341,7 +12341,7 @@ function setPasswordPageHTML() {
 <header>ABY Quote Tool</header>
 <main><div class="card">
   <h2>Choose your password</h2>
-  <p class="sub">At least 10 characters. You will be signed in straight away.</p>
+  <p class="sub">At least 10 characters. You will be signed in as soon as you set it.</p>
   <label>New password</label><input type="password" id="p1" autocomplete="new-password">
   <label>Confirm</label><input type="password" id="p2" autocomplete="new-password">
   <button id="go">Set password and sign in</button>
@@ -12666,7 +12666,7 @@ async function handleAgencyInvite(request, env) {
 // and the page then fails to evaluate with "not defined".
 const ABY_INVITE_EMAIL_DEFAULT = 'ABY now gives you the ability to run quotes yourself! It is fast and '
   + 'easy, so you can get rates for your clients without waiting.\n\n'
-  + 'We have set up an account for you. Choose a password with the button below and you are in. After '
+  + 'We have set up an account for you. Click the button below, pick a password, and you are in. After '
   + 'that your name and agency fill in automatically on every quote, and your agency logo appears on the '
   + 'quotes you share with your clients.\n\n'
   + 'If you have any trouble getting in, let us know.';
@@ -17111,7 +17111,7 @@ ${ADMIN_HEADER_CSS}
 /* 🔴 THE FIRST ATTEMPT TINTED IT #f4f8f5 AND THIS PAGE'S BACKGROUND IS #f0f4f0 -- two pale greens
    four hex digits apart, so the panel Eric asked to have STAND OUT was invisible against the page
    it sits on. Eric: "the same color as the background behind it."
-   ⭐ THE MISTAKE WAS PICKING A TINT WITHOUT READING THE BACKGROUND IT LANDS ON. A colour is never
+   ⭐ THE MISTAKE WAS PICKING A TINT WITHOUT READING THE BACKGROUND IT LANDS ON. A color is never
    a property of the element; it is a property of the CONTRAST, and the page's own value was one
    grep away.
    ▶️ WHITE plus a real border does the work instead, and white is not a blend here either: the
