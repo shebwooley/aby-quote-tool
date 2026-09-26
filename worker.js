@@ -12386,7 +12386,11 @@ async function handleBrokerSignup(request, env) {
   // already follows by redirecting to /broker rather than answering 403.
   if (!BROKER_SELF_SIGNUP) {
     return jsonResp({
-      error: 'Accounts are set up by ABY. Ask us for an invitation and you will get an email with a link to set your password.',
+      // ⚠️ "we will send you a link", NOT "you will get an email". ABY chooses per invitation whether the
+      // site emails it or they paste it into their own message, so promising an email is a promise the
+      // product does not always keep - the same stale-promise shape as the sign-in page claiming details
+      // filled in automatically when nothing filled anything in.
+      error: 'Accounts are set up by ABY. Ask us for an invitation and we will send you a link to set your password.',
     }, 403);
   }
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
