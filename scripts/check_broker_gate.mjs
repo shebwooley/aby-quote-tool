@@ -198,6 +198,29 @@ function run(src) {
     else if (!/Accounts are set up by ABY/.test(bp)) bad("the page SAYS where accounts come from", "the tab is gone and nothing explains it, which reads as a broken page");
     else ok("the page offers no sign-up tab, keeps no orphaned handler, and says accounts come from ABY");
   }
+
+  // ---- 7. AND THE INVITE IS REACHABLE, WHICHEVER VIEW THE PAGE OPENS ON -------------------------
+  //
+  // 🔴 ERIC, MINUTES AFTER IT SHIPPED: *"I don't see how to invite a broker."* It was live and he was
+  // on the other view. The card had been put beside the Registered brokers table, which is INSIDE
+  // perfView, and `/admin/brokers` REMEMBERS the last view used in localStorage - so for anybody whose
+  // last visit was Prospects the only way in did not exist. ⛔ Now the ONLY way to get an account is
+  // this card, which makes reachability part of the gate rather than a nicety (#275, #284: built,
+  // correct and unreachable).
+  const abAt = src.indexOf("function adminBrokersHTML(");
+  const abEnd = abAt < 0 ? -1 : src.indexOf("\nfunction ", abAt + 10);
+  const ab = abAt < 0 ? "" : src.slice(abAt, abEnd < 0 ? undefined : abEnd);
+  if (ab.length < 2000) {
+    bad("FLOOR: adminBrokersHTML was sliced", "got " + ab.length + " chars");
+  } else {
+    const card = ab.indexOf("<h2>Invite a broker to quote</h2>");
+    const perf = ab.indexOf('id="perfView"');
+    if (card < 0) bad("the invite card is on /admin/brokers", "it is not there at all, so nobody can be given an account");
+    else if (perf > 0 && card > perf)
+      bad("the invite card sits OUTSIDE both views",
+          "it is inside a view, so it is invisible on the other one - and the page reopens on whichever view was used last");
+    else ok("the invite card sits above the view toggle, so it is there whichever view the page opens on");
+  }
 }
 
 const src = readFileSync(W, "utf8");
@@ -248,6 +271,20 @@ if (process.argv.includes("--self-test")) {
         const b = s.indexOf("\nfunction ", a + 10);
         const seg = s.slice(a, b);
         return s.slice(0, a) + seg.replace("$('go').onclick=async function(){", "$('tabUp').onclick=function(){};\n $('go').onclick=async function(){") + s.slice(b);
+      }],
+    ["the invite card was moved back inside a view, where the other view cannot see it",
+      (s) => {
+        const a = s.indexOf("function adminBrokersHTML(");
+        const b = s.indexOf("\nfunction ", a + 10);
+        const seg = s.slice(a, b);
+        const card = '  <div class="card"><h2>Invite a broker to quote</h2>';
+        const i = seg.indexOf(card);
+        const j = seg.indexOf('<div id="perfView">');
+        if (i < 0 || j < 0) return s;
+        // lift the heading line out and drop it after perfView opens
+        const moved = seg.replace(card, '  <div class="card"><h2>Invite a broker MOVED</h2>')
+          .replace('<div id="perfView">', '<div id="perfView">\n' + card);
+        return s.slice(0, a) + moved + s.slice(b);
       }],
     ["the invited person stopped reaching the CRM directory",
       (s) => {

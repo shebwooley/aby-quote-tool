@@ -7135,6 +7135,29 @@ ${abyAdminNav('/admin/brokers')}
        MARKETING answers "who are we working" and is built from the AGENCY records instead, so
        it shows every firm and hides the ones that no longer exist.
        The two labels live in CRM_VIEWS in worker.js, so renaming one is a single edit. -->
+  <!-- ABY INVITES A BROKER (F-6, Eric 09-25-2026): "Is there a way for us (ABY) to create an invite
+       link? So that not just anyone can sign up to quote?"
+       🔴 ABOVE THE VIEW TOGGLE, AND THAT IS A FIX RATHER THAN A PREFERENCE. It was first put beside the
+       Registered brokers table, which is INSIDE perfView - so it was invisible on the Prospects view,
+       and this page REMEMBERS the last view you used in localStorage. Eric came back with "I don't see
+       how to invite a broker" and he was on the other view. ⛔ An action is not a view of data: it
+       belongs outside both. It was also second-from-last on a page with seven cards above it.
+       ⛔ It never creates a FIRM - an unknown one is refused, because signup minting a new agency every
+       time is what fills the CRM with duplicates and leaves the broker with no logo. -->
+  <div class="card"><h2>Invite a broker to quote</h2>
+    <p class="sub">Creates a locked account inside a firm that is already in the CRM and emails that
+      person a link to set their own password. They inherit the firm's logo, so their quotes carry it.
+      The first person you put into a firm becomes its administrator and can invite their own
+      colleagues after that. <strong>Signing up is closed, so this is the only way in.</strong></p>
+    <input id="ivFirm" placeholder="Start typing the firm's name" autocomplete="off"
+           style="width:340px;padding:7px 9px;border:1px solid #cfd8e3;border-radius:6px">
+    <div id="ivHits" style="margin:8px 0"></div>
+    <p id="ivChosen" class="muted" style="font-size:13px;margin:6px 0"></p>
+    <textarea id="ivBox" rows="4" placeholder="One per line: Jane Smith, jane@firm.com&#10;An email on its own is fine."
+              style="width:100%;padding:8px 9px;border:1px solid #cfd8e3;border-radius:6px;font:14px inherit"></textarea>
+    <div style="margin-top:8px"><button id="ivGo">Send the invitations</button></div>
+    <p id="ivMsg" style="font-size:13px;margin:8px 0 0"></p></div>
+
   <div class="views">
     <button id="vPerf" class="on" onclick="setView('performance')">Performance</button>
     <button id="vMkt" onclick="setView('marketing')">Prospects</button>
@@ -7191,26 +7214,6 @@ ${abyAdminNav('/admin/brokers')}
     <p class="sub">Everything before 2026, newest first. Aging buckets say nothing across fifteen
       years; a year count does.</p>
     <div id="historic"><p class="muted">Loading...</p></div></div>
-  <!-- ABY INVITES A BROKER (F-6, Eric 09-25-2026): "Is there a way for us (ABY) to create an invite
-       link? So that not just anyone can sign up to quote?" Sits with the accounts table because that
-       is what it adds to. ⛔ It never creates a FIRM - an unknown one is refused, because signup
-       minting a new agency every time is what fills the CRM with duplicates and leaves the broker
-       with no logo. -->
-  <div class="card"><h2>Invite a broker to quote</h2>
-    <p class="sub">Creates a locked account inside a firm that is already in the CRM and emails that
-      person a link to set their own password. They inherit the firm's logo, so their quotes carry it.
-      The first person you put into a firm becomes its administrator and can invite their own
-      colleagues after that. &#9888; While the login requirement is off, anyone can still sign
-      themselves up at /broker - inviting is only a gate once that is armed.</p>
-    <input id="ivFirm" placeholder="Start typing the firm's name" autocomplete="off"
-           style="width:340px;padding:7px 9px;border:1px solid #cfd8e3;border-radius:6px">
-    <div id="ivHits" style="margin:8px 0"></div>
-    <p id="ivChosen" class="muted" style="font-size:13px;margin:6px 0"></p>
-    <textarea id="ivBox" rows="4" placeholder="One per line: Jane Smith, jane@firm.com&#10;An email on its own is fine."
-              style="width:100%;padding:8px 9px;border:1px solid #cfd8e3;border-radius:6px;font:14px inherit"></textarea>
-    <div style="margin-top:8px"><button id="ivGo">Send the invitations</button></div>
-    <p id="ivMsg" style="font-size:13px;margin:8px 0 0"></p></div>
-
   <div class="card"><h2>Registered brokers</h2>
     <p class="sub">Everyone with an ABY account. Assign each one to whoever owns the relationship.</p>
     <div id="brokers"><p class="muted">Loading...</p></div></div>
