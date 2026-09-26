@@ -235,7 +235,12 @@ function runAll(text) {
                       // adminHTML exactly like PRODUCT_SHORT. The checker caught the omission on the
                       // first run after the panel was written -- which is the fifth time this
                       // prelude has recorded "not defined" meaning "not in this list".
-                      "const QUOTE_REP_NAMES = ", "const QUOTE_PRODUCT_IDS = "]) {
+                      "const QUOTE_REP_NAMES = ", "const QUOTE_PRODUCT_IDS = ",
+                      // 🆕 09-25-2026: adminBrokersHTML's invite card prefills the editable invitation
+                      // with the default wording and escapes it on the way in, so the page now depends
+                      // on both. SIXTH time this prelude has recorded "not defined" meaning "not in
+                      // this list" - and it caught it on the first run again.
+                      "function esc(", "const ABY_INVITE_EMAIL_DEFAULT = "]) {
     const at = flat.indexOf("\n" + decl);
     const isFn = decl.startsWith("function");
     // ⚠️ A const may be an OBJECT or an ARRAY, so both closers are tried and the NEARER one wins.

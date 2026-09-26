@@ -7156,7 +7156,25 @@ ${abyAdminNav('/admin/brokers')}
     <p id="ivChosen" class="muted" style="font-size:13px;margin:6px 0"></p>
     <textarea id="ivBox" rows="4" placeholder="One per line: Jane Smith, jane@firm.com&#10;An email on its own is fine."
               style="width:100%;padding:8px 9px;border:1px solid #cfd8e3;border-radius:6px;font:14px inherit"></textarea>
-    <div style="margin-top:8px"><button id="ivGo">Send the invitations</button></div>
+
+    <!-- THE MESSAGE. Pre-written and editable per send (Eric: "can we pre-write the email so it's not
+         just a link?"). ⛔ NO LINK IN HERE: the button and the seven-day line are added by the sender,
+         so no edit on this screen can produce a friendly invitation that lets nobody in.
+         ⚠️ THE WORDS ARE CLAUDE'S AND ARE HERE TO BE CORRECTED. Editing the box changes THIS send only;
+         storing a house version would need a database column, which on ABY is a deploy plus somebody
+         opening /api/migrate (#519), and that was not worth it for a handful of invitations. -->
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer;font-size:13px;color:#143c73">The email we would send (edit it if you like)</summary>
+      <textarea id="ivEmail" rows="8"
+                style="width:100%;margin-top:8px;padding:8px 9px;border:1px solid #cfd8e3;border-radius:6px;font:13px inherit">${esc(ABY_INVITE_EMAIL_DEFAULT)}</textarea>
+      <p class="muted" style="font-size:12px;margin:4px 0 0">The sign-in button and "this link works once
+        and expires in 7 days" are added underneath automatically. Subject: Your login for the ABY Quote Tool.</p>
+    </details>
+
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+      <button id="ivGo">Create the links only</button>
+      <button id="ivGoMail" class="primary">Create and email them</button>
+    </div>
     <p id="ivMsg" style="font-size:13px;margin:8px 0 0"></p></div>
 
   <div class="views">
@@ -7459,8 +7477,11 @@ ${abyAdminNav('/admin/brokers')}
    };
  })();
  (function(){
-   var go=document.getElementById('ivGo'); if(!go) return;
-   go.onclick=async function(){
+   var go=document.getElementById('ivGo'), goMail=document.getElementById('ivGoMail');
+   if(!go) return;
+   // ONE PATH, TWO BUTTONS. The only difference is whether an email is asked for, so they cannot drift
+   // apart - and the LINKS come back either way, which is the point of the design.
+   var run=async function(send){
      var msg=document.getElementById('ivMsg'), boxEl=document.getElementById('ivBox');
      if(!ivAgencyId){ msg.textContent='Pick the firm first: start typing its name and choose it from the list.'; return; }
      // A LINE WITH NO EMAIL BLOCKS THE WHOLE SEND AND IS NAMED BACK, and the box is left alone so the
@@ -7479,11 +7500,12 @@ ${abyAdminNav('/admin/brokers')}
      });
      if(unusable.length){ msg.textContent='Nothing was sent. These lines have no email address in them: '+unusable.join('; '); return; }
      if(!people.length){ msg.textContent='Nobody to invite yet.'; return; }
-     go.disabled=true;
+     go.disabled=true; if(goMail) goMail.disabled=true;
+     var em=document.getElementById('ivEmail');
      var r=await fetch('/api/admin/brokers/invite',{method:'POST',headers:{'Content-Type':'application/json'},
-       body:JSON.stringify({agencyId:ivAgencyId,people:people})});
+       body:JSON.stringify({agencyId:ivAgencyId,people:people,send:send===true,message:em?em.value:''})});
      var d=await r.json().catch(function(){return{}});
-     go.disabled=false;
+     go.disabled=false; if(goMail) goMail.disabled=false;
      if(!r.ok){ msg.textContent=d.error||'Could not send the invitations.'; return; }
      // THE LINKS ARE THE DELIVERABLE NOW, so they are RENDERED rather than summarised in a sentence.
      // \u26d4 textContent would print them as unusable text; each one gets its own row with a Copy button.
@@ -7491,10 +7513,18 @@ ${abyAdminNav('/admin/brokers')}
      // "all done" when half of them already had accounts.
      var html='';
      if(d.invited&&d.invited.length){
-       html+='<p style="margin:10px 0 4px"><strong>'+d.invited.length+' into '+esc(d.agency)+'.</strong> Copy each link and email it to that person. Seven days, one use each.</p>';
+       html+='<p style="margin:10px 0 4px"><strong>'+d.invited.length+' into '+esc(d.agency)+'.</strong> '
+         +(d.emailRequested?'Emailed where it says sent. ':'')
+         +'Every link is here either way. Seven days, one use each.</p>';
        d.invited.forEach(function(x){
+         // THE SEND OUTCOME IS SAID PER PERSON, and a failure is NOT a failure to invite - the account
+         // exists and the link is on the row. Saying "failed" without the link beside it would be the
+         // silent-failure shape wearing a louder voice.
+         var mail = !d.emailRequested ? '' : (x.emailed
+           ? ' <span style="color:#1a5c3a;font-size:12px">sent</span>'
+           : ' <span style="color:#a12622;font-size:12px">not sent - email this link yourself</span>');
          html+='<div style="display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap">'
-           +'<span style="min-width:230px">'+esc(x.email)+' <span class="muted" style="font-size:12px">('+esc(x.role)+(x.reissued?', new link':'')+')</span></span>'
+           +'<span style="min-width:230px">'+esc(x.email)+' <span class="muted" style="font-size:12px">('+esc(x.role)+(x.reissued?', new link':'')+')</span>'+mail+'</span>'
            +'<input readonly value="'+esc(x.link)+'" style="flex:1;min-width:260px;padding:5px 7px;border:1px solid #cfd8e3;border-radius:5px;font:12px monospace">'
            +'<button type="button" class="ivPick ivCopy" data-link="'+esc(x.link)+'">Copy</button></div>';
        });
@@ -7515,6 +7545,8 @@ ${abyAdminNav('/admin/brokers')}
      // that produced them invites somebody to lose both at once.
      load();
    };
+   go.onclick=function(){ run(false); };
+   if(goMail) goMail.onclick=function(){ run(true); };
  })();
 
  Array.prototype.forEach.call(document.querySelectorAll('.filters button'),function(b){
@@ -12470,17 +12502,34 @@ async function handleBrokerOwnQuotes(request, env) {
 // ─── Agencies, invitations and resets (F-53) ───────────────────────────────────
 
 /** Send one "set your password" email. Used for BOTH an invitation and a forgotten password. */
-async function sendSetPasswordEmail(env, { to, link, agencyName, invited }) {
+/**
+ * ⭐ `body` AND `subjectLine` ARE OPTIONAL OVERRIDES, ADDED 09-25-2026 FOR THE ABY INVITE.
+ *
+ * ERIC: *"If we keep the option to email from the site, can we pre-write the email so it's not just a
+ * link?"* The wording that was here is written for a broker inviting a COLLEAGUE - *"Your agency has set
+ * up an account for you"* - which names the wrong sender when ABY is the one inviting. So ABY passes its
+ * own prose and the default stays exactly as it was for the agency path and for a password reset.
+ *
+ * ⛔⛔ THE LINK IS ALWAYS ADDED BY THIS FUNCTION AND IS NEVER PART OF THE PROSE. If the link were a token
+ * inside an editable message, deleting it would send a perfectly friendly invitation that lets nobody in
+ * - and it would look like it worked. The message is the words above the button; the button is ours.
+ * ⚠️ Blank lines become paragraphs, and every line is still ESCAPED: this text arrives from a screen and
+ * must not be able to put markup into somebody's inbox.
+ */
+async function sendSetPasswordEmail(env, { to, link, agencyName, invited, body, subjectLine }) {
   if (!env.RESEND_API_KEY) { console.warn('RESEND_API_KEY not set — cannot send'); return false; }
-  const subject = invited
+  const subject = subjectLine || (invited
     ? `You have been added to the ABY Quote Tool${agencyName ? ' by ' + agencyName : ''}`
-    : 'Reset your ABY Quote Tool password';
+    : 'Reset your ABY Quote Tool password');
   const intro = invited
     ? `${agencyName ? agencyName + ' has' : 'Your agency has'} set up an account for you on the ABY Quote Tool. Choose a password to get started.`
     : 'Somebody asked to reset the password on this account. If it was not you, ignore this email and nothing will change.';
+  const prose = String(body || '').trim()
+    ? String(body).trim().split(/\n\s*\n/).map((para) => `<p>${esc(para).replace(/\n/g, '<br>')}</p>`).join('')
+    : `<p>${esc(intro)}</p>`;
   const html =
     `<div style="font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;color:#12263f">` +
-    `<p>${esc(intro)}</p>` +
+    prose +
     `<p style="margin:24px 0"><a href="${esc(link)}" style="background:#143c73;color:#fff;padding:11px 20px;border-radius:6px;text-decoration:none">Choose your password</a></p>` +
     `<p style="color:#5b6b7f;font-size:13px">This link works once and expires in 7 days.</p></div>`;
   try {
@@ -12585,9 +12634,35 @@ async function handleAgencyInvite(request, env) {
  * THE ACCOUNT IS LOCKED UNTIL THEY SET A PASSWORD -- password_hash is '' and verifyPassword refuses
  * an empty stored hash, so this creates an invitation and never an open account.
  */
+/**
+ * THE DEFAULT INVITATION, AND THE WORDS ARE CLAUDE'S FOR ERIC TO CORRECT.
+ *
+ * ⛔ IT CONTAINS NO LINK ON PURPOSE. sendSetPasswordEmail always adds the button and the seven-day
+ * line, so no edit on the screen can produce a friendly invitation that lets nobody in.
+ * ⚠️ NO REPLY ADDRESS OR PHONE IS ASSERTED HERE. Mail leaves as quotes@abybenefits.com and nothing on
+ * record says that inbox is read - the documented ABY quote inbox is eric@ and niels@. Inventing a
+ * contact line would be inventing a promise, so the last sentence is deliberately vague and Eric can
+ * put the right address in on the screen.
+ */
+// ⚠️ THE VALUE STARTS ON THIS LINE DELIBERATELY. check_worker_pages.mjs pulls a page's module-scope
+// dependencies in by matching "const NAME = ", so a value beginning on the next line is invisible to it
+// and the page then fails to evaluate with "not defined".
+const ABY_INVITE_EMAIL_DEFAULT = 'We have set up an account for you on the ABY Quote Tool, so you can price COBRA, FSA, 5500 and the '
+  + 'rest yourself and see the numbers straight away.\n\n'
+  + 'Quoting now needs a login, so this is your way in. Choose a password with the button below and you '
+  + 'are set. After that your name and agency fill in automatically on every quote you run, and your '
+  + 'agency logo appears on the quotes you share with your clients.\n\n'
+  + 'If you have any trouble getting in, let us know and we will sort it out.';
+
 async function handleAdminInviteBroker(request, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
   const agencyId = String(body.agencyId || '').trim();
+  // ⭐ EMAILING IS OPT-IN PER SEND, and the LINK COMES BACK EITHER WAY. That is the whole design Eric
+  // and I settled on: the email is a convenience, the link on screen is the guarantee. There is no
+  // state where somebody is believed to be invited and is not - which is the only thing that actually
+  // cost him anything today (#520: a send path that fails where nobody can see it).
+  const wantsEmail = body.send === true;
+  const message = String(body.message || '').trim() || ABY_INVITE_EMAIL_DEFAULT;
   if (!agencyId) return jsonResp({ error: 'Pick the firm this person belongs to first.' }, 400);
 
   const agency = await env.DB.prepare('SELECT id, name FROM agencies WHERE id = ?').bind(agencyId).first();
@@ -12630,7 +12705,13 @@ async function handleAdminInviteBroker(request, env) {
     }
     if (existing) {
       const again = await issueResetToken(env, existing.id);
-      invited.push({ email, role: 'member', reissued: true, link: origin + '/broker/set-password?token=' + again });
+      const againLink = origin + '/broker/set-password?token=' + again;
+      const row = { email, role: 'member', reissued: true, link: againLink };
+      if (wantsEmail) row.emailed = await sendSetPasswordEmail(env, {
+        to: email, link: againLink, agencyName: agency.name, invited: true,
+        body: message, subjectLine: 'Your login for the ABY Quote Tool',
+      });
+      invited.push(row);
       continue;
     }
 
@@ -12657,10 +12738,19 @@ async function handleAdminInviteBroker(request, env) {
     // the password, so whoever opens it first spends it. A corporate mail scanner that follows links can
     // spend it before the person does (#117) - that risk moved to ABY's own mail, it did not vanish.
     const token = await issueResetToken(env, id);
-    invited.push({ email, role, link: origin + '/broker/set-password?token=' + token });
+    const linkFor = origin + '/broker/set-password?token=' + token;
+    const row = { email, role, link: linkFor };
+    // ⛔ THE SEND OUTCOME IS REPORTED PER PERSON, AND IT NEVER SUPPRESSES THE LINK. A false here means
+    // "email it yourself, the link is right there", not "this person was not invited" - the account
+    // exists either way. Conflating those two is how eight signed authorizations went unsent (#520).
+    if (wantsEmail) row.emailed = await sendSetPasswordEmail(env, {
+      to: email, link: linkFor, agencyName: agency.name, invited: true,
+      body: message, subjectLine: 'Your login for the ABY Quote Tool',
+    });
+    invited.push(row);
   }
 
-  return jsonResp({ ok: true, agency: agency.name, invited, skipped, failed });
+  return jsonResp({ ok: true, agency: agency.name, emailRequested: wantsEmail, invited, skipped, failed });
 }
 
 async function handleForgotPassword(request, env) {

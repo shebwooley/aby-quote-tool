@@ -150,13 +150,39 @@ function run(src) {
       bad("the invited person reaches the directory ABY works from", "only `brokers` is written, and the CRM does not read it");
     else ok("the invited person reaches the CRM directory too");
 
-    // NO MAIL LEAVES THE SITE. Eric, 09-25-2026: "I don't think I want an email to come from the site.
-    // I think I'd prefer that we create an invite link from the site that we can copy and email."
-    if (/sendSetPasswordEmail/.test(invite))
-      bad("the ABY invite sends NO email", "it calls sendSetPasswordEmail - Eric asked for a link he sends himself");
-    else if (!/link: origin \+ '\/broker\/set-password\?token=' \+ token/.test(invite))
-      bad("the ABY invite RETURNS the link", "no link in the response, so there is nothing to copy and the account is unreachable");
-    else ok("the ABY invite sends no email and returns a link to copy");
+    // EMAIL IS OPT-IN AND THE LINK COMES BACK EITHER WAY.
+    //
+    // ⭐⭐ THIS RULE WAS "SENDS NO EMAIL" FOR ABOUT AN HOUR. Eric first said *"I don't think I want an
+    // email to come from the site"*, then reconsidered - *"Maybe it would be ok to have the ability to
+    // email the invite from the admin panel"* - and settled it with the safeguard intact: the email is a
+    // convenience, the link on screen is the guarantee.
+    // ⛔ THE INVARIANT IS NOT "no email". It is that a send can never be the only evidence, because a
+    // send path that fails where nobody can see it is what cost him a month of ABY notifications (#520).
+    if (!/body\.send === true/.test(invite))
+      bad("emailing is OPT-IN per send", "no send flag - it either always mails or never does, and Eric asked for the choice");
+    else if (!/link: linkFor/.test(invite) || !/const row = \{ email, role, link: linkFor \}/.test(invite))
+      bad("the link is returned WHETHER OR NOT an email was asked for",
+          "the link is conditional on the send, so a failed email would leave nothing to fall back on");
+    // ⚠️ COUNTED, NOT TESTED FOR PRESENCE. There are TWO send sites - a new account and a re-issued link
+    // - and a rule satisfied by either one stays green while the other silently drops its outcome. Its
+    // sabotage proved that by mutating the first site and leaving the rule happy (#361).
+    else if (((invite.match(/await sendSetPasswordEmail/g) || []).length)
+             !== ((invite.match(/row\.emailed = await sendSetPasswordEmail/g) || []).length))
+      bad("EVERY send records its outcome on the row",
+          "a send site does not assign row.emailed, so for those people the screen cannot say whether the email went");
+    else ok("emailing is opt-in, the outcome is per person, and the link comes back either way");
+
+    // AND THE EDITABLE PROSE CANNOT CARRY THE LINK. If the link were a token inside the message, deleting
+    // it would send a friendly invitation that lets nobody in - and it would look like it worked.
+    // ⚠️ `\r?\n`, NOT `\n`. worker.js is entirely CRLF - 20,000 pairs, not one bare LF - so a pattern
+    // anchored directly on a newline matches NOTHING and the rule reported the constant absent when it
+    // was right there (#299, #378). The slicing above survives only because indexOf("\nasync function")
+    // still finds the LF inside a CRLF; anything anchored on what PRECEDES the newline does not.
+    const dflt = /const ABY_INVITE_EMAIL_DEFAULT = ([\s\S]*?);\r?\n/.exec(src);
+    if (!dflt) bad("there is a default invitation to edit", "no ABY_INVITE_EMAIL_DEFAULT - Eric asked for it pre-written");
+    else if (/https?:|\{link\}|set-password/.test(dflt[1]))
+      bad("the default invitation contains NO link", "it does - the button is added by the sender so an edited message can never be linkless");
+    else ok("the default invitation is pre-written and carries no link of its own");
 
     // A LOST LINK MUST BE RECOVERABLE. The link exists only on the screen that produced it, so a locked
     // account with no way to re-issue is a dead end nothing else can fix.
@@ -288,15 +314,18 @@ if (process.argv.includes("--self-test")) {
         const seg = s.slice(a, b);
         return s.slice(0, a) + seg.replace("$('go').onclick=async function(){", "$('tabUp').onclick=function(){};\n $('go').onclick=async function(){") + s.slice(b);
       }],
-    // ⚠️ A SINGLE-LINE ANCHOR. The two-line version matched nothing because a comment block sits between
-    // the two statements - a multi-line anchor breaks the moment anything is written between the lines
-    // (#361), and this file has been edited three times tonight.
-    ["the ABY invite went back to emailing from the site",
-      (s) => s.replace("invited.push({ email, role, link:",
-                       "await sendSetPasswordEmail(env, { to: email }); invited.push({ email, role, link:")],
-    ["the invite stopped returning the link, leaving nothing to copy",
-      (s) => s.replace("invited.push({ email, role, link: origin + '/broker/set-password?token=' + token });",
-                       "invited.push({ email, role });")],
+    ["emailing stopped being opt-in, so every invite mails",
+      (s) => s.replace("const wantsEmail = body.send === true;", "const wantsEmail = true;")],
+    ["the link became conditional on the email, so a failed send leaves nothing",
+      (s) => s.replace("const row = { email, role, link: linkFor };", "const row = { email, role };")],
+    ["the send outcome stopped being recorded per person",
+      (s) => s.replace("if (wantsEmail) row.emailed = await sendSetPasswordEmail(env, {", "if (wantsEmail) await sendSetPasswordEmail(env, {")],
+    ["the default invitation grew a link of its own, which an edit could delete",
+      (s) => s.replace("'If you have any trouble getting in, let us know and we will sort it out.';",
+                       "'Set your password here: https://abyquotes.com/broker/set-password';")],
+    // (A sabotage that removed the link from a single push line lived here until the email option was
+    //  added and the code moved to a `row` object. It was DELETED rather than repointed: "the link became
+    //  conditional on the email" below covers the same invariant against the code as it is now.)
     ["a locked account went back to being skipped, so a lost link is a dead end",
       (s) => s.replace("      const again = await issueResetToken(env, existing.id);",
                        "      skipped.push({ email, why: 'already invited' }); const again = String('');")],
