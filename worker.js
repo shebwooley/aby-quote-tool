@@ -718,6 +718,42 @@ async function handleSaveQuote(request, env, ctx) {
     }
   }
 
+  // WHOSE AGENCY RAN IT, FROM THE SESSION RATHER THAN FROM THE TYPED NAME (F-6, 09-25-2026).
+  //
+  // THE SESSION WAS ALREADY IN HAND AND WAS BEING THROWN AWAY, which is the whole finding and is
+  // smaller than it first looked. `me` is resolved at the top of this handler for the login gate, so
+  // a signed-in broker's own agency id has been available on every save and has never been written.
+  // A first draft of this block called currentBroker() a SECOND time; that is two readers for one
+  // fact and one of them would eventually disagree (#505, #197), so it uses `me`.
+  //
+  // MEASURED ON LIVE D1 BEFORE THIS WAS WRITTEN: agency_id appears in NO insert and NO update
+  // anywhere in this file. The 5,903 rows that carry one were backfilled ONCE and it has been
+  // decaying ever since: June 67 of 69, July 51 of 53, August 20 of 35, September 3 of 47.
+  // (ran_by is a separate question and is NOT what this fixes: it is derived from adminWho alone, so
+  // 'broker' means *not an ABY admin session* rather than *a signed-in broker* - 6,224 against 2.)
+  //
+  // THE CONSEQUENCE HE ASKED ABOUT: a broker's LOGO reaches their quote only through
+  // resolveFirmIdForLogo falling back to an exact lowercased match of the free text they typed
+  // against agencies.name. A signed-in broker's own agency id is better evidence than a typed
+  // string, and it has been in hand and thrown away on every save.
+  //
+  // FILL-ONLY, NEVER OVERWRITE: identity keeps, content takes (#433). A row that already has an
+  // agency keeps it, so this cannot rewrite anything the backfill settled - the case it is for is
+  // the new quote, which has none.
+  // IT DOES NOT TOUCH ran_by. Those four words are read by the quote-log filter, the origin badge
+  // and every roll-up, so widening their meaning is a register decision and never a side effect.
+  // Best-effort, on the same footing as resolved_pricing: a quote must save whether or not this
+  // lands, and an ABY admin session is not a broker session, so for ABY staff this is a no-op.
+  if (rowId && me && me.agency_id) {
+    try {
+      await env.DB.prepare(
+        "UPDATE quotes SET agency_id = ? WHERE id = ? AND COALESCE(agency_id, '') = ''"
+      ).bind(String(me.agency_id), rowId).run();
+    } catch (err) {
+      console.warn('agency_id not stamped:', String(err && err.message || err));
+    }
+  }
+
   // REMEMBER THE BROKER (F-366). Best-effort and outside every branch: a re-opened quote is
   // still evidence of who this broker is, and the point is to learn them once.
   await rememberBroker(env, { brokerEmail, brokerName, brokerPhone, brokerAgency });
