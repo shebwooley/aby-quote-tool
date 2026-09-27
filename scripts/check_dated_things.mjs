@@ -190,6 +190,32 @@ const FIXTURE = {
     { id: "c1", quote_number: "TX260821-0001-C", employer_name: "Fox Rental", start_date: d(40) },
     { id: "c2", quote_number: "TX260101-0009-C", employer_name: "No Start Date", start_date: "" },
   ],
+  // ── QUOTE REQUESTS (F-609, 09-27-2026) ──────────────────────────────────────────────────────
+  //
+  // FOUR ROWS, each one a different thing this source has to get right:
+  //   Waiting Employer   open, arrived 6 days ago -- must be OVERDUE
+  //   Fresh Ask          open, arrived today
+  //   Already Quoted     answered by a quote -- must not appear AT ALL
+  //   Turned Down        declined -- must not appear either
+  //
+  // ⚠️ `Waiting Employer` CARRIES AN EFFECTIVE DATE FAR IN THE FUTURE ON PURPOSE. If the source were
+  // dated by the effective date instead of by arrival, that row would be 200 days EARLY rather than
+  // 6 days late -- so the fixture makes the two possible readings produce opposite answers, and one
+  // rule below can tell them apart. A fixture where both readings agree proves nothing.
+  quote_request: [
+    { id: "qr1", created_at: ts(-6), client_name: "Waiting Employer", effective_date: d(200),
+      broker_name: "Dana Broker", broker_agency: "Northline Benefits", broker_email: "dana@northline.com",
+      asked_by: "employer", answered_at: null, declined_at: null },
+    { id: "qr2", created_at: ts(0), client_name: "Fresh Ask", effective_date: "",
+      broker_name: "", broker_agency: "Same Day Agency", broker_email: "sameday@agency.com",
+      asked_by: "broker", answered_at: null, declined_at: null },
+    { id: "qr3", created_at: ts(-30), client_name: "Already Quoted", effective_date: d(60),
+      broker_name: "Dana Broker", broker_agency: "Northline Benefits", broker_email: "dana@northline.com",
+      asked_by: "employer", answered_at: ts(-28), declined_at: null },
+    { id: "qr4", created_at: ts(-20), client_name: "Turned Down", effective_date: d(60),
+      broker_name: "", broker_agency: "Nope Agency", broker_email: "nope@agency.com",
+      asked_by: "employer", answered_at: null, declined_at: ts(-19) },
+  ],
 };
 
 /**
@@ -268,6 +294,20 @@ function fakeDB(opts) {
             if (broken.commitment) throw new Error("no such table: commitments");
             return { results: FIXTURE.commitments };
           }
+
+          if (/FROM quote_request/.test(sql)) {
+            if (broken.request) throw new Error("no such table: quote_request");
+            // ⭐⭐ EACH CLAUSE ON ITS OWN, NOT BOTH TOGETHER, and that is the difference between two
+            // provable rules and one. Testing them jointly means a single sabotage reddens BOTH
+            // "answered does not come back" and "declined does not come back", so the harness can
+            // only attribute it to one and the other is reported UNPROVEN -- which is what happened
+            // the first time this ran. Honouring them separately lets half the WHERE be removed.
+            const wantsUnanswered = /answered_at IS NULL/.test(sql);
+            const wantsUndeclined = /declined_at IS NULL/.test(sql);
+            return { results: FIXTURE.quote_request
+              .filter((q) => (!wantsUnanswered || !q.answered_at) &&
+                             (!wantsUndeclined || !q.declined_at)) };
+          }
           throw new Error("the fake database was asked something it does not know: " + sql);
         },
       };
@@ -298,12 +338,71 @@ function rules(M) {
   const kinds = (rows) => new Set(rows.map((r) => r.kind));
 
   return [
-    { name: "all five sources reach the list",
+    { name: "all six sources reach the list",
       why: "a source that stops being built renders as a shorter list, which nobody can tell from a quiet week",
       async holds() {
         const { rows } = await run();
         const k = kinds(rows);
-        return ["todo", "quote", "followup", "rfp", "commitment"].every((x) => k.has(x));
+        return ["todo", "quote", "followup", "rfp", "commitment", "request"].every((x) => k.has(x));
+      } },
+
+    // ── QUOTE REQUESTS (F-609) ────────────────────────────────────────────────────────────────
+    { name: "a request that has been ANSWERED does not come back",
+      why: "openness is derived from the quote save, so a closed request reappearing would make the queue disagree with the quote log and give somebody work that is already done",
+      async holds() {
+        const { rows } = await run();
+        return !rows.some((r) => r.kind === "request" && r.entity === "Already Quoted");
+      } },
+
+    { name: "a request somebody DECLINED does not come back",
+      why: "we-are-not-quoting-this is a decision, and re-showing it reverses that decision silently -- the same rule the passed RFP has",
+      async holds() {
+        const { rows } = await run();
+        return !rows.some((r) => r.kind === "request" && r.entity === "Turned Down");
+      } },
+
+    { name: "a request is dated by WHEN IT ARRIVED, not by the effective date",
+      why: "an unanswered request is late from the moment it lands; dating it by the effective date would file a six-day-old request 200 days in the FUTURE, where nobody looks",
+      async holds() {
+        const { rows } = await run();
+        const r = rows.find((x) => x.kind === "request" && x.entity === "Waiting Employer");
+        // Negative days means overdue. The fixture's effective date is d(200), so the wrong reading
+        // produces a large POSITIVE number and this cannot pass by accident.
+        return !!r && r.days !== null && r.days < 0;
+      } },
+
+    { name: "the effective date still travels, in the title",
+      why: "it is the fact that decides whether a request is urgent; dropping it to fix the dating would trade one blindness for another",
+      async holds() {
+        const { rows } = await run();
+        const r = rows.find((x) => x.kind === "request" && x.entity === "Waiting Employer");
+        return !!r && r.title.indexOf(d(200)) !== -1;
+      } },
+
+    { name: "a request says whether the EMPLOYER or the BROKER asked",
+      why: "Eric asked for the channel to be visible -- who asked decides who to call back, and a request that cannot say reads as one ABY generated itself",
+      async holds() {
+        const { rows } = await run();
+        const emp = rows.find((x) => x.kind === "request" && x.entity === "Waiting Employer");
+        const brk = rows.find((x) => x.kind === "request" && x.entity === "Fresh Ask");
+        return !!emp && !!brk &&
+               /Employer asked/.test(emp.title) && /Broker asked/.test(brk.title);
+      } },
+
+    { name: "a request carries the broker it came through",
+      why: "the attribution IS the requirement: come to ABY with the broker information so we know which broker it came from. A row that cannot say is a lead nobody can act on",
+      async holds() {
+        const { rows } = await run();
+        const r = rows.find((x) => x.kind === "request" && x.entity === "Waiting Employer");
+        return !!r && r.note.indexOf("Northline Benefits") !== -1 &&
+               r.note.indexOf("dana@northline.com") !== -1;
+      } },
+
+    { name: "a request source that CANNOT be read is reported, not silently absent",
+      why: "this table is newer than the deploy that reads it, so before the migration runs an unreported failure looks exactly like nobody having asked",
+      async holds() {
+        const { rows, problems } = await run({ broken: { request: true } });
+        return problems.some((p) => p.source === "request") && !kinds(rows).has("request");
       } },
 
     { name: "a PROSE effective_date never becomes a dated row",
@@ -628,7 +727,7 @@ async function assertFixtureIsNotVacuous(M) {
 // a silent no-op that reports itself green.
 
 const SABOTAGE = [
-  ["all five sources reach the list",
+  ["all six sources reach the list",
    (s) => s.replace("    for (const c of (r.results || [])) {", "    for (const c of []) {")],
   // The LIKE is the first line of defence and the one that keeps 1,581 prose rows out of the
   // query at all. Removing it is the edit somebody makes while "simplifying" the statement.
@@ -652,7 +751,10 @@ const SABOTAGE = [
   ["an RFP contributes all three of its dates",
    (s) => s.replace("        ['questions', o.questions_due_at, 'Questions due'],", "")],
   ["a done to-do is absent entirely",
-   (s) => s.replace('"FROM aby_task WHERE done_at IS NULL ORDER BY', '"FROM aby_task WHERE 1=1 ORDER BY')],
+   // ⚠️ The target used to read '... IS NULL ORDER BY'. The statement was split across two lines
+   // at some point and this stopped matching, so the rule above has been printing ok while nothing
+   // proved it. TRAPS: a sabotage that matches nothing is a rule with no checker.
+   (s) => s.replace('"FROM aby_task WHERE done_at IS NULL "', '"FROM aby_task WHERE 1=1 "')],
   ["an undated to-do is in the list, with days === null",
    (s) => s.replace("      const due = isoDay(t.due_on);", "      const due = isoDay(t.due_on);\n      if (!due) continue;")],
   ["an undated row uses null, never a large-number sentinel",
@@ -671,7 +773,9 @@ const SABOTAGE = [
    (s) => s.replace("                       : ('Follow up on ' + n + ' quotes' + where),",
                     "                       : ('Chase ' + n + ' quotes that have had no answer'),")],
   ["your own to-dos render BEFORE every derived row",
-   (s) => s.replace("   h+=sect('Your to-dos',mine,mine.some(function(r){return r.days!==null&&r.days<0}));", "")],
+   // ⚠️ Same rot as the one above: sect() lost its third argument here, and this sabotage has been
+   // matching nothing ever since. The rule it was meant to prove kept printing ok.
+   (s) => s.replace("   h+=sect('Your to-dos',mine);", "")],
   ["a to-do appears ONCE, not in its own block and again under Overdue",
    (s) => s.replace("   rest.forEach(function(r){", "   rows.forEach(function(r){")],
   ["the chase is dated off the NEWEST quote to that broker, not the oldest",
@@ -681,6 +785,28 @@ const SABOTAGE = [
    (s) => s.replace("const FOLLOWUP_UNTIL_DAYS = 90;", "const FOLLOWUP_UNTIL_DAYS = 9000;")],
   ["an overdue row has negative days",
    (s) => s.replace("  return Math.round((tb - ta) / 86400000);", "  return Math.abs(Math.round((tb - ta) / 86400000));")],
+  // ── F-609: the quote-request source ───────────────────────────────────────────────────────────
+  // Half the WHERE each, so each sabotage reddens exactly ONE rule. Dropping the whole clause
+  // reddens both and the harness can attribute it to only one.
+  ["a request that has been ANSWERED does not come back",
+   (s) => s.replace('"WHERE answered_at IS NULL AND declined_at IS NULL"',
+                    '"WHERE declined_at IS NULL"')],
+  ["a request somebody DECLINED does not come back",
+   (s) => s.replace('"WHERE answered_at IS NULL AND declined_at IS NULL"',
+                    '"WHERE answered_at IS NULL"')],
+  ["a request is dated by WHEN IT ARRIVED, not by the effective date",
+   (s) => s.replace("      const due = isoDay(q.created_at);\n      const eff = String(q.effective_date || '');",
+                    "      const eff = String(q.effective_date || '');\n      const due = isoDay(eff);")],
+  ["the effective date still travels, in the title",
+   (s) => s.replace("               (eff ? ' \\u2013 effective ' + eff : ''),", "               (''),")],
+  ["a request says whether the EMPLOYER or the BROKER asked",
+   (s) => s.replace("        title: (String(q.asked_by || '') === 'broker' ? 'Broker asked for a quote' : 'Employer asked for a quote') +",
+                    "        title: ('Somebody asked for a quote') +")],
+  ["a request carries the broker it came through",
+   (s) => s.replace("        note: [String(q.broker_name || ''), String(q.broker_agency || ''), String(q.broker_email || '')]\n                .filter(Boolean).join(' \\u00b7 '),",
+                    "        note: '',")],
+  ["a request source that CANNOT be read is reported, not silently absent",
+   (s) => s.replace("    problems.push({ source: 'request', error: String((e && e.message) || e) });", "")],
   ["a source that CANNOT be read is reported, not silently absent",
    (s) => s.replace("    problems.push({ source: 'rfp', error: String((e && e.message) || e) });", "")],
   ["every key is unique",

@@ -103,6 +103,9 @@ export default {
     // The BenefitLab dashboard's read endpoint (F-268). NOT cookie-authed -- it is a
     // server-to-server call carrying a bearer token, so it gets its own gate.
     if (path === '/api/broker-quotes' && method === 'GET') return handleBrokerQuotes(request, env);
+    // A quote REQUEST arriving from BenefitLab (F-609). Same bearer secret as the read above and
+    // for the same reason: the caller is the BenefitLab SERVER, not a person with a cookie.
+    if (path === '/api/quote-request' && method === 'POST') return handleQuoteRequest(request, env);
 
     // ── Broker accounts (F-6). Their own gate: a signed `aby_broker` cookie, NOT the admin one.
     if (path === '/api/broker/signup'  && method === 'POST') return handleBrokerSignup(request, env);
@@ -193,6 +196,11 @@ export default {
     if (path === '/api/admin/tidy-note/delete' && method === 'POST') return withAuth(request, env, () => handleTidyNoteDelete(request, env));
     if (path === '/api/admin/crm/status'       && method === 'POST') return withAuth(request, env, () => handleCrmRecordStatus(request, env));
     if (path === '/api/admin/dated'    && method === 'GET')  return withAuth(request, env, () => handleAbyDated(request, env));
+    // The requests tab on the quote log, and the one answer no quote can record (F-609).
+    if (path === '/api/admin/quote-requests' && method === 'GET')
+      return withAuth(request, env, () => handleAdminQuoteRequests(request, env));
+    if (path === '/api/admin/quote-request/decline' && method === 'POST')
+      return withAuth(request, env, () => handleAdminQuoteRequestDecline(request, env));
     if (path === '/api/admin/task'     && method === 'POST') return withAuth(request, env, () => handleAbyTask(request, env));
     if (path === '/api/admin/rate'     && method === 'POST') return withAuth(request, env, () => handleAdminRate(request, env));
     // Referral partners (F-referrals, Eric 2026-08-19)
@@ -643,6 +651,36 @@ async function handleSaveQuote(request, env, ctx) {
         console.warn('source_tag not stored (column missing?):', String(err && err.message || err));
       }
     }
+
+    // ── ANSWERING A REQUEST BY DOING THE WORK (F-609, 09-27-2026) ─────────────────────────────
+    //
+    // ⭐⭐ THIS IS WHAT MAKES THE REQUESTS LIST SELF-CLEARING, and it is the whole reason there is
+    // no "mark it handled" button. Eric's broker-side panel got the same property on the same day:
+    // openness is DERIVED from the work, so arranging the work closes the row. Nothing to tick,
+    // nothing to forget, and the list cannot disagree with the quote log.
+    //
+    // ⚠️ A NEW QUOTE ONLY. A re-save or a revision of an existing quote is not somebody answering a
+    // request -- it is somebody editing an answer already given -- and treating it as one would let
+    // an unrelated edit silently clear a request nobody had looked at.
+    //
+    // ⚠️ MATCHED ON `client_match_key` AND, WHEN WE HAVE ONE, `client_id` -- never on the typed
+    // name. The name is broker-typed free text and the normalised key is exactly what the quote log
+    // already stores for this purpose. ⛔ It deliberately does NOT require the broker to match: ABY
+    // quoting an employer answers the employer's request whoever keys it in.
+    //
+    // ⚠️ BEST-EFFORT, like the two writes above it and for the same reason: the quote is already
+    // saved, and a missing table before /api/migrate must not turn a saved quote into a 500.
+    try {
+      const askKey = normName(clientName);
+      if (askKey) {
+        await env.DB.prepare(
+          'UPDATE quote_request SET answered_at = ?, answered_quote = ? ' +
+          'WHERE answered_at IS NULL AND declined_at IS NULL AND client_match_key = ?'
+        ).bind(now, saveNumber, askKey).run();
+      }
+    } catch (err) {
+      console.warn('no request closed (table missing?):', String(err && err.message || err));
+    }
   } else if (!unchanged) {
     try {
       // `id`, `quote_number` and `created_at` are deliberately NOT updated. The number keeps its
@@ -1038,6 +1076,255 @@ function safeEqual(a, b) {
   let diff = 0;
   for (let i = 0; i < x.length; i++) diff |= x.charCodeAt(i) ^ y.charCodeAt(i);
   return diff === 0;
+}
+
+
+// ─── A quote REQUEST arriving from BenefitLab (F-609, 09-27-2026) ─────────────
+//
+// POST /api/quote-request
+//   Authorization: Bearer <INTEGRATION_TOKEN>
+//   { clientName, clientId, effectiveDate, products: [...], employeeCount,
+//     brokerName, brokerAgency, brokerEmail, brokerPhone, askedBy, origin, note }
+//   -> { ok: true, id, notified: true|false, notifyError }
+//
+// 🔴🔴 UNTIL THIS EXISTED, NOTHING REACHED ABY AT ALL, AND THAT WAS TRUE OF BOTH DOORS.
+// The BROKER's click opens the quote tool with the form pre-filled, which becomes a record only
+// once a human finishes the quote there -- so ABY never receives a request, it receives a person.
+// The EMPLOYER's click did not even do that: the button says "Get a quote from ABY" and only marked
+// a row in their own checklist. An employer who had asked for a quote had no way of knowing that
+// nobody had heard them, and neither did ABY.
+//
+// ⛔ AN EMPLOYER CANNOT SIMPLY BE SENT TO THE QUOTE TOOL INSTEAD. It sits behind a BROKER sign-in,
+// so a redirect would land an employer at a login that is not theirs. That is the whole reason this
+// is a server-to-server handoff and not another link.
+//
+// 🔴 IT FAILS CLOSED, exactly like /api/broker-quotes: no INTEGRATION_TOKEN configured means 503,
+// never "allow". An unset secret must not become an open write endpoint. (Gates fail closed.)
+//
+// ⚠️ IT IS IDEMPOTENT ON `id`, and the caller supplies one. A retry after a network timeout is the
+// ordinary case for a server-to-server call, and without this a broker who clicked once would
+// appear twice on ABY's screen -- which reads as two employers asking.
+async function handleQuoteRequest(request, env) {
+  const expected = env.INTEGRATION_TOKEN;
+  if (!expected) {
+    return jsonResp({ error: 'This endpoint is not configured.' }, 503);
+  }
+  const auth = request.headers.get('Authorization') || '';
+  const m = /^Bearer\s+(.+)$/i.exec(auth.trim());
+  if (!m || !safeEqual(m[1], expected)) {
+    return jsonResp({ error: 'Unauthorized' }, 401);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (err) {
+    return jsonResp({ error: 'The body was not JSON.' }, 400);
+  }
+
+  const str = function (v, n) { return String(v == null ? '' : v).trim().slice(0, n || 200); };
+  const clientName = str(body.clientName);
+  // ⛔ NO CLIENT NAME MEANS NO ROW. The name is the only thing on this record that tells a human
+  // which employer is waiting; a request without one lands on ABY's screen as a blank line that
+  // cannot be actioned, and a blank line is worse than a refusal the caller can log.
+  if (!clientName) {
+    return jsonResp({ error: 'A clientName is required.' }, 400);
+  }
+  const brokerEmail = str(body.brokerEmail).toLowerCase();
+  // ⭐ THE BROKER ADDRESS IS ALSO REQUIRED, and that is Eric's requirement rather than a schema
+  // nicety: "it should come to ABY with the broker's info (so we'll know it came from the
+  // BenefitLab portal and which broker)". A request nobody can attribute is the thing this was
+  // built to stop, and the address is what ties it to the broker's own list.
+  if (!brokerEmail) {
+    return jsonResp({ error: 'A brokerEmail is required.' }, 400);
+  }
+
+  let productsJson = '[]';
+  try {
+    const list = Array.isArray(body.products) ? body.products : [];
+    productsJson = JSON.stringify(list.map(function (p) { return str(p, 80); }).filter(Boolean));
+  } catch (err) {
+    productsJson = '[]';
+  }
+
+  const id = str(body.id, 64) || ('qr_' + crypto.randomUUID());
+  const now = new Date().toISOString();
+  // ⚠️ 'employer' or 'broker' ONLY, and anything else becomes 'employer'. This decides what the
+  // email and the screen SAY happened, so a value the caller invents must not reach a sentence.
+  const askedBy = (str(body.askedBy, 20).toLowerCase() === 'broker') ? 'broker' : 'employer';
+  const heads = Number(body.employeeCount);
+
+  try {
+    // INSERT OR IGNORE, not INSERT: see the idempotence note above. A repeat of the same id is a
+    // retry, and a retry must be silent rather than an error the caller has to interpret.
+    await env.DB.prepare(
+      'INSERT OR IGNORE INTO quote_request ' +
+      '(id, created_at, client_name, client_id, client_match_key, effective_date, products, ' +
+      ' employee_count, broker_name, broker_agency, broker_email, broker_phone, asked_by, ' +
+      ' origin, note) ' +
+      'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+    ).bind(
+      id, now, clientName, str(body.clientId, 64), normName(clientName),
+      str(body.effectiveDate, 40), productsJson,
+      Number.isFinite(heads) && heads > 0 ? Math.round(heads) : null,
+      str(body.brokerName), str(body.brokerAgency), brokerEmail, str(body.brokerPhone, 40),
+      askedBy, str(body.origin, 60), str(body.note, 1000)
+    ).run();
+  } catch (err) {
+    console.error('quote_request insert failed:', err);
+    // ⭐ THE MIGRATION IS NAMED IN THE MESSAGE. This table is new, so "no such table" is the single
+    // most likely failure on the day it ships, and it is fixed by opening one URL. A generic
+    // "failed to save" would send somebody reading this function instead.
+    return jsonResp({
+      error: 'Could not store the request: ' + String(err && err.message || err) +
+             ' (if this says no such table, open /api/migrate while logged in as ABY).',
+    }, 500);
+  }
+
+  // ⭐⭐ THE EMAIL IS AWAITED, NOT FIRED AND FORGOTTEN, and the outcome goes back to the caller as
+  // well as onto the row. The caller is a server that is already logging this call; telling it
+  // whether anybody was actually told costs one field and means a silent mail failure shows up in
+  // TWO places instead of none.
+  const sent = await sendQuoteRequestEmail(env, {
+    id: id, clientName: clientName, effectiveDate: str(body.effectiveDate, 40),
+    products: productsJson, brokerName: str(body.brokerName), brokerAgency: str(body.brokerAgency),
+    brokerEmail: brokerEmail, brokerPhone: str(body.brokerPhone, 40), askedBy: askedBy,
+    origin: str(body.origin, 60), note: str(body.note, 1000),
+  }, new URL(request.url).origin);
+  try {
+    await env.DB.prepare('UPDATE quote_request SET notified_at = ?, notify_error = ? WHERE id = ?')
+      .bind(sent.ok ? (sent.at || new Date().toISOString()) : null,
+            sent.ok ? null : String(sent.error || 'Unknown').slice(0, 400), id).run();
+  } catch (err) {
+    console.warn('could not record the notification outcome:', String(err && err.message || err));
+  }
+
+  return jsonResp({ ok: true, id: id, notified: !!sent.ok, notifyError: sent.ok ? null : sent.error });
+}
+
+/**
+ * Tell ABY that somebody has asked for a quote.
+ *
+ * ⭐ SAME SHAPE AS sendCommitmentEmail, DELIBERATELY: recipients from NOTIFY_EMAILS, and every
+ * return is { ok, at, error } with `error` a SHORT human sentence because it lands on a screen.
+ * ⛔ It is NOT the same function with a flag. A signed authorization and an unanswered request need
+ * different subjects, different urgency and a different button, and the one thing they share is the
+ * transport.
+ */
+async function sendQuoteRequestEmail(env, r, origin) {
+  if (!env.RESEND_API_KEY) {
+    return { ok: false, error: 'No Resend API key is set on the worker, so nothing was sent.' };
+  }
+  const to = String(env.NOTIFY_EMAILS || 'eric@comedyce.com')
+    .split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+  if (!to.length) {
+    return { ok: false, error: 'NOTIFY_EMAILS is set but empty, so there was nobody to send to.' };
+  }
+
+  let products = [];
+  try { products = JSON.parse(r.products || '[]'); } catch (err) { products = []; }
+  const items = products.map(function (p) { return '<li>' + esc(String(p)) + '</li>'; }).join('');
+  const who = (r.askedBy === 'broker') ? 'The broker' : 'The employer';
+  const brokerLine = [r.brokerName, r.brokerAgency].filter(Boolean).map(esc).join(' &middot; ');
+
+  const html =
+    '<div style="font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;color:#12263f">' +
+    '<p>' + who + ' <strong>' + esc(r.clientName) + '</strong> has asked ABY for a quote.</p>' +
+    (r.effectiveDate ? '<p><strong>Effective:</strong> ' + esc(r.effectiveDate) + '</p>' : '') +
+    (items ? '<p>What they asked about:</p><ul>' + items + '</ul>' : '') +
+    '<p><strong>Broker:</strong> ' + (brokerLine || esc(r.brokerEmail)) +
+    (brokerLine ? '<br><a href="mailto:' + esc(r.brokerEmail) + '">' + esc(r.brokerEmail) + '</a>' : '') +
+    (r.brokerPhone ? ' &middot; ' + esc(r.brokerPhone) : '') + '</p>' +
+    (r.note ? '<p><strong>They said:</strong> ' + esc(r.note) + '</p>' : '') +
+    '<p style="color:#5b6b7f;font-size:13px">This came in from BenefitLab' +
+    (r.origin ? ' (' + esc(r.origin) + ')' : '') +
+    '. It is waiting on the Requests tab of the quote log, and it clears itself as soon as a quote ' +
+    'is saved for this employer.</p>' +
+    '<p><a href="' + esc(origin || '') + '/admin?view=requests" style="background:#143c73;color:#fff;' +
+    'padding:10px 18px;border-radius:6px;text-decoration:none">Open the requests</a></p></div>';
+
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + env.RESEND_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: 'ABY Quote Tool <' + (env.FROM_EMAIL || 'onboarding@resend.dev') + '>',
+        to: to,
+        subject: 'Quote requested: ' + (r.clientName || 'an employer') +
+                 (r.effectiveDate ? ' (effective ' + r.effectiveDate + ')' : ''),
+        html: html,
+      }),
+    });
+    if (!res.ok) {
+      const detail = (await res.text() || '').slice(0, 300);
+      console.error('quote request email failed:', res.status, detail);
+      return { ok: false, error: 'Resend refused it (' + res.status + '): ' + detail };
+    }
+    return { ok: true, at: new Date().toISOString(), to: to.join(', ') };
+  } catch (err) {
+    console.error('quote request email threw:', err);
+    return { ok: false, error: 'Could not reach Resend: ' + String(err).slice(0, 200) };
+  }
+}
+
+// ─── The requests tab reads this (F-609) ──────────────────────────────────────
+//
+// ⭐ OPEN AND CLOSED COME BACK TOGETHER, in one list, with the fields that decide which is which.
+// The screen needs both: a request that has JUST been answered must stay visible for a while, or
+// answering one looks like losing one.
+// ⚠️ THE MISSING TABLE IS REPORTED AS ITSELF. Before /api/migrate has run there is no table, and a
+// screen that renders "no requests" in that case is telling somebody the opposite of the truth.
+async function handleAdminQuoteRequests(request, env) {
+  try {
+    const r = await env.DB.prepare(
+      'SELECT id, created_at, client_name, client_id, effective_date, products, employee_count, ' +
+      '       broker_name, broker_agency, broker_email, broker_phone, asked_by, origin, note, ' +
+      '       answered_at, answered_quote, declined_at, declined_note, notified_at, notify_error ' +
+      'FROM quote_request ORDER BY created_at DESC LIMIT 300'
+    ).all();
+    return jsonResp({ requests: r.results || [] });
+  } catch (err) {
+    console.error('handleAdminQuoteRequests failed:', err);
+    return jsonResp({
+      error: 'Could not read the requests: ' + String(err && err.message || err) +
+             ' (if this says no such table, open /api/migrate to create it).',
+    }, 500);
+  }
+}
+
+// ─── "We are not quoting this" (F-609) ────────────────────────────────────────
+//
+// ⭐⭐ THE ONE ANSWER NO QUOTE CAN RECORD, and the reason this endpoint exists at all. Everything
+// else about a request closes itself when the work is done; a request ABY decides not to quote
+// would otherwise sit open for ever, and a list with permanent residents stops being read.
+// ⚠️ IT IS REVERSIBLE. Passing undo clears the decline rather than deleting the row, because the
+// record of somebody having asked is the part with value -- Eric wanted the attribution, and a row
+// deleted on a mis-click takes it with it.
+async function handleAdminQuoteRequestDecline(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch (err) {
+    return jsonResp({ error: 'The body was not JSON.' }, 400);
+  }
+  const id = String(body.id || '').trim();
+  if (!id) return jsonResp({ error: 'An id is required.' }, 400);
+  const undo = !!body.undo;
+  try {
+    const res = await env.DB.prepare(
+      'UPDATE quote_request SET declined_at = ?, declined_note = ? WHERE id = ?'
+    ).bind(undo ? null : new Date().toISOString(),
+           undo ? null : String(body.note || '').trim().slice(0, 500), id).run();
+    // ⛔ A ROW THAT MATCHED NOTHING IS REPORTED, not treated as success. An id that no longer
+    // exists means the screen is looking at something the database is not, and saying "done"
+    // teaches somebody to trust a list that is stale.
+    const changed = res && res.meta ? Number(res.meta.changes || 0) : 1;
+    if (!changed) return jsonResp({ error: 'No request with that id.' }, 404);
+    return jsonResp({ ok: true, declined: !undo });
+  } catch (err) {
+    console.error('handleAdminQuoteRequestDecline failed:', err);
+    return jsonResp({ error: String(err && err.message || err) }, 500);
+  }
 }
 
 // ─── Quote: get single (admin) ─────────────────────────────────────────────────
@@ -14322,7 +14609,7 @@ const FOLLOWUP_UNTIL_DAYS = 90;
 async function abyDatedThings(env, opts) {
   const today = (opts && opts.today) || todayIso();
   const out = [];
-  const counts = { todo: 0, quote: 0, followup: 0, rfp: 0, commitment: 0 };
+  const counts = { todo: 0, quote: 0, followup: 0, rfp: 0, commitment: 0, request: 0 };
   const problems = [];
 
   // ① The to-dos. The only source somebody TYPES, and the reason this screen exists.
@@ -14557,6 +14844,47 @@ async function abyDatedThings(env, opts) {
     }
   } catch (e) {
     problems.push({ source: 'commitment', error: String((e && e.message) || e) });
+  }
+
+  // ⑥ A QUOTE REQUEST NOBODY HAS ANSWERED (F-609, 09-27-2026).
+  //
+  // ⭐⭐ DATED BY WHEN IT ARRIVED, NOT BY THE GROUP'S EFFECTIVE DATE, and that choice is the whole
+  // value of putting it here. The effective date is when cover starts; an unanswered request is
+  // late from the moment it lands. Dating it by arrival means a request from five days ago shows as
+  // five days overdue in the late section, which is the fact somebody needs. The effective date
+  // rides in the title, where it informs without deciding the urgency.
+  //
+  // ⛔ OPEN IS DERIVED, never read from a status column: `answered_at` is written by the quote save
+  // itself. So this source empties as the work gets done and cannot drift from the quote log.
+  // ⚠️ Empty today, and REPORTED as empty rather than omitted -- the same rule the RFP source
+  // above states: a chip that vanishes when its source is empty is indistinguishable from a chip
+  // that was never built.
+  try {
+    const r = await env.DB.prepare(
+      "SELECT id, created_at, client_name, effective_date, broker_name, broker_agency, " +
+      "       broker_email, asked_by FROM quote_request " +
+      "WHERE answered_at IS NULL AND declined_at IS NULL"
+    ).all();
+    for (const q of (r.results || [])) {
+      const due = isoDay(q.created_at);
+      const eff = String(q.effective_date || '');
+      out.push({
+        key: 'request:' + q.id,
+        kind: 'request',
+        id: String(q.id || ''),
+        title: (String(q.asked_by || '') === 'broker' ? 'Broker asked for a quote' : 'Employer asked for a quote') +
+               (eff ? ' \u2013 effective ' + eff : ''),
+        entity: String(q.client_name || ''),
+        owner: '',
+        note: [String(q.broker_name || ''), String(q.broker_agency || ''), String(q.broker_email || '')]
+                .filter(Boolean).join(' \u00b7 '),
+        dueOn: due,
+        days: due ? daysBetween(today, due) : null,
+      });
+      counts.request++;
+    }
+  } catch (e) {
+    problems.push({ source: 'request', error: String((e && e.message) || e) });
   }
 
   // Undated last, dated by date. A stable order matters: the page re-renders on every filter click,
@@ -14915,7 +15243,11 @@ ${abyAdminNav('/admin/today')}
           {k:'quote',label:'Quote effective dates',one:'quote effective date'},
           {k:'followup',label:'Follow-ups',one:'follow-up'},
           {k:'rfp',label:'RFP deadlines',one:'RFP deadline'},
-          {k:'commitment',label:'Signed',one:'signed authorization'}];
+          {k:'commitment',label:'Signed',one:'signed authorization'},
+          // F-609, 09-27-2026. Dated by WHEN IT ARRIVED, not by the group's effective date: an
+          // unanswered request is late from the moment it lands, so one from five days ago belongs
+          // in the late section. See the source in handleAbyDated.
+          {k:'request',label:'Quote requests',one:'quote request'}];
  var LENS='due', OWNER='', OFF={}, DATA=null;
 
  // ── A TO-DO ABOUT A PARTICULAR THING (Eric, 2026-08-26) ─────────────────────────────────────
@@ -14992,6 +15324,10 @@ ${abyAdminNav('/admin/today')}
    h+='</div>';
    h+='<div class="who">'+esc(r.entity||'')+'</div>';
    h+='<div class="act">';
+   // ⭐ A WAY INTO THE LIST. Every other kind here either has its own controls or is a date you
+   // just need to know about; a request is work, and the place the work happens is the quote log's
+   // requests tab. Without this the row tells you something is waiting and leaves you to find it.
+   if(r.kind==='request') h+='<a href="/admin?view=requests" class="ed">Open</a>';
    if(r.kind==='todo'){
      // ⭐ MOVE UP AND DOWN ONLY WHERE THERE IS NO TIME. Two meetings at 9:00 and 14:00 already
      // have an order, and a hand-set number that disagreed with the clock would be a second
@@ -15607,6 +15943,60 @@ const MIGRATIONS = [
   // read as an answer).
   { sql: "ALTER TABLE commitments ADD COLUMN notified_at TEXT",  table: "commitments", column: "notified_at" },
   { sql: "ALTER TABLE commitments ADD COLUMN notify_error TEXT", table: "commitments", column: "notify_error" },
+
+  // ── QUOTE REQUESTS (F-609, 09-27-2026) ──────────────────────────────────────────────────────
+  //
+  // ⭐⭐ ERIC'S RULING, 09-27-2026: "if a client clicks get a quote, it should either go to the
+  // broker to quote if that's what they chose or it should come to ABY with the broker's info (so
+  // we'll know it came from the BenefitLab portal and which broker). And it should be stored in the
+  // ABYquotes.com quote list and in the broker's BenefitLab list."
+  //
+  // 🔴🔴 A REQUEST IS NOT A QUOTE AND MUST NEVER BE A ROW IN `quotes`. It carries no rates, no
+  // priced products and no quote number -- and `quotes.status` 'P' already means "quoted, nobody has
+  // answered yet", which is a different thing entirely. One table holding both would make every
+  // count on every screen ambiguous, and Eric asked for the opposite in the same conversation:
+  // "I don't want it to blend in with the completed quotes."
+  //
+  // ⭐⭐ OPENNESS IS DERIVED FROM THE WORK, NOT MAINTAINED BY HAND. Open means `answered_at` and
+  // `declined_at` are both NULL, and SAVING A QUOTE FOR THAT CLIENT WRITES `answered_at` ITSELF
+  // (see the auto-close in handleSaveQuote). So doing the work clears the request and there is
+  // nothing to tick off, which is the same property the broker's half of F-609 got on the same day:
+  // a list that cannot disagree with reality.
+  // ⚠️ `declined_at` exists because "we are not quoting this" is a real answer that no quote will
+  // ever record. Without it the only way to clear such a row would be to quote something nobody
+  // wants.
+  //
+  // ⛔ `notified_at` / `notify_error` ARE NOT OPTIONAL HERE, and the reason is two days old. This
+  // table's whole job is to break a silence; `commitments` learned on 09-25-2026 that a
+  // notification which can fail into a worker log nobody reads is a silence of its own -- eight
+  // signed authorizations went unnotified for a month and only Eric noticing the absence of mail
+  // found it.
+  { sql: "CREATE TABLE IF NOT EXISTS quote_request (" +
+         "  id TEXT PRIMARY KEY," +
+         "  created_at TEXT NOT NULL," +
+         "  client_name TEXT NOT NULL DEFAULT ''," +
+         "  client_id TEXT," +
+         "  client_match_key TEXT," +
+         "  effective_date TEXT NOT NULL DEFAULT ''," +
+         "  products TEXT NOT NULL DEFAULT '[]'," +
+         "  employee_count INTEGER," +
+         "  broker_name TEXT NOT NULL DEFAULT ''," +
+         "  broker_agency TEXT NOT NULL DEFAULT ''," +
+         "  broker_email TEXT NOT NULL DEFAULT ''," +
+         "  broker_phone TEXT NOT NULL DEFAULT ''," +
+         "  asked_by TEXT NOT NULL DEFAULT 'employer'," +
+         "  origin TEXT NOT NULL DEFAULT ''," +
+         "  note TEXT NOT NULL DEFAULT ''," +
+         "  answered_at TEXT, answered_quote TEXT," +
+         "  declined_at TEXT, declined_note TEXT," +
+         "  notified_at TEXT, notify_error TEXT)",
+    table: "quote_request", column: "id" },
+  { sql: "CREATE INDEX IF NOT EXISTS quote_request_created ON quote_request (created_at DESC)",
+    index: "quote_request_created" },
+  // The join the auto-close uses. Same normalised key the quote log already stores, so a request
+  // and the quote that answers it meet on ONE spelling of the employer name rather than two.
+  { sql: "CREATE INDEX IF NOT EXISTS quote_request_match ON quote_request (client_match_key)",
+    index: "quote_request_match" },
 
   // ── Broker accounts (F-6 / F-53) ────────────────────────────────────────────────────────────
   //
@@ -17476,7 +17866,16 @@ ${abyAdminNav('/admin')}
        means "nobody knows". Historic only changes WHERE YOU LOOK, and it is reversible by
        deleting this button. -->
   <button class="tab" data-view="historic">Historic</button>
-  <button class="tab" data-view="commitments" id="commitmentsTab" style="margin-left:auto">Commitments</button>
+  <!-- REQUESTS (F-609, 09-27-2026). Eric: "Would there be a new tab called quote requests or
+       something? ... I don't want it to blend in with the completed quotes."
+       It takes the margin-left:auto Commitments used to carry, so the two views that are NOT
+       statuses sit together on the right. The status tabs on the left answer how a quote is doing;
+       these answer what else lives on this page, and a seventh button in that row would read as a
+       seventh status.
+       ⭐ THE COUNT IS THE POINT. A tab that looks the same whether or not somebody is waiting is
+       the thing he was worried about; requestsCount() fills it on load, before anybody clicks. -->
+  <button class="tab" data-view="requests" id="requestsTab" style="margin-left:auto">Requests</button>
+  <button class="tab" data-view="commitments" id="commitmentsTab">Commitments</button>
 </div>
 <main>
   <div class="table-wrap">
@@ -17546,6 +17945,23 @@ ${abyAdminNav('/admin')}
       </tr>
     </thead>
     <tbody id="ctbody"><tr><td colspan="6" style="padding:20px;color:#888;text-align:center">Loading…</td></tr></tbody>
+  </table>
+</div>
+<div id="requests-wrap" style="display:none;overflow-x:auto">
+  <!-- ⭐ TWO SECTIONS IN ONE TABLE, not two tables: waiting, then recently settled. A request that
+       has JUST been answered has to stay visible for a while, or answering one looks like losing
+       one -- and somebody who quoted the wrong employer needs to see that it closed the request. -->
+  <table id="rqtable" style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead>
+      <tr>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Asked</th>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Employer</th>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Broker</th>
+        <th style="text-align:left;padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0">Effective / Asked about</th>
+        <th style="padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0"></th>
+      </tr>
+    </thead>
+    <tbody id="rqtbody"><tr><td colspan="5" style="padding:20px;color:#888;text-align:center">Loading...</td></tr></tbody>
   </table>
 </div>
 </main>
@@ -18773,6 +19189,249 @@ document.getElementById('search').addEventListener('input', function(e) {
 
 load();
 
+// ── QUOTE REQUESTS (F-609, 09-27-2026) ───────────────────────────────────────────────────────
+//
+// ⭐⭐ WHAT ARRIVES HERE AND HOW. A BenefitLab broker or employer clicks to ask ABY for a quote;
+// the BenefitLab server posts it to /api/quote-request with the broker's details and where it came
+// from. It is NOT a link an employer follows -- the quote tool sits behind a broker sign-in, so an
+// employer would land at a login that is not theirs.
+//
+// ⭐ OPEN IS DERIVED, NOT TICKED. A request stops being open when a quote is saved for that
+// employer, which the quote-save path does itself. The only button here is the one answer no quote
+// can record: we are not quoting this.
+function rqEsc(v) { return esc(v == null ? '' : String(v)); }
+
+function rqDash() { return '<span style="color:#bbb">-</span>'; }
+
+function rqDate(iso) {
+  if (!iso) return '';
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// How long it has been waiting, in words. ⭐ THIS IS THE COLUMN SOMEBODY SCANS: a date tells you
+// when, and "5 days" tells you whether it is a problem. An unanswered request is late from the
+// moment it lands, which is the same rule the Today page dates these rows by.
+function rqWaited(iso) {
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  var days = Math.floor((Date.now() - d.getTime()) / 86400000);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  return days + ' days ago';
+}
+
+async function loadRequests() {
+  var tb = document.getElementById('rqtbody');
+  var res, data;
+  try {
+    res = await fetch('/api/admin/quote-requests');
+    data = await res.json().catch(function () { return {}; });
+  } catch (netErr) {
+    // ⛔ A NETWORK FAILURE IS NOT AN EMPTY QUEUE. Rendering "nothing waiting" here would tell
+    // somebody the opposite of what is known, which is the one failure this screen must not have.
+    tb.innerHTML = '<tr><td colspan="5" style="padding:16px;color:#c00;text-align:center">' +
+      'Could not reach the server, so this list is NOT the whole picture: ' + rqEsc(netErr.message) +
+      '</td></tr>';
+    return;
+  }
+  if (!res.ok) {
+    // The server already says why -- including "no such table", which means /api/migrate has not
+    // been opened yet. Throwing that away and printing one sentence is TRAPS #82.
+    var act = res.status === 401
+      ? ' <a href="/admin" style="color:#0b5fff;text-decoration:underline">Sign in again</a>'
+      : '';
+    tb.innerHTML = '<tr><td colspan="5" style="padding:16px;color:#c00;text-align:center">' +
+      rqEsc(data.error || ('Could not load the requests (HTTP ' + res.status + ').')) + act +
+      '</td></tr>';
+    return;
+  }
+
+  var rows = data.requests || [];
+  var open = rows.filter(function (r) { return !r.answered_at && !r.declined_at; });
+  var shut = rows.filter(function (r) { return r.answered_at || r.declined_at; }).slice(0, 25);
+  setRequestsBadge(open.length);
+  document.getElementById('count').textContent =
+    open.length + ' waiting' + (shut.length ? ' / ' + shut.length + ' settled' : '');
+
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="5" style="padding:20px;color:#888;text-align:center">' +
+      'Nobody has asked for a quote through BenefitLab yet.</td></tr>';
+    return;
+  }
+
+  var html = '';
+  if (open.length) html += rqSection('Waiting', open, false);
+  if (shut.length) html += rqSection('Settled', shut, true);
+  if (!open.length) {
+    html = '<tr><td colspan="5" style="padding:16px;color:#2f7d5a;text-align:center">' +
+      'Nothing waiting. Everything asked for has been quoted or turned down.</td></tr>' + html;
+  }
+  tb.innerHTML = html;
+}
+
+function rqSection(title, list, settled) {
+  var head = '<tr><td colspan="5" style="padding:14px 12px 6px;font-size:11px;text-transform:uppercase;' +
+    'letter-spacing:.04em;color:#5b6b7f;background:#fbfcfd;border-bottom:1px solid #e9eef3">' +
+    rqEsc(title) + ' &middot; ' + list.length + '</td></tr>';
+  return head + list.map(function (r) { return rqRow(r, settled); }).join('');
+}
+
+function rqRow(r, settled) {
+  var td = function (v, extra) {
+    return '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top' +
+           (extra || '') + '">' + (v || rqDash()) + '</td>';
+  };
+  var sub = function (v) {
+    return v ? '<br><span style="color:#777;font-size:12px">' + v + '</span>' : '';
+  };
+
+  var products = [];
+  try { products = JSON.parse(r.products || '[]'); } catch (e) { products = []; }
+
+  // WHO ASKED. Eric's requirement was that ABY can tell a BenefitLab request from anything else and
+  // see which broker it came through, so the channel is stated on the row rather than inferred.
+  var askedBy = (String(r.asked_by || '') === 'broker') ? 'Broker asked' : 'Employer asked';
+  var asked = '<strong>' + rqEsc(rqWaited(r.created_at)) + '</strong>' +
+              sub(rqEsc(rqDate(r.created_at)) + ' &middot; ' + rqEsc(askedBy));
+
+  var employer = '<strong>' + rqEsc(r.client_name) + '</strong>' +
+    sub(r.employee_count ? rqEsc(r.employee_count) + ' employees' : '');
+
+  var bname = r.broker_name || r.broker_email || '';
+  var broker = bname
+    ? (r.broker_email
+        ? '<a href="mailto:' + rqEsc(r.broker_email) + '">' + rqEsc(bname) + '</a>'
+        : rqEsc(bname)) +
+      sub([r.broker_agency, r.broker_phone].filter(Boolean).map(rqEsc).join(' &middot; '))
+    : '';
+
+  var what = (r.effective_date ? '<strong>' + rqEsc(r.effective_date) + '</strong>' : '') +
+             sub(products.map(rqEsc).join(', ')) +
+             sub(r.note ? rqEsc(r.note) : '');
+
+  // ── THE LAST COLUMN: WHAT HAPPENED, OR THE ONE BUTTON ─────────────────────────────────────
+  //
+  // ⭐⭐ THERE IS NO "MARK IT HANDLED". Quoting the employer closes this by itself, and a button
+  // that did the same thing by hand would be a second source of truth about one fact -- somebody
+  // could tick it without quoting, or quote without ticking, and the queue would start disagreeing
+  // with the quote log. The only thing offered is the answer a quote cannot express.
+  //
+  // ⚠️ AND A FAILED NOTIFICATION IS NAMED, with the SILENCE rule the commitments table paid for on
+  // 09-25-2026: a row with nothing recorded either way prints NOTHING, because a grey label that
+  // appears on every row is noise that teaches people to stop reading the column.
+  var act;
+  if (r.answered_at) {
+    act = '<span style="color:#2f7d5a;font-weight:600">Quoted</span>' +
+          sub(r.answered_quote ? rqEsc(r.answered_quote) : rqEsc(rqDate(r.answered_at)));
+  } else if (r.declined_at) {
+    act = '<span style="color:#8a97a8">Not quoting</span>' +
+          sub(r.declined_note ? rqEsc(r.declined_note) : rqEsc(rqDate(r.declined_at))) +
+          '<br><a href="#" class="rq-undo" data-rqid="' + rqEsc(r.id) +
+          '" style="font-size:12px;color:#0b5fff">Undo</a>';
+  } else {
+    act = '<button class="rq-no" data-rqid="' + rqEsc(r.id) + '" ' +
+          'style="font-size:12px;padding:5px 9px;border:1px solid #d6dde5;background:#fff;' +
+          'border-radius:5px;cursor:pointer;color:#5b6b7f">Not quoting this</button>';
+  }
+  if (r.notify_error) {
+    act += '<br><span style="color:#b26a00;font-size:12px" title="' + rqEsc(r.notify_error) +
+           '">No email went out</span>';
+  }
+
+  return '<tr' + (settled ? ' style="opacity:.62"' : '') + '>' +
+    td(asked) + td(employer) + td(broker) + td(what) + td(act) + '</tr>';
+}
+
+// ⭐ DELEGATED ONCE ON THE STATIC TBODY, not re-bound per render and not with { once: true }. The
+// commitments table above has the comment explaining what that cost: one click anywhere killed every
+// button on the table until a reload.
+document.getElementById('rqtbody').addEventListener('click', function (e) {
+  var no = e.target.closest ? e.target.closest('.rq-no') : null;
+  if (no) { declineRequest(no.dataset.rqid, false); return; }
+  var un = e.target.closest ? e.target.closest('.rq-undo') : null;
+  if (un) { e.preventDefault(); declineRequest(un.dataset.rqid, true); }
+});
+
+async function declineRequest(id, undo) {
+  // ⛔ NO window.confirm ANYWHERE: it blocks the page, and the action is reversible on the row
+  // itself, which is a better answer than a dialog.
+  var note = '';
+  if (!undo) {
+    var box = document.getElementById('rqNote');
+    note = box ? box.value.trim() : '';
+  }
+  try {
+    var res = await fetch('/api/admin/quote-request/decline', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id, undo: !!undo, note: note }),
+    });
+    var d = await res.json().catch(function () { return {}; });
+    if (!res.ok) {
+      // ⛔ REPORTED ON THE PAGE, not to the console. The row it refers to is on screen, and a
+      // failure nobody is shown looks exactly like a change that worked.
+      var tb = document.getElementById('rqtbody');
+      tb.insertAdjacentHTML('afterbegin',
+        '<tr><td colspan="5" style="padding:12px;color:#c00">' +
+        rqEsc(d.error || ('That did not save (HTTP ' + res.status + ').')) + '</td></tr>');
+      return;
+    }
+  } catch (netErr) {
+    var tb2 = document.getElementById('rqtbody');
+    tb2.insertAdjacentHTML('afterbegin',
+      '<tr><td colspan="5" style="padding:12px;color:#c00">Could not reach the server, so nothing ' +
+      'changed: ' + rqEsc(netErr.message) + '</td></tr>');
+    return;
+  }
+  loadRequests();
+}
+
+// ── THE COUNT ON THE TAB ─────────────────────────────────────────────────────────────────────
+//
+// ⭐⭐ THIS IS THE ANSWER TO "I DON'T WANT IT TO BLEND IN". The tab itself is quiet furniture; what
+// stops a request going unseen is that the number is on it BEFORE anybody clicks anything, and that
+// the tab changes colour when it is not zero. A view you have to open to discover whether it has
+// anything in it is an inbox that only works for somebody who already knows.
+//
+// ⚠️ IT FAILS QUIET, ON PURPOSE, AND THAT IS THE ONE PLACE HERE WHERE THAT IS RIGHT. If the count
+// cannot be read the tab simply says Requests -- the same as zero. It is a hint, not a gate: the
+// list itself reports every failure loudly, and a red badge on a page somebody opened to look at
+// quotes would be alarming about the wrong thing.
+function setRequestsBadge(n) {
+  var t = document.getElementById('requestsTab');
+  if (!t) return;
+  if (!n) {
+    t.textContent = 'Requests';
+    t.style.color = '';
+    t.style.fontWeight = '';
+    return;
+  }
+  t.textContent = 'Requests (' + n + ')';
+  t.style.color = '#b23c17';
+  t.style.fontWeight = '700';
+}
+
+(async function requestsCount() {
+  try {
+    var res = await fetch('/api/admin/quote-requests');
+    if (!res.ok) return;
+    var d = await res.json();
+    var open = (d.requests || []).filter(function (r) { return !r.answered_at && !r.declined_at; });
+    setRequestsBadge(open.length);
+  } catch (e) { /* see the note above: a badge that cannot load says nothing. */ }
+})();
+
+// ⭐ THE EMAIL LINKS STRAIGHT HERE. /admin?view=requests opens the tab, so the notification is one
+// click from the thing it is about rather than one click from a page and a hunt.
+(function openRequestedView() {
+  var q = new URLSearchParams(location.search || '');
+  if ((q.get('view') || '') !== 'requests') return;
+  var t = document.getElementById('requestsTab');
+  if (t) t.click();
+})();
+
 // ── LOG A QUOTE ────────────────────────────────────────────────────────────────────────────
 // Moved here from /admin/pipeline, 2026-08-26, and the page it came from no longer exists.
 //
@@ -18886,15 +19545,29 @@ document.querySelectorAll('.tab').forEach(function(btn) {
     document.querySelectorAll('.tab').forEach(function(b){ b.classList.remove('active'); });
     this.classList.add('active');
 
-    if (this.dataset.view === 'commitments') {
+    if (this.dataset.view === 'requests') {
       document.querySelector('.table-wrap').style.display = 'none';
+      document.getElementById('commitments-wrap').style.display = 'none';
+      document.getElementById('requests-wrap').style.display = 'block';
+      document.getElementById('search').style.display = 'none';
+      document.getElementById('count').textContent = '';
+      document.getElementById('histYear').style.display = 'none';
+      // ⛔ RELOADED EVERY TIME THIS TAB IS OPENED, unlike commitments which caches after the first
+      // read. This is a queue: somebody opens it, works a request, comes back, and a cached list
+      // would still show the one they just answered. A stale queue is worse than a slow one.
+      loadRequests();
+    } else if (this.dataset.view === 'commitments') {
+      document.querySelector('.table-wrap').style.display = 'none';
+      document.getElementById('requests-wrap').style.display = 'none';
       document.getElementById('commitments-wrap').style.display = 'block';
       document.getElementById('search').style.display = 'none';
       document.getElementById('count').textContent = '';
+      document.getElementById('histYear').style.display = 'none';
       loadCommitments();
     } else {
       document.querySelector('.table-wrap').style.display = 'block';
       document.getElementById('commitments-wrap').style.display = 'none';
+      document.getElementById('requests-wrap').style.display = 'none';
       document.getElementById('search').style.display = '';
       // Historic is a VIEW over the same rows, not a status -- see the tab's own comment.
       historicView = (this.dataset.view === 'historic');
