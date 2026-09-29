@@ -633,7 +633,7 @@ rearrange a spreadsheet first is how a feature stops being used.
 **The preview shows what it understood**, and says up front how many rows have no email address
 and therefore cannot be added. ⚠️ Finding that out after pressing the button is the wrong moment.
 
-⭐ **The tag goes on during the paste.** *"Everyone at the Tulsa class, 14 August"* is one action:
+⭐ **The tag goes on during the paste.** *"Everyone at the Tulsa class, August 14"* is one action:
 paste the rows, pick the tag, set the date it happened, apply. Doing it in two steps is two chances
 to tag the wrong set.
 
@@ -650,7 +650,7 @@ real fraction of those.
 quotes, a priority and an owner, and none of it is touched.
 
 ⭐ **The date is the date of the EVENT, not today.** Paste the Tulsa list in September and set
-it to 14 August, and that is what the history says.
+it to August 14, and that is what the history says.
 
 ---
 
