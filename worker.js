@@ -2670,6 +2670,19 @@ async function withAuth(request, env, handler) {
     return jsonResp({ error: 'Session expired — please log in again.' }, 401);
   }
 
+  // ARRIVING FROM AN EMAIL (Eric, 09-30-2026: "when I tried clicking open it from email it wanted
+  // me to sign in" - while signed in). The admin cookie is SameSite=Strict, so a click from another
+  // site (a mail client) arrives WITHOUT it. The answer is to load the same address once more FROM
+  // this site, which the browser does send the cookie on. It keeps Strict, touches no page body, and
+  // cannot loop: the second request is same-origin, so it falls through to the login form below if
+  // the person really is signed out.
+  if (request.method === 'GET' && !token && request.headers.get('Sec-Fetch-Site') === 'cross-site') {
+    return new Response('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0">'
+      + '<script>location.replace(location.href)</script><p style="font:15px sans-serif">Opening...</p>', {
+      headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+    });
+  }
+
   // Page routes: show the login form, never cached
   return new Response(loginHTML(), {
     status: 401,
@@ -17997,6 +18010,7 @@ ${abyAdminNav('/admin')}
     </table>
   </div>
 <div id="commitments-wrap" style="display:none;overflow-x:auto">
+  <style>.cmt-actions > a, .cmt-actions > button { display:block; width:100%; box-sizing:border-box; margin:0 0 6px 0 !important; text-align:center; }</style>
   <table id="ctable" style="width:100%;border-collapse:collapse;font-size:13px">
     <thead>
       <tr>
@@ -19736,12 +19750,13 @@ async function loadCommitments() {
       // template string and a backtick here ends it (see the file header).
       // F-625. The setup questions the employer answers after signing. Silent when not started,
       // for the same reason as the notify line below: a label on every row is noise.
-      var appCell = function(row) {
+      var appButton = function(row) {
         if (!row.app_status) return '';
         var done = row.app_status === 'submitted';
-        return '<br><a href="/admin/application?cid=' + encodeURIComponent(row.id) + '" target="_blank" style="font-size:12px;'
-          + (done ? 'color:#1a5c3a;font-weight:600' : 'color:#8a4b00') + '">'
-          + (done ? '&#10003; Setup questions submitted' : 'Setup questions in progress') + '</a>';
+        return '<a href="/admin/application?cid=' + encodeURIComponent(row.id) + '" target="_blank" rel="noopener" '
+          + 'style="display:inline-block;padding:5px 10px;background:#fff;border-radius:4px;font-size:12px;text-decoration:none;'
+          + (done ? 'color:#1a5c3a;border:1px solid #1a5c3a;font-weight:600' : 'color:#8a4b00;border:1px solid #d9a441') + '">'
+          + (done ? 'Setup answers (submitted)' : 'Setup answers (in progress)') + '</a>';
       };
       var notifyCell = function(row) {
         if (row.notified_at) {
@@ -19765,7 +19780,7 @@ async function loadCommitments() {
         // the company name, that's weird." It is on the signed document and in the JSON export,
         // which is where an address is actually used; on a list of who has signed it is noise
         // under every row. Nothing is lost - the row still opens to the full record.
-        td((c.employer_name || '') + appCell(c)) +
+        td(c.employer_name || '') +
         // Broker. Named on the row itself for anything signed after the migration; recovered
         // through the quote only for older rows, which is why the agency line is muted and
         // why an unknown broker prints an em dash rather than being left blank.
@@ -19784,7 +19799,11 @@ async function loadCommitments() {
         // Start date with the products stacked beneath it, muted - the same shape as the broker
         // cell on the quote log.
         td('<span style="white-space:nowrap">' + (c.start_date || '—') + '</span>' + sub(productNames)) +
-        '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top;white-space:nowrap">' +
+        // STACKED, ONE PER LINE (Eric, 09-30-2026: "The other things to download go way off the
+        // commitments page"). Four buttons on one unbreakable line needed ~395px in a column the fixed
+        // layout gives a sixth of the table. Each is now its own line, and the setup answers sit here
+        // too rather than under the employer's name - every action for a row in one place.
+        '<td class="cmt-actions" style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top">' +
           // ⭐⭐ THE SIGNED PROPOSAL ITSELF (F-416). Eric asked for the proposal LINK to come back
           // with the signature -- "so we receive the proposal link with the original quote and the
           // employer's info." This is what answers "no price is captured": the commitment does not
@@ -19799,6 +19818,7 @@ async function loadCommitments() {
               + 'border:1px solid #1a5c3a;border-radius:4px;font-size:12px;text-decoration:none;'
               + 'margin-right:6px">Open the signed proposal</a>'
             : '') +
+          appButton(c) +
           // F-416 (iii). The signed record, machine-readable, for whoever processes the sale.
           // A plain link rather than a button: it is a GET, and a link can be opened in a tab,
           // copied, or handed to a script, which is the whole point of the format.
