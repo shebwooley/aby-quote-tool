@@ -10,9 +10,10 @@
  * question when any form the employer is buying needs it, so a question several forms share is
  * asked one time and every form reads the same answer. Three layers are shared:
  *   - company and contacts ............ every form
- *   - plan.* (how your plans work) .... HRA, Medicare HRA, POP, FSA, ERISA - officers, broker,
- *                                        eligibility, exclusions, waiting period. The forms print
- *                                        these nearly word for word the same.
+ *   - broker + correspondence ......... with the contacts; officers + the owner's family in their own
+ *                                        section (Eric, 09-30-2026: they are not "how your plans work")
+ *   - plan.* (how your plans work) .... HRA, Medicare HRA, POP, FSA, ERISA - eligibility, exclusions,
+ *                                        waiting period. The forms print these nearly word for word.
  *   - caf.* (your cafeteria plan) ..... POP and FSA - both describe the SAME Section 125 plan.
  *
  * WHERE THE QUESTIONS CAME FROM: ABY's own blank forms, read page by page -
@@ -277,22 +278,6 @@
         .concat(contact('contact.other', 'Additional contact', ['cobra', 'hsa']))
         .concat(contact('contact.legal', 'Legal representative (if any)', ['erisa']))
         .concat([
-          { key: 'co.adminStart', label: 'Start date of administration', type: 'date', forms: ['cobra', 'hsa'],
-            why: 'The date ABY takes over. Anything that happens before it stays with whoever handled it before.' }
-        ])
-    },
-    {
-      id: 'plan',
-      title: 'How your plans work',
-      intro: 'Asked once and used for every plan ABY is setting up for you.',
-      questions: [
-        { key: 'plan.officers.president', label: 'President', type: 'text', forms: PLAN, half: true },
-        { key: 'plan.officers.vp',        label: 'Vice president', type: 'text', forms: PLAN, half: true },
-        { key: 'plan.officers.cfo',       label: 'CFO', type: 'text', forms: PLAN, half: true },
-        { key: 'plan.officers.ceo',       label: 'CEO', type: 'text', forms: PLAN, half: true },
-        { key: 'plan.officers.other',     label: 'Other officers', type: 'text', forms: PLAN },
-        { key: 'plan.ineligibleFamily', label: 'Employee spouses or immediate family of the owner who are not eligible', type: 'textarea', forms: PLAN,
-          hint: 'Names, if any.' },
         { key: 'plan.broker.office',  label: "Broker's office", type: 'text',  forms: PLAN, half: true, head: true },
         { key: 'plan.broker.contact', label: 'Broker contact',  type: 'text',  forms: PLAN, half: true },
         { key: 'plan.broker.email',   label: 'Broker email',    type: 'email', forms: PLAN, half: true },
@@ -300,8 +285,31 @@
         { key: 'plan.correspondTo', label: 'Questions and correspondence should go to', type: 'choice', forms: PLAN,
           options: ['Your company contact', 'The broker'] },
         { key: 'plan.copyBroker', label: 'Should the broker be copied on all written correspondence?', type: 'yesno', forms: PLAN },
+          { key: 'co.adminStart', label: 'Start date of administration', type: 'date', forms: ['cobra', 'hsa'],
+            why: 'The date ABY takes over. Anything that happens before it stays with whoever handled it before.' }
+        ])
+    },
+    {
+      id: 'officers',
+      title: 'Company officers and family members',
+      intro: 'Asked once. Plans treat owners and their families differently, so ABY needs to know who they are.',
+      questions: [
+        { key: 'plan.officers.president', label: 'President', type: 'text', forms: PLAN, half: true },
+        { key: 'plan.officers.vp',        label: 'Vice president', type: 'text', forms: PLAN, half: true },
+        { key: 'plan.officers.cfo',       label: 'CFO', type: 'text', forms: PLAN, half: true },
+        { key: 'plan.officers.ceo',       label: 'CEO', type: 'text', forms: PLAN, half: true },
+        { key: 'plan.officers.other',     label: 'Other officers', type: 'text', forms: PLAN },
+        { key: 'plan.ineligibleFamily', label: 'Employee spouses or immediate family of the owner who are not eligible', type: 'textarea', forms: PLAN,
+          hint: 'Names, if any.' }
+      ]
+    },
+    {
+      id: 'plan',
+      title: 'How your plans work',
+      intro: 'Who can join your plans, and when. Asked once and used for every plan ABY is setting up for you.',
+      questions: [
 
-        { key: 'plan.eligible', label: 'Which employees are eligible?', type: 'multi', forms: ELIG, head: true,
+        { key: 'plan.eligible', label: 'Which employees are eligible?', type: 'multi', forms: ELIG,
           options: ['All', 'Salaried employees only', 'Hourly employees only', 'Full-time employees', 'Part-time employees', 'Other'],
           hint: 'Rules that favor highly compensated employees can bring tax penalties. Check with your advisor before limiting who can take part.' },
         { key: 'plan.ftHours', label: 'Full-time means scheduled to work at least this many hours a week', type: 'number', forms: ELIG, show: planHas('Full-time employees') },
