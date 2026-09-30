@@ -87,6 +87,17 @@ if git diff --cached --name-only | grep -q '^worker\.js$'; then
   fi
 fi
 
+# THE SETUP QUESTIONS RECOGNIZE WHAT WAS SIGNED FOR (F-625). Runs on every commit: it is instant,
+# and the file that breaks it (products.js) is not the file the feature lives in. The first live
+# signature stored short names the matcher did not know, and the page asked nothing.
+if ! node scripts/check_application_products.mjs > /dev/null 2>&1; then
+  node scripts/check_application_products.mjs
+  echo ""
+  echo "The setup questions no longer match the product list. Commit refused."
+  echo "Run: node scripts/check_application_products.mjs"
+  exit 1
+fi
+
 # 🔴🔴 CAN A USER REACH WHAT WE BUILT? Added 2026-08-23 after F-367 -- the employer corrects the
 # headcount -- was found to be built, deployed, CORRECT and unreachable for a day. It renders only
 # on a shared quote link, and the only way to mint one was a button buried in an expanded row of

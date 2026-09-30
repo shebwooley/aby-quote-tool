@@ -40,6 +40,18 @@
     mpra: 'hra'
   };
 
+  // THE SHORT LABEL THE SIGNED RECORD STORES. The authorization page names each service by its
+  // products.js `shortName` ("COBRA"), while the saved quote carries the full `name` - so matching
+  // on the name alone found nothing on the first live signature (09-29-2026). A COPY of products.js,
+  // kept honest by scripts/check_application_products.mjs, which fails the moment the two differ.
+  var SHORT_NAME = {
+    cobra: 'COBRA',
+    stateContinuation: 'State Continuation',
+    hra: 'HRA',
+    ichra: 'ICHRA / QSEHRA',
+    mpra: 'Medicare HRA'
+  };
+
   var FORMS = {
     cobra: { title: 'COBRA administration' },
     hra:   { title: 'Health Reimbursement Arrangement (HRA)' }
@@ -259,6 +271,7 @@
     STATES: STATES,
     FORMS: FORMS,
     FORM_FOR_PRODUCT: FORM_FOR_PRODUCT,
+    SHORT_NAME: SHORT_NAME,
     SECTIONS: SECTIONS,
 
     /** Does one condition hold against the answers? Unanswered never satisfies a condition. */

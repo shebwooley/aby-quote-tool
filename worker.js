@@ -2312,7 +2312,11 @@ async function handleSaveCommitment(request, env, ctx) {
 
   // F-625. An absolute address, because the signing page may be a DOWNLOADED file with no origin
   // of its own. Absent when the link was withheld (F-480) - then ABY follows up by hand as before.
-  const applyUrl = linkedToken ? new URL(request.url).origin + '/q/' + linkedToken + '/apply' : null;
+  // The signing form posts to the workers.dev address, so that is the request's origin - but an
+  // employer should be sent to abyquotes.com. Any other origin (local testing) is kept as it is.
+  const reqOrigin = new URL(request.url).origin;
+  const linkOrigin = new URL(request.url).hostname.endsWith('.workers.dev') ? 'https://abyquotes.com' : reqOrigin;
+  const applyUrl = linkedToken ? linkOrigin + '/q/' + linkedToken + '/apply' : null;
   return jsonResp({ id, quoteNumber, submitted_at: now, applyUrl });
 }
 
