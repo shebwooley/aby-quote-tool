@@ -136,7 +136,15 @@ function run(rendererSrc, appSrcIn) {
   ok("an UNSIGNED page still offers Submit Authorization",
     blankHtml.includes("Submit Authorization to ABY"));
   ok("an unsigned page still carries the signing hint",
-    blankHtml.includes("Type your name in the Authorized Signer field above to sign"));
+    blankHtml.includes("Type your name in the Authorized Signer field above"));
+  // The drawn signature (09-30-2026, Eric: it "might feel more like a commitment for the employer").
+  ok("an unsigned page offers the box to sign in, and a way to clear it",
+    blankHtml.includes('id="sigPad"') && blankHtml.includes('id="sigClear"'));
+  ok("a signed page offers no box to sign in again",
+    !signedHtml.includes('id="sigPad"'));
+  const withDrawing = renderWith(A, Object.assign({}, SIGNED, { signatureImage: "data:image/png;base64,iVBORw0KGgo=" }));
+  ok("a signed page with a drawing shows the drawing, not the typed script",
+    withDrawing.includes('alt="Signature"') && !withDrawing.includes('id="signPreview"'));
   ok("an unsigned page still wires the live signature handler",
     blankHtml.includes("abySign(this.value)"));
   ok("an unsigned page has no read-only authorization fields",

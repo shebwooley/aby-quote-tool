@@ -1891,6 +1891,12 @@ async function serveSharedQuote(token, env, request) {
         // F-625: where the employer continues. Same token, so it needs no lookup of its own.
         applyPath:     '/q/' + token + '/apply',
       };
+      try {
+        const im = await env.DB.prepare(
+          'SELECT signature_image FROM commitments WHERE share_token = ? ORDER BY submitted_at DESC LIMIT 1'
+        ).bind(String(token || '')).first();
+        if (im && im.signature_image) shared.signed.signatureImage = im.signature_image;
+      } catch (e) { /* no column yet: the typed signature shows, as before */ }
     }
   } catch (err) {
     // An older database without the commitments columns must still serve the proposal.
@@ -2234,6 +2240,18 @@ async function handleSaveCommitment(request, env, ctx) {
     // document carries only the number, and it should still link where it can.
     // ⚠️ A token is MINTED only if the quote has none; an existing one is never replaced, or
     // every link already sent to a client would die the moment somebody signed.
+    // THE DRAWN SIGNATURE, when the page sent one. Only a PNG data URL under ~150 KB is kept (a 600x160
+    // drawing is 5-20 KB); anything else is dropped, never an error, because the typed name is already saved.
+    // Its own statement: a database without the column still keeps the authorization.
+    const sigImg = String(body.signatureImage || '');
+    if (sigImg.indexOf('data:image/png;base64,') === 0 && sigImg.length < 150000) {
+      try {
+        await env.DB.prepare('UPDATE commitments SET signature_image = ? WHERE id = ?').bind(sigImg, id).run();
+      } catch (err) {
+        console.error('commitment: could not store the drawn signature:', err);
+      }
+    }
+
     let linkedToken = null;   // F-625: the apply link is only offered when a quote link exists
     try {
       // F-480. The three lookups now also fetch what decides whether a LINK is safe to hand out.
@@ -2341,6 +2359,11 @@ async function handleListCommitments(request, env) {
     ' ORDER BY c.submitted_at DESC LIMIT 200';
   // F-625: the setup questions' status per signed link. Asked separately so a database without the
   // applications table still lists every commitment - the join above already has a fallback of its own.
+  // The drawn signature is up to ~20 KB a row, so the LIST carries a flag and the picture comes from export.
+  function lightenSignatures(rows) {
+    rows.forEach(function (c) { c.has_signature_image = !!c.signature_image; delete c.signature_image; });
+    return rows;
+  }
   async function withApplications(rows) {
     try {
       const a = await env.DB.prepare('SELECT share_token, status, updated_at, submitted_at FROM applications').all();
@@ -2357,7 +2380,7 @@ async function handleListCommitments(request, env) {
 
   try {
     const result = await env.DB.prepare(withJoin).all();
-    return jsonResp({ commitments: await withApplications(result.results || []) });
+    return jsonResp({ commitments: lightenSignatures(await withApplications(result.results || [])) });
   } catch (err) {
     // A pre-migration database has no `commitments.client_id` / `broker_email`, so the query
     // above throws. Fall back to the plain list rather than failing the screen: an admin who
@@ -2475,6 +2498,8 @@ async function handleCommitmentExport(request, id, env) {
       acceptance: {
         printed_name: val(row.accepted_print),
         signature: val(row.accepted_sign),
+        // The drawn signature as a PNG data URL, or null when the employer signed before it existed.
+        signature_image: val(row.signature_image),
         product_names: names,
         products: products,
       },
@@ -17128,6 +17153,8 @@ const MIGRATIONS = [
   // resolve anything. Point one join at it and MMA - DFW quotes go quiet with nothing turning red,
   // which is the exact silent miscount TRAPS #259 already records.
   { sql: "ALTER TABLE agencies ADD COLUMN quoting_name TEXT", table: "agencies", column: "quoting_name" },
+  // The drawn signature on the authorization (F-625 follow-up, 09-30-2026): a small PNG as a data URL.
+  { sql: "ALTER TABLE commitments ADD COLUMN signature_image TEXT", table: "commitments", column: "signature_image" },
   // The employer application (F-625). Defined beside its handlers in lib/application.js.
   ...APPLICATION_MIGRATIONS,
 ];
@@ -19837,9 +19864,18 @@ async function loadCommitments() {
   }
 }
 
-function downloadCommitment(id) {
+async function downloadCommitment(id) {
   var entry = commitmentData[id];
   if (!entry) return;
+  // The drawn signature is not in the list (it would weigh down every row), so fetch it for this one.
+  var sigImage = '';
+  if (entry.c.has_signature_image) {
+    try {
+      var sr = await fetch('/api/commitments/' + encodeURIComponent(id) + '/export');
+      var sj = await sr.json();
+      sigImage = (sj.acceptance && sj.acceptance.signature_image) || '';
+    } catch (e) { sigImage = ''; }
+  }
   var c = entry.c;
   var products = entry.products;
 
@@ -19980,7 +20016,9 @@ function downloadCommitment(id) {
       '<div class="section-title">Electronic Signature</div>' +
       '<div class="field"><div class="lbl">Printed Name</div><div class="val">' + (c.accepted_print || '') + '</div></div>' +
       '<div class="field" style="margin-top:12px"><div class="lbl">Electronic Signature</div>' +
-        '<div class="sig-name">' + (c.accepted_sign || '') + '</div>' +
+        (sigImage.indexOf('data:image/png;base64,') === 0
+          ? '<div><img src="' + sigImage + '" alt="Signature" style="height:70px;border-bottom:2px solid #1a5c3a"></div>'
+          : '<div class="sig-name">' + (c.accepted_sign || '') + '</div>') +
       '</div>' +
     '</div>' +
     '<button class="print-btn" onclick="window.print()">Print / Save as PDF</button>' +

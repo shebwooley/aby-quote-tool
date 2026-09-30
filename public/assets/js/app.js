@@ -115,6 +115,18 @@
     'function abySign(v){v=(v||"").trim();var p=document.getElementById("printPreview"),s=document.getElementById("signPreview");if(p)p.textContent=v;if(s)s.textContent=v;}',
     'function abyElectedProducts(){var list=[];document.querySelectorAll(".opt-row").forEach(function(row){var cb=row.querySelector(".opt-check");if(!cb||!cb.checked)return;var label=cb.getAttribute("data-label");var sel=row.querySelector(".opt-tier-select");if(sel)label+=": "+sel.value;list.push(label);});return list;}',
     'function abyInitSignDate(){var d=document.getElementById("signDate");if(d&&!d.value)d.valueAsDate=new Date();}',
+    // THE DRAWN SIGNATURE (Eric, 09-30-2026): "it might feel more like a commitment for the employer."
+    // A fixed 600x160 canvas, so the saved PNG stays small whatever the screen; pointer events cover mouse,
+    // finger and pen. Legally it is no stronger than the typed name - the typed name still travels with it.
+    'function abyInitSigPad(){var c=document.getElementById("sigPad");if(!c||c.getAttribute("data-wired"))return;c.setAttribute("data-wired","1");' +
+      'c.width=600;c.height=160;var x=c.getContext("2d");x.lineWidth=2.6;x.lineCap="round";x.lineJoin="round";x.strokeStyle="#143c73";x.fillStyle="#143c73";' +
+      'window.__abySigInk=false;var down=false,lx=0,ly=0;' +
+      'function pt(e){var r=c.getBoundingClientRect();return[(e.clientX-r.left)*c.width/r.width,(e.clientY-r.top)*c.height/r.height];}' +
+      'c.addEventListener("pointerdown",function(e){down=true;try{c.setPointerCapture(e.pointerId);}catch(_){}var p=pt(e);lx=p[0];ly=p[1];x.beginPath();x.arc(lx,ly,1.3,0,6.3);x.fill();window.__abySigInk=true;e.preventDefault();});' +
+      'c.addEventListener("pointermove",function(e){if(!down)return;var p=pt(e);x.beginPath();x.moveTo(lx,ly);x.lineTo(p[0],p[1]);x.stroke();lx=p[0];ly=p[1];e.preventDefault();});' +
+      'function up(){down=false;}c.addEventListener("pointerup",up);c.addEventListener("pointercancel",up);c.addEventListener("pointerleave",up);' +
+      'var b=document.getElementById("sigClear");if(b)b.addEventListener("click",function(){x.clearRect(0,0,c.width,c.height);window.__abySigInk=false;});}',
+
 
     // ── THE TOTAL FOLLOWS THE OPTION THE READER PICKS (Eric, 2026-09-04) ────────────────────
     //
@@ -188,7 +200,7 @@
     // downloaded document, and a backslash escape inside it is eaten before it ever
     // becomes code -- which is TRAPS #224, and it would leave a pattern that silently
     // matches nothing. indexOf and slice need no escaping.
-    'async function submitCommitment(e){e.preventDefault();var form=e.target;var qf=document.getElementById("quoteIdField");if(qf&&!qf.value&&window.__abySavedQuoteId)qf.value=window.__abySavedQuoteId;var tf=document.getElementById("shareTokenField");if(tf&&!tf.value){var pp=String(location.pathname||"");if(pp.indexOf("/q/")===0)tf.value=pp.slice(3).split("/")[0];}var products=abyElectedProducts();var msg=document.getElementById("commitMsg");if(products.length===0){msg.style.display="block";msg.style.color="#c00";msg.textContent="Please select at least one service to authorize.";return;}document.getElementById("productsField").value=JSON.stringify(products);var authSigner=(form.authSigner.value||"").trim();form.acceptedPrint.value=authSigner;form.acceptedSign.value=authSigner;var btn=document.getElementById("commitBtn");btn.disabled=true;btn.textContent="Submitting...";var payload={};new FormData(form).forEach(function(v,k){payload[k]=v;});try{payload.products=JSON.parse(payload.products||"[]");}catch(_){payload.products=products;}try{var res=await fetch("https://aby-quote-tool.eric-185.workers.dev/api/commitments",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(res.ok){var rj={};try{rj=await res.json();}catch(_){}msg.style.display="block";msg.style.color="#1a5c3a";msg.innerHTML="✓ Authorization received. ABY Benefits has been notified and will be in touch shortly. You may print or save this page for your records."+(rj.applyUrl?"<div style=margin-top:14px;font-size:15px;color:#12263f><strong>Next: a few setup questions.</strong> They save as you go, so you can stop and come back.<br><a href="+rj.applyUrl+" target=_blank style=display:inline-block;margin-top:10px;background:#143c73;color:#fff;padding:10px;border-radius:6px;text-decoration:none;font-weight:600>Continue to the setup questions</a></div>":"");btn.style.display="none";if(!rj.applyUrl)window.print();}else{msg.style.display="block";msg.style.color="#c00";msg.textContent="Submission failed. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}catch(err){msg.style.display="block";msg.style.color="#c00";msg.textContent="Network error. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}'
+    'async function submitCommitment(e){e.preventDefault();var form=e.target;var qf=document.getElementById("quoteIdField");if(qf&&!qf.value&&window.__abySavedQuoteId)qf.value=window.__abySavedQuoteId;var tf=document.getElementById("shareTokenField");if(tf&&!tf.value){var pp=String(location.pathname||"");if(pp.indexOf("/q/")===0)tf.value=pp.slice(3).split("/")[0];}var products=abyElectedProducts();var msg=document.getElementById("commitMsg");if(products.length===0){msg.style.display="block";msg.style.color="#c00";msg.textContent="Please select at least one service to authorize.";return;}var sp0=document.getElementById("sigPad");if(sp0&&!window.__abySigInk){msg.style.display="block";msg.style.color="#c00";msg.textContent="Please sign in the signature box.";return;}document.getElementById("productsField").value=JSON.stringify(products);var authSigner=(form.authSigner.value||"").trim();form.acceptedPrint.value=authSigner;form.acceptedSign.value=authSigner;var btn=document.getElementById("commitBtn");btn.disabled=true;btn.textContent="Submitting...";var payload={};new FormData(form).forEach(function(v,k){payload[k]=v;});var sp=document.getElementById("sigPad");if(sp&&window.__abySigInk)payload.signatureImage=sp.toDataURL("image/png");try{payload.products=JSON.parse(payload.products||"[]");}catch(_){payload.products=products;}try{var res=await fetch("https://aby-quote-tool.eric-185.workers.dev/api/commitments",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(res.ok){var rj={};try{rj=await res.json();}catch(_){}msg.style.display="block";msg.style.color="#1a5c3a";msg.innerHTML="✓ Authorization received. ABY Benefits has been notified and will be in touch shortly. You may print or save this page for your records."+(rj.applyUrl?"<div style=margin-top:14px;font-size:15px;color:#12263f><strong>Next: a few setup questions.</strong> They save as you go, so you can stop and come back.<br><a href="+rj.applyUrl+" target=_blank style=display:inline-block;margin-top:10px;background:#143c73;color:#fff;padding:10px;border-radius:6px;text-decoration:none;font-weight:600>Continue to the setup questions</a></div>":"");btn.style.display="none";if(!rj.applyUrl)window.print();}else{msg.style.display="block";msg.style.color="#c00";msg.textContent="Submission failed. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}catch(err){msg.style.display="block";msg.style.color="#c00";msg.textContent="Network error. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}'
   ].join('\n');
   // Define the authorization-page helpers in-app so the on-screen preview is interactive too.
   try { (0, eval)(ABY_COMMIT_JS); } catch (e) {}
@@ -1194,6 +1206,7 @@
       '<div class="quote">' + html + '</div>';
 
     if (typeof abyInitSignDate === 'function') abyInitSignDate();
+    if (typeof abyInitSigPad === 'function') abyInitSigPad();
 
     // ⭐ THE OPTION RADIOS, WIRED ON EVERY AUDIENCE. Unlike the headcount box below, this is not
     // employer-only: the broker previewing a quote has to be able to see what each option does
@@ -1410,7 +1423,7 @@
           '<style>' + css + '\nbody{margin:0;background:linear-gradient(180deg,#eaf3f8 0%,#f4f7f9 42%,#fff 100%);}' +
           '.wrap{max-width:1100px;margin:0 auto;padding:28px 18px 46px;}</style></head><body>' +
           '<div class="wrap">' + body + '</div>' +
-          '<scr' + 'ipt>' + ABY_COMMIT_JS + '\nabyInitSignDate();\nabyWireOptions();</scr' + 'ipt></body></html>';
+          '<scr' + 'ipt>' + ABY_COMMIT_JS + '\nabyInitSignDate();\nabyInitSigPad();\nabyWireOptions();</scr' + 'ipt></body></html>';
         var blob = new Blob([html], { type: 'text/html' });
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');

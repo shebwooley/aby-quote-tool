@@ -958,7 +958,13 @@ ABYQuote.renderer = (function () {
       '      </div></div>',
       '      <div class="ack-group"><div class="ack-group-label">Authorization</div><div class="ack-sign-grid">',
       '        <div><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:6px;">Accepted: Printed Name</label><div id="printPreview" class="sign-preview print-name">' + (signed ? esc(signed.acceptedPrint || '') : '') + '</div><input type="hidden" name="acceptedPrint" id="acceptedPrint"' + (signed ? ' value="' + esc(signed.acceptedPrint || '') + '"' : '') + '></div>',
-      '        <div><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:6px;">Accepted: Electronic Signature</label><div id="signPreview" class="sign-preview signature">' + (signed ? esc(signed.acceptedSign || '') : '') + '</div><input type="hidden" name="acceptedSign" id="acceptedSign"' + (signed ? ' value="' + esc(signed.acceptedSign || '') + '"' : '') + '>' + (signed ? '' : '<div class="sign-hint">Type your name in the Authorized Signer field above to sign.</div>') + '</div>',
+      '        <div><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:6px;">Accepted: Electronic Signature</label>' + (signed && signed.signatureImage
+          // F-625 follow-up: a drawn signature shows as the drawing; older signatures keep the typed script.
+          ? '<div class="sign-preview" style="border-bottom:1.5px solid #333;padding:2px"><img src="' + esc(signed.signatureImage) + '" alt="Signature" style="max-width:100%;height:64px;display:block"></div>'
+          : '<div id="signPreview" class="sign-preview signature">' + (signed ? esc(signed.acceptedSign || '') : '') + '</div>') + '<input type="hidden" name="acceptedSign" id="acceptedSign"' + (signed ? ' value="' + esc(signed.acceptedSign || '') + '"' : '') + '>' + (signed ? '' : '<div class="sign-hint">Type your name in the Authorized Signer field above.</div>'
+          + '<div style="margin-top:14px"><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:6px;">Sign here with your mouse or finger</label>'
+          + '<canvas id="sigPad" style="width:100%;height:110px;border:1.5px dashed #9fb3c4;border-radius:8px;background:#fff;touch-action:none;cursor:crosshair;display:block"></canvas>'
+          + '<button type="button" id="sigClear" style="margin-top:6px;font-size:12px;background:none;border:none;color:#205aa6;cursor:pointer;padding:0">Clear signature</button></div>') + '</div>',
       '      </div>',
       '      <div style="margin-top:16px;max-width:220px;"><label style="font-size:12px;color:#5f6b76;display:block;margin-bottom:4px;">Date</label><input type="date" name="signDate" id="signDate"' + (signed && signed.submittedAt ? ' value="' + esc(String(signed.submittedAt).slice(0, 10)) + '" readonly' : '') + ' style="width:100%;padding:9px 11px;border:1px solid #c4d2dd;border-radius:8px;font:inherit;font-size:14px;"></div>',
       '      </div>',
