@@ -35,13 +35,27 @@ Object.keys(Q.FORM_FOR_PRODUCT).forEach((id) => {
 
 // The matcher itself, on the labels the live signature stored and on the older full-name form.
 const { formsFor } = await import('../lib/application.js');
-const quoted = products.filter((p) => ['cobra', 'hra', 'pop'].includes(p.id)).map((p) => ({ id: p.id, name: p.name }));
+const quoted = products.filter((p) => ['cobra', 'hra', 'aca'].includes(p.id)).map((p) => ({ id: p.id, name: p.name }));
 let r = formsFor(quoted, ['HRA', 'COBRA']);
 check('short labels (the 09-29 live signature) find both forms', r.forms.join() === 'cobra,hra' && !r.other.length, JSON.stringify(r));
 r = formsFor(quoted, quoted.map((p) => p.name));
-check('full names still work, and POP is named as a follow-up', r.forms.join() === 'cobra,hra' && r.other.length === 1, JSON.stringify(r));
+check('full names still work, and a service with no form yet (ACA) is named as a follow-up', r.forms.join() === 'cobra,hra' && r.other.length === 1, JSON.stringify(r));
 r = formsFor(quoted, ['HRA: Basic']);
 check('a label with an option after a colon still matches', r.forms.join() === 'hra', JSON.stringify(r));
+
+// The other lines of service (09-30-2026): the package decides the Form 5500, the product decides the census.
+const all = products.map((p) => ({ id: p.id, name: p.name }));
+r = formsFor(all, ['ERISA Wrap Document: White Glove']);
+check('ERISA White Glove adds the Form 5500 questions', r.forms.join() === 'erisa,f5500', JSON.stringify(r.forms));
+r = formsFor(all, ['ERISA Wrap Document: Full SPD']);
+check('any other ERISA package does not', r.forms.join() === 'erisa', JSON.stringify(r.forms));
+r = formsFor(all, ['ICHRA / QSEHRA', 'FSA / DCAP / LFSA', 'POP / Cafeteria Plan', 'HSA', 'Medicare HRA']);
+check('ICHRA, FSA, POP, HSA and Medicare HRA each find their form', r.forms.join() === 'hra,mhra,pop,fsa,hsa', JSON.stringify(r.forms));
+check('an ICHRA gets the contribution census, FSA the FSA census',
+  r.census.map((c) => c.file).join() === 'ABY-ICHRA-census-template.xlsx,ABY-FSA-census-template.xlsx,ABY-HRA-census-template.xlsx', JSON.stringify(r.census));
+const { existsSync } = await import('node:fs');
+Object.values(Q.CENSUS).forEach((c) => check('census file exists: ' + c.file,
+  existsSync(new URL('../public/assets/forms/' + c.file, import.meta.url)), 'missing'));
 
 console.log(fails ? '\n' + fails + ' failed' : '\nall green');
 process.exit(fails ? 1 : 0);

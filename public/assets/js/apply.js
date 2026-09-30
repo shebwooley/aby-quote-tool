@@ -34,6 +34,10 @@
     return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) + ' at ' +
       d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   }
+  function joinNames(n) {
+    if (n.length < 3) return n.join(' and ');
+    return n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1];
+  }
   function isBlank(v) {
     if (v == null) return true;
     if (Array.isArray(v)) return !v.some(function (x) { return String(x || '').trim() !== ''; });
@@ -107,8 +111,8 @@
     else {
       html += '<h2>' + esc(cur.title) + '</h2>';
       if (cur.section.intro) html += '<p class="intro">' + esc(cur.section.intro) + '</p>';
-      if (cur.id === 'hra' && !state.readonly) {
-        html += '<div class="note info">Bank details for reimbursements (Section 7 of the ABY form) are not asked here. They go through the secure upload, because an account number should never travel by email or sit on a web form.</div>';
+      if (cur.section.secureNote && !state.readonly) {
+        html += '<div class="note info">Bank details (routing and account numbers, and any signature for printing checks) are not asked here. They go through the secure upload, because an account number should never travel by email or sit on a web form.</div>';
       }
       html += '<div class="grid">' + cur.questions.map(question).join('') + '</div>';
     }
@@ -159,7 +163,8 @@
         (adminMode ? '' : ' To change an answer now, contact ABY Benefits or your broker.') + '</div>';
     }
     var names = (d.forms || []).map(function (f) { return A.FORMS[f] ? A.FORMS[f].title : f; });
-    if (names.length) out += '<div class="note info">Questions for: <strong>' + esc(names.join(' and ')) + '</strong>. Anything the two share is asked only once.</div>';
+    if (names.length) out += '<div class="note info">Questions for: <strong>' + esc(joinNames(names)) + '</strong>.' +
+      (names.length > 1 ? ' Anything they have in common is asked only once.' : '') + '</div>';
     if (d.otherServices && d.otherServices.length) {
       out += '<div class="note info">ABY will follow up separately about: ' + esc(d.otherServices.join(', ')) + '.</div>';
     }
@@ -171,7 +176,7 @@
     var v = state.answers[q.key];
     var ro = state.readonly ? ' readonly' : '';
     var dis = state.readonly ? ' disabled' : '';
-    var cls = 'q' + (q.half ? ' half' : '') + (q.third ? ' third' : '') + (/\.offered$/.test(q.key) ? ' head' : '');
+    var cls = 'q' + (q.half ? ' half' : '') + (q.third ? ' third' : '') + (q.head ? ' head' : '');
     var tag = state.prefilled[q.key] ? '<span class="tag">From your authorization</span>' : '';
     var id = 'f_' + q.key.replace(/[^a-z0-9]/gi, '_');
     var lbl = '<label for="' + id + '">' + esc(q.label) + tag + '</label>';
@@ -250,12 +255,18 @@
       out += '<div class="note ok">Every question is answered.</div>';
     }
 
-    out += '<h2 style="margin-top:22px">Your employee census' + ((d.forms || []).indexOf('hra') >= 0 ? ' and bank details' : '') + '</h2>';
-    out += '<p class="intro">ABY also needs a list of your employees and their covered dependents, in ABY\'s spreadsheet. Download it, fill it in, and send it back through the secure upload ABY provides. Please do not email it: it holds Social Security numbers and dates of birth.</p>';
-    out += '<div class="download">' + (d.forms || []).map(function (f) {
-      var file = f === 'cobra' ? 'ABY-COBRA-census-template.xlsx' : 'ABY-HRA-census-template.xlsx';
-      return '<a href="/assets/forms/' + file + '" download>Download the ' + (f === 'cobra' ? 'COBRA' : 'HRA') + ' census spreadsheet</a>';
-    }).join('') + '</div>';
+    var census = d.census || [];
+    var bank = (d.forms || []).some(function (f) { return A.FORMS[f] && A.FORMS[f].bank; });
+    if (census.length || bank) {
+      out += '<h2 style="margin-top:22px">' + (census.length ? 'Your employee census' + (bank ? ' and bank details' : '') : 'Your bank details') + '</h2>';
+      if (census.length) {
+        out += '<p class="intro">ABY also needs a list of your employees and their covered dependents, in ABY\'s spreadsheet. Download it, fill it in, and send it back through the secure upload ABY provides. Please do not email it: it holds Social Security numbers and dates of birth.</p>';
+        out += '<div class="download">' + census.map(function (c) {
+          return '<a href="/assets/forms/' + esc(c.file) + '" download>Download the ' + esc(c.label) + '</a>';
+        }).join('') + '</div>';
+      }
+      if (bank) out += '<p class="intro" style="margin-top:12px">Bank details for reimbursements or contributions also go through the secure upload, never by email.</p>';
+    }
 
     if (state.readonly) return out;
 
