@@ -234,7 +234,7 @@
     {
       id: 'company',
       title: 'About your company',
-      intro: 'These are asked once, however many services you are setting up.',
+      intro: '',
       questions: [
         { key: 'co.legalName', label: 'Legal name', type: 'text', forms: ALL, required: true,
           hint: 'As it appears on your tax returns and as it should appear on documents.',
@@ -270,7 +270,7 @@
     {
       id: 'contacts',
       title: 'Who ABY should work with',
-      intro: 'Also asked once. Leave a contact blank if it is the same person as the one above it.',
+      intro: 'Leave a contact blank if it is the same person as the one above it.',
       questions: []
         .concat(contact('contact.signer', 'Authorized signer', ALL))
         .concat(contact('contact.hr', 'HR / payroll / plan contact', ORG))
@@ -292,7 +292,7 @@
     {
       id: 'officers',
       title: 'Company officers and family members',
-      intro: 'Asked once. Plans treat owners and their families differently, so ABY needs to know who they are.',
+      intro: 'Plans treat owners and their families differently, so ABY needs to know who they are.',
       questions: [
         { key: 'plan.officers.president', label: 'President', type: 'text', forms: PLAN, half: true },
         { key: 'plan.officers.vp',        label: 'Vice president', type: 'text', forms: PLAN, half: true },
@@ -306,7 +306,7 @@
     {
       id: 'plan',
       title: 'How your plans work',
-      intro: 'Who can join your plans, and when. Asked once and used for every plan ABY is setting up for you.',
+      intro: 'Who can join your plans, and when.',
       questions: [
 
         { key: 'plan.eligible', label: 'Which employees are eligible?', type: 'multi', forms: ELIG,
@@ -332,7 +332,7 @@
     {
       id: 'caf',
       title: 'Your cafeteria (Section 125) plan',
-      intro: 'Asked once: your premium-only plan and your FSA are the same Section 125 plan.',
+      intro: '',
       questions: [
         { key: 'caf.planNumber', label: 'Plan number', type: 'text', forms: CAF, half: true, hint: 'Leave blank if you do not know it.' },
         { key: 'caf.originalEffective', label: 'Original effective date', type: 'date', forms: CAF, half: true },

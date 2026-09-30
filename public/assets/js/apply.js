@@ -164,7 +164,7 @@
     }
     var names = (d.forms || []).map(function (f) { return A.FORMS[f] ? A.FORMS[f].title : f; });
     if (names.length) out += '<div class="note info">Questions for: <strong>' + esc(joinNames(names)) + '</strong>.' +
-      (names.length > 1 ? ' Anything they have in common is asked only once.' : '') + '</div>';
+      '</div>';
     if (d.otherServices && d.otherServices.length) {
       out += '<div class="note info">ABY will follow up separately about: ' + esc(d.otherServices.join(', ')) + '.</div>';
     }
