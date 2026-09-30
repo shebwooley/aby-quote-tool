@@ -802,7 +802,12 @@ const RULES = [
           .map((m) => norm(m[1])));
       const pages = [...new Set(routes.map(norm))]
         .filter((r) => !r.startsWith("/admin/api") && !redirects.has(r));
-      const missing = pages.filter((p) => !nav.has(p));
+      // A DETAIL PAGE IS REACHED FROM A ROW, NOT FROM THE NAV (F-625, 09-29-2026). /admin/application
+      // shows ONE employer's setup answers and is useless without ?cid=, so it belongs on each
+      // Commitments row rather than in the menu. It counts as reachable only if some page in the
+      // worker actually LINKS to it with a parameter - a detail page nothing links to still fails.
+      const linkedWithParam = (r) => f.worker.indexOf('"' + r + '?') >= 0 || f.worker.indexOf("'" + r + '?') >= 0;
+      const missing = pages.filter((p) => !nav.has(p) && !linkedWithParam(p));
       if (missing.length) console.log("         unlinked: " + missing.join(", "));
       return missing.length === 0;
     },

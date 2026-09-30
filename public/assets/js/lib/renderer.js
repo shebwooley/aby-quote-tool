@@ -978,6 +978,8 @@ ABYQuote.renderer = (function () {
           // near-miss would have been a raw timestamp on a client document rather than an error.
           + (signed.submittedAt ? ', on ' + esc(u.formatDateLong(String(signed.submittedAt).slice(0, 10))) : '')
           + '.<div style="margin-top:8px;font-size:13px;color:#3d6b52;">This is a record of what was submitted. To change anything, contact your broker or ABY rather than signing again.</div>'
+          // F-625: where the employer carries on. Only on the served link, which knows its own path.
+          + (signed.applyPath ? '<div style="margin-top:12px;"><a href="' + esc(signed.applyPath) + '" style="display:inline-block;background:#143c73;color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600;">Continue to the setup questions</a></div>' : '')
           + '</div></div>'
         : '      <div class="ack-submit"><button type="submit" id="commitBtn">Submit Authorization to ABY</button><div class="submit-note">This is a non-binding letter of intent. ABY will follow up to confirm implementation details.</div><div id="commitMsg" style="margin-top:12px;font-size:13px;display:none;"></div></div>'),
       '    </form>',

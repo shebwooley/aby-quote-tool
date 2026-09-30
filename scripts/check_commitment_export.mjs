@@ -8,7 +8,11 @@ const end = src.indexOf("\nasync function handleDeleteCommitment");
 if (start < 0 || end < 0) { console.error("could not slice the handler"); process.exit(1); }
 
 const jsonResp = (o, s) => new Response(JSON.stringify(o), { status: s || 200 });
-const fn = new Function("jsonResp", src.slice(start, end) + "\nreturn handleCommitmentExport;")(jsonResp);
+// F-625: the export now also asks lib/application.js for the setup answers. Stubbed with a recorder,
+// so this checker can assert the export asks for THIS link and carries what comes back.
+let askedFor = null;
+const applicationForExport = async (env, token) => { askedFor = token; return token ? { status: "draft", answers: { "co.ein": "12-3456789" } } : null; };
+const fn = new Function("jsonResp", "applicationForExport", src.slice(start, end) + "\nreturn handleCommitmentExport;")(jsonResp, applicationForExport);
 
 const db = (row, throwOnJoin) => ({
   prepare(sql) {
@@ -44,6 +48,7 @@ console.log("COMMITMENT EXPORT (F-416 iii)\n");
 let res = await fn(req, "abc", { DB: db(NEW_ROW) });
 let doc = JSON.parse(await res.text());
 check("200 and a schema name", res.status === 200 && doc.schema === "aby.commitment/1", doc.schema);
+check("the setup answers ride along, fetched for this link (F-625)", askedFor === "tok_xyz" && doc.application && doc.application.answers["co.ein"] === "12-3456789", JSON.stringify(doc.application));
 check("the signed page's own fields survive",
   doc.authorized_signer.name === "JP Hasegawa" && doc.employer.name === "Employer Benefit Solutions",
   JSON.stringify(doc.authorized_signer));
@@ -92,7 +97,7 @@ const sab = (name, from, to) => {
   const mutated = src.slice(start, end).replace(from, to);
   if (mutated === src.slice(start, end)) { console.log("  FAIL " + name + "  <- the mutation did not land"); fails++; return; }
   console.log("  (mutation landed) " + name);
-  return new Function("jsonResp", mutated + "\nreturn handleCommitmentExport;")(jsonResp);
+  return new Function("jsonResp", "applicationForExport", mutated + "\nreturn handleCommitmentExport;")(jsonResp, applicationForExport);
 };
 
 let f = sab("null-ing blanks removed", "return t === '' ? null : t;", "return t;");

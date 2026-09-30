@@ -70,6 +70,11 @@ const BROKER_SELF_SIGNUP = false;
 // versions of the same explanation have diverged every time this project has tried it.
 // The generated file is JSON-escaped, so it contains no backtick and cannot end a page literal.
 import { ADMIN_GUIDE_HTML } from './docs/admin-guide.generated.js';
+// The employer application after the authorization (F-625). Its own file on purpose - see its header.
+import {
+  APPLICATION_MIGRATIONS, handleGetApplication, handleSaveApplication, handleSubmitApplication,
+  handleAdminGetApplication, handleAdminReopenApplication, applicationForExport, sendApplicationEmail,
+} from './lib/application.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -244,6 +249,31 @@ export default {
     // The SHARED QUOTE LINK (F-368). Public and unauthenticated by design -- an employer has no
     // account and must not need one to read a quote addressed to them. The token is the whole
     // credential, which is why it is 128 bits of randomness rather than the quote number.
+    // THE SETUP QUESTIONS AFTER A SIGNED AUTHORIZATION (F-625). Public for the same reason the
+    // quote page is: the employer has no account. The token is the credential; the handlers refuse
+    // a link nobody has signed yet. Answers only - no census or bank details ever pass through here.
+    if (/^\/q\/[a-z2-9]{16}\/apply$/.test(path) && method === 'GET') {
+      return serveApplyPage(request, env);
+    }
+    if (/^\/api\/q\/[a-z2-9]{16}\/application$/.test(path) && method === 'GET') {
+      return handleGetApplication(path.split('/')[3], env);
+    }
+    if (/^\/api\/q\/[a-z2-9]{16}\/application$/.test(path) && method === 'POST') {
+      return handleSaveApplication(path.split('/')[3], request, env);
+    }
+    if (/^\/api\/q\/[a-z2-9]{16}\/application\/submit$/.test(path) && method === 'POST') {
+      return handleSubmitApplication(path.split('/')[3], request, env, ctx,
+        (info) => sendApplicationEmail(env, info));
+    }
+    if (path === '/admin/application' && method === 'GET') {
+      return withAuth(request, env, () => serveApplyPage(request, env));
+    }
+    if (path === '/api/admin/application' && method === 'GET') {
+      return withAuth(request, env, () => handleAdminGetApplication(url, env));
+    }
+    if (path === '/api/admin/application/reopen' && method === 'POST') {
+      return withAuth(request, env, () => handleAdminReopenApplication(request, env));
+    }
     if (/^\/q\/[a-z2-9]{16}\/count$/.test(path) && method === 'POST') {
       return handleEmployerCount(path.split('/')[2], request, env);
     }
@@ -1693,6 +1723,15 @@ async function handleEmployerCount(token, request, env) {
   return jsonResp({ ok: true, recorded: true });
 }
 
+// The application page is a static file (public/apply.html); its script reads the token from the
+// address. Fetched as /apply because the asset router redirects a .html name to its bare path.
+async function serveApplyPage(request, env) {
+  if (!env.ASSETS) return new Response('Not available here', { status: 503 });
+  const res = await env.ASSETS.fetch(new Request(new URL('/apply', request.url), request));
+  return new Response(res.body, { status: res.status,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' } });
+}
+
 async function serveSharedQuote(token, env, request) {
   const url = new URL(request.url);
   let q;
@@ -1849,6 +1888,8 @@ async function serveSharedQuote(token, env, request) {
         acceptedPrint: sig.accepted_print  || '',
         acceptedSign:  sig.accepted_sign   || '',
         submittedAt:   sig.submitted_at    || '',
+        // F-625: where the employer continues. Same token, so it needs no lookup of its own.
+        applyPath:     '/q/' + token + '/apply',
       };
     }
   } catch (err) {
@@ -2193,6 +2234,7 @@ async function handleSaveCommitment(request, env, ctx) {
     // document carries only the number, and it should still link where it can.
     // ⚠️ A token is MINTED only if the quote has none; an existing one is never replaced, or
     // every link already sent to a client would die the moment somebody signed.
+    let linkedToken = null;   // F-625: the apply link is only offered when a quote link exists
     try {
       // F-480. The three lookups now also fetch what decides whether a LINK is safe to hand out.
       // Adding the columns is the whole change on this side; the decision is the shared predicate.
@@ -2239,6 +2281,7 @@ async function handleSaveCommitment(request, env, ctx) {
         await env.DB.prepare(
           'UPDATE commitments SET quote_id = ?, share_token = ? WHERE id = ?'
         ).bind(qRow.id, token, id).run();
+        linkedToken = token;
       }
     } catch (err) {
       // The signature is already recorded. A missing link is a worse commitment, not a lost one.
@@ -2267,7 +2310,10 @@ async function handleSaveCommitment(request, env, ctx) {
       console.error('commitment: could not send email:', err);
     }
 
-  return jsonResp({ id, quoteNumber, submitted_at: now });
+  // F-625. An absolute address, because the signing page may be a DOWNLOADED file with no origin
+  // of its own. Absent when the link was withheld (F-480) - then ABY follows up by hand as before.
+  const applyUrl = linkedToken ? new URL(request.url).origin + '/q/' + linkedToken + '/apply' : null;
+  return jsonResp({ id, quoteNumber, submitted_at: now, applyUrl });
 }
 
 async function handleListCommitments(request, env) {
@@ -2289,10 +2335,25 @@ async function handleListCommitments(request, env) {
     '  FROM commitments c ' +
     '  LEFT JOIN quotes q ON q.quote_number = c.quote_number ' +
     ' ORDER BY c.submitted_at DESC LIMIT 200';
+  // F-625: the setup questions' status per signed link. Asked separately so a database without the
+  // applications table still lists every commitment - the join above already has a fallback of its own.
+  async function withApplications(rows) {
+    try {
+      const a = await env.DB.prepare('SELECT share_token, status, updated_at, submitted_at FROM applications').all();
+      const by = {};
+      (a.results || []).forEach(function (r) { by[r.share_token] = r; });
+      rows.forEach(function (c) {
+        const r = c.share_token ? by[c.share_token] : null;
+        c.app_status = r ? r.status : null;
+        c.app_updated_at = r ? (r.submitted_at || r.updated_at) : null;
+      });
+    } catch (e) { /* no applications table yet */ }
+    return rows;
+  }
 
   try {
     const result = await env.DB.prepare(withJoin).all();
-    return jsonResp({ commitments: result.results || [] });
+    return jsonResp({ commitments: await withApplications(result.results || []) });
   } catch (err) {
     // A pre-migration database has no `commitments.client_id` / `broker_email`, so the query
     // above throws. Fall back to the plain list rather than failing the screen: an admin who
@@ -2418,6 +2479,9 @@ async function handleCommitmentExport(request, id, env) {
         name: val(row.quote_broker_name),
         agency: val(row.quote_broker_agency),
       },
+      // F-625. The setup questions the employer answered after signing, keyed for a program and
+      // labeled for a person. Null when nobody has started them.
+      application: await applicationForExport(env, token),
     };
 
     const filename = 'Commitment-' + (val(row.quote_number) || 'unknown') + '.json';
@@ -17047,6 +17111,8 @@ const MIGRATIONS = [
   // resolve anything. Point one join at it and MMA - DFW quotes go quiet with nothing turning red,
   // which is the exact silent miscount TRAPS #259 already records.
   { sql: "ALTER TABLE agencies ADD COLUMN quoting_name TEXT", table: "agencies", column: "quoting_name" },
+  // The employer application (F-625). Defined beside its handlers in lib/application.js.
+  ...APPLICATION_MIGRATIONS,
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column
@@ -19664,6 +19730,15 @@ async function loadCommitments() {
       // job. Blank says what it should say, which is nothing.
       // ⛔ Concatenation, never a template literal - this function lives inside the page's own
       // template string and a backtick here ends it (see the file header).
+      // F-625. The setup questions the employer answers after signing. Silent when not started,
+      // for the same reason as the notify line below: a label on every row is noise.
+      var appCell = function(row) {
+        if (!row.app_status) return '';
+        var done = row.app_status === 'submitted';
+        return '<br><a href="/admin/application?cid=' + encodeURIComponent(row.id) + '" target="_blank" style="font-size:12px;'
+          + (done ? 'color:#1a5c3a;font-weight:600' : 'color:#8a4b00') + '">'
+          + (done ? '&#10003; Setup questions submitted' : 'Setup questions in progress') + '</a>';
+      };
       var notifyCell = function(row) {
         if (row.notified_at) {
           return '<br><span style="color:#1a5c3a;font-size:12px" title="ABY was emailed at '
@@ -19686,7 +19761,7 @@ async function loadCommitments() {
         // the company name, that's weird." It is on the signed document and in the JSON export,
         // which is where an address is actually used; on a list of who has signed it is noise
         // under every row. Nothing is lost - the row still opens to the full record.
-        td(c.employer_name || '') +
+        td((c.employer_name || '') + appCell(c)) +
         // Broker. Named on the row itself for anything signed after the migration; recovered
         // through the quote only for older rows, which is why the agency line is muted and
         // why an unknown broker prints an em dash rather than being left blank.
