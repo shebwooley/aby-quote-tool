@@ -481,10 +481,41 @@ ABYQuote.engine = (function () {
     return (a >= 0 ? '+' + a + '%' : a + '%') + ' on ' + scope;
   }
 
+  // ONE SETUP FEE ON A BUNDLE (Eric and Niels, 10-01-2026). For agencies ABY chooses, a quote with
+  // several ADMINISTRATION services charges one setup fee and waives the rest. Eric: "I'm talking
+  // about HRA, FSA, HSA, COBRA, and continuation setup fees. Not things like ERISA fees or document
+  // only fees" - and ICHRA/QSEHRA and Medicare HRA full administration are in too ("Yes let's put
+  // them in there as well"). POP, ERISA, Form 5500 and every documents-only package are never touched.
+  // The HIGHEST eligible fee is the one kept (they are all the same today; if that changes, the
+  // employer is never charged less than the largest single setup).
+  var BUNDLE_SETUP = { hra: true, fsa: true, hsa: true, cobra: true, stateContinuation: true };
+  var BUNDLE_SETUP_IF_FULL_ADMIN = { ichra: true, mpra: true };
+  function inSetupBundle(r) {
+    if (!r || !r.setupFee || typeof r.setupFee.amount !== 'number' || r.setupFee.amount <= 0) return false;
+    if (BUNDLE_SETUP[r.productId]) return true;
+    return !!BUNDLE_SETUP_IF_FULL_ADMIN[r.productId] && r.packageId === 'fullAdmin';
+  }
+  function bundleSetupFees(results) {
+    var keep = -1;
+    results.forEach(function (r, i) {
+      if (inSetupBundle(r) && (keep < 0 || r.setupFee.amount > results[keep].setupFee.amount)) keep = i;
+    });
+    if (keep < 0) return results;
+    return results.map(function (r, i) {
+      if (i === keep || !inSetupBundle(r)) return r;
+      var copy = JSON.parse(JSON.stringify(r));
+      copy.setupFee.waivedAmount = copy.setupFee.amount;
+      copy.setupFee.amount = 0;
+      copy.setupFee.waived = true;
+      return copy;
+    });
+  }
+
   return {
     calculateProduct: calculateProduct,
     calculateAll: calculateAll,
     applyAdjustment: applyAdjustment,
-    describeAdjustment: describeAdjustment
+    describeAdjustment: describeAdjustment,
+    bundleSetupFees: bundleSetupFees
   };
 })();

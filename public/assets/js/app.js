@@ -1499,7 +1499,66 @@
       // The logo travels as a data URL the renderer already knows how to draw. Same rule: the
       // dashboard's logo, if one came over, wins.
       if (b.logoDataUrl && !carriedBrokerLogoUrl) accountLogoDataUrl = b.logoDataUrl;
+      applyAgencyDefaults(d.agencyDefaults, b.agency);
     }).catch(function () { /* no account, or offline -- the form is unaffected */ });
+  }
+
+  // --- The agency's quote defaults (F-631, Eric and Niels, 10-01-2026) ---------------------------
+  //
+  // ABY sets these per agency on the broker-invite screen (lib/agency-defaults.js):
+  //   rep         pre-selected and LOCKED - Eric: "lock the rep".
+  //   commission  pre-set, and the broker may still change it - "let them change commission". A quote
+  //               re-opened from a link keeps the commission it was saved with.
+  //   oneSetupFee one administration setup fee per quote (engine.bundleSetupFees).
+  // ⛔ Never on ABY's own /aby page (ABY prices those by hand) and never on a shared employer link,
+  // which renders the prices that were saved.
+  var restoredFromLink = false;
+  var bundlePatched = false;
+  function applyAgencyDefaults(ad, agencyName) {
+    if (!ad || window.ABY_INTERNAL || window.__ABY_SHARED) return;
+
+    if (ad.rep && repSelectorEl) {
+      var lockedTo = null;
+      repSelectorEl.querySelectorAll('.rep-card').forEach(function (card) {
+        var radio = card.querySelector('input[type="radio"]');
+        if (card.dataset.repId === ad.rep) {
+          lockedTo = card;
+          if (radio && !radio.checked) { radio.checked = true; radio.dispatchEvent(new Event('change')); }
+        } else {
+          card.style.display = 'none';
+          if (radio) radio.disabled = true;
+        }
+      });
+      if (lockedTo) {
+        ['repName', 'repPhone', 'repEmail'].forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el) el.readOnly = true;
+        });
+        if (!document.getElementById('abyRepLockNote')) {
+          var note = document.createElement('p');
+          note.id = 'abyRepLockNote';
+          note.style.cssText = 'font-size:12px;color:#5b6b7f;margin:6px 0 0';
+          note.textContent = 'Your ABY sales rep' + (agencyName ? ' for ' + agencyName : '') + '.';
+          repSelectorEl.parentNode.insertBefore(note, repSelectorEl.nextSibling);
+        }
+      }
+    }
+
+    if ((ad.commission === true || ad.commission === false) && !restoredFromLink) {
+      var cb = document.getElementById('commissionIncluded');
+      if (cb && cb.checked !== ad.commission) {
+        cb.checked = ad.commission;
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
+
+    if (ad.oneSetupFee && !bundlePatched && ABYQuote.engine.bundleSetupFees) {
+      bundlePatched = true;
+      var calc = ABYQuote.engine.calculateAll;
+      ABYQuote.engine.calculateAll = function () {
+        return ABYQuote.engine.bundleSetupFees(calc.apply(this, arguments));
+      };
+    }
   }
 
   // --- The employer's own headcount, at the signature line (F-367) -------------
@@ -1674,6 +1733,7 @@
       try { state = JSON.parse(decodeURIComponent(rerunParam)); } catch (e) { return; }
     }
     if (!state) return;
+    restoredFromLink = true;   // F-631: an agency's commission default never overrides a saved quote
 
     // Carry the ORIGINAL quote number so re-opening a saved quote keeps its identity.
     // ⚠️ It keeps its original creation DATE too, deliberately: the date is embedded in

@@ -75,6 +75,10 @@ import {
   APPLICATION_MIGRATIONS, handleGetApplication, handleSaveApplication, handleSubmitApplication,
   handleAdminGetApplication, handleAdminReopenApplication, applicationForExport, sendApplicationEmail,
 } from './lib/application.js';
+// F-631: per-agency quote defaults (sales rep, commission, one setup fee). Its own file, like the above.
+import {
+  AGENCY_DEFAULT_MIGRATIONS, agencyDefaultsFor, handleGetAgencyDefaults, handleSaveAgencyDefaults,
+} from './lib/agency-defaults.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -135,6 +139,8 @@ export default {
     // ABY invites a broker into a firm that already exists (F-6). Behind withAuth: deciding who may
     // quote through ABY's tool is ABY's, and this is the route that makes the login gate mean anything.
     if (path === '/api/admin/brokers/invite' && method === 'POST') return withAuth(request, env, () => handleAdminInviteBroker(request, env));
+    if (path === '/api/admin/agency-defaults' && method === 'GET')  return withAuth(request, env, () => handleGetAgencyDefaults(url, env));
+    if (path === '/api/admin/agency-defaults' && method === 'POST') return withAuth(request, env, () => handleSaveAgencyDefaults(request, env));
     if (path === '/api/admin/assign'  && method === 'POST') return withAuth(request, env, () => handleAdminAssign(request, env));
     if (path === '/api/admin/stats'   && method === 'GET')  return withAuth(request, env, () => handleAdminStats(request, env));
     // The CRM (F-383). Every one is behind withAuth: these are ABY's own notes about who they
@@ -7547,6 +7553,22 @@ ${abyAdminNav('/admin/brokers')}
            style="width:340px;padding:7px 9px;border:1px solid #cfd8e3;border-radius:6px">
     <div id="ivHits" style="margin:8px 0"></div>
     <p id="ivChosen" class="muted" style="font-size:13px;margin:6px 0"></p>
+    <!-- F-631 (Eric and Niels, 10-01-2026): how this AGENCY's brokers quote. Stored on the firm, so it
+         covers everyone ABY invites into it and anyone their administrator adds; change it any time by
+         picking the firm again. Shown once a firm is picked. -->
+    <div id="adBox" style="display:none;margin:8px 0 12px;padding:10px 12px;border:1px solid #cfd8e3;border-radius:8px;background:#f7f9fc">
+      <div style="font-size:13px;font-weight:bold;color:#143c73;margin-bottom:6px">Quote defaults for this agency</div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;font-size:13px">
+        <label>Sales rep (locked on their quotes)<br><select id="adRep" style="padding:5px">
+          <option value="">No default</option><option value="eric">Eric Johnson</option><option value="niels">Niels Christiansen</option></select></label>
+        <label>Commission (they can change it)<br><select id="adComm" style="padding:5px">
+          <option value="">No default</option><option value="on">On</option><option value="off">Off</option></select></label>
+        <label style="display:flex;gap:6px;align-items:center;padding-bottom:6px"><input type="checkbox" id="adOne">
+          One setup fee when several are quoted together (HRA, FSA, HSA, COBRA, state continuation, ICHRA/QSEHRA, Medicare HRA)</label>
+        <button type="button" id="adSave">Save defaults</button>
+      </div>
+      <p id="adMsg" class="muted" style="font-size:12px;margin:6px 0 0"></p>
+    </div>
     <textarea id="ivBox" rows="4" placeholder="One per line: Jane Smith, jane@firm.com&#10;An email on its own is fine."
               style="width:100%;padding:8px 9px;border:1px solid #cfd8e3;border-radius:6px;font:14px inherit"></textarea>
 
@@ -7838,6 +7860,35 @@ ${abyAdminNav('/admin/brokers')}
  // The firm is CHOSEN from the CRM's own suggester rather than typed, because the whole point is
  // attaching the person to a firm that already exists. No id, no send.
  var ivAgencyId='';
+ // F-631: read and save the picked agency's quote defaults.
+ function adLoad(id){
+   var box=document.getElementById('adBox'), msg=document.getElementById('adMsg'); if(!box) return;
+   box.style.display='block'; msg.textContent='Loading...';
+   fetch('/api/admin/agency-defaults?id='+encodeURIComponent(id)).then(function(r){return r.json()}).then(function(d){
+     if(!d||!d.ok){ msg.textContent=(d&&d.error)||'Could not load the defaults.'; return; }
+     var x=d.defaults||{};
+     document.getElementById('adRep').value=x.rep||'';
+     document.getElementById('adComm').value=x.commission===true?'on':x.commission===false?'off':'';
+     document.getElementById('adOne').checked=!!x.oneSetupFee;
+     msg.textContent='';
+   }).catch(function(){ msg.textContent='Could not load the defaults.'; });
+ }
+ (function(){
+   var b=document.getElementById('adSave'); if(!b) return;
+   b.onclick=function(){
+     var msg=document.getElementById('adMsg');
+     if(!ivAgencyId){ msg.textContent='Pick the firm first.'; return; }
+     var c=document.getElementById('adComm').value;
+     b.disabled=true; msg.textContent='Saving...';
+     fetch('/api/admin/agency-defaults',{method:'POST',headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({id:ivAgencyId,rep:document.getElementById('adRep').value||null,
+         commission:c==='on'?true:c==='off'?false:null,oneSetupFee:document.getElementById('adOne').checked})})
+       .then(function(r){return r.json()}).then(function(d){
+         b.disabled=false;
+         msg.textContent=(d&&d.ok)?('Saved for '+d.agency+'. Their brokers see it the next time they open the quote page.'):((d&&d.error)||'Not saved.');
+       }).catch(function(){ b.disabled=false; msg.textContent='Not saved - check your connection.'; });
+   };
+ })();
  (function(){
    var box=document.getElementById('ivFirm'); if(!box) return;
    var hits=document.getElementById('ivHits'), chosen=document.getElementById('ivChosen'), t=null;
@@ -7845,6 +7896,7 @@ ${abyAdminNav('/admin/brokers')}
      // Typing again CLEARS the choice. Without this, editing the name after picking leaves the old id
      // attached and the invitation quietly goes to the firm you just stopped naming.
      ivAgencyId=''; chosen.textContent='';
+     var adb=document.getElementById('adBox'); if(adb) adb.style.display='none';
      var q=box.value.trim();
      if(t) clearTimeout(t);
      if(q.length<2){ hits.innerHTML=''; return; }
@@ -7863,6 +7915,7 @@ ${abyAdminNav('/admin/brokers')}
                box.value=b.getAttribute('data-name');
                chosen.textContent='Inviting into: '+b.getAttribute('data-name');
                hits.innerHTML='';
+               adLoad(ivAgencyId);
              };
            });
          }).catch(function(){ hits.innerHTML=''; });
@@ -12854,7 +12907,10 @@ function handleBrokerLogout() {
 
 async function handleBrokerMe(request, env) {
   const b = await currentBroker(request, env);
-  return jsonResp({ broker: brokerPublic(b) });
+  // F-631: the firm's quote defaults ride along, so the quote page needs no second request. Null when
+  // the broker has no agency, none were set, or /api/migrate has not run yet.
+  const agencyDefaults = b ? await agencyDefaultsFor(env, b.agency_id) : null;
+  return jsonResp({ broker: brokerPublic(b), agencyDefaults });
 }
 
 /** Save the details that then carry into every quote. This IS the feature Eric asked for. */
@@ -17157,6 +17213,8 @@ const MIGRATIONS = [
   { sql: "ALTER TABLE commitments ADD COLUMN signature_image TEXT", table: "commitments", column: "signature_image" },
   // The employer application (F-625). Defined beside its handlers in lib/application.js.
   ...APPLICATION_MIGRATIONS,
+  // F-631: the agency's quote defaults. Defined beside their handlers in lib/agency-defaults.js.
+  ...AGENCY_DEFAULT_MIGRATIONS,
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column

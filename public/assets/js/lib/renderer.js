@@ -237,6 +237,9 @@ ABYQuote.renderer = (function () {
       cards.push({ label: 'Annual Fee (setup / renewal)', price: u.money(renewAmt), note: 'Same amount each year: covers plan setup and every annual renewal.' });
     } else {
       if (setupAmt != null && setupAmt > 0) cards.push({ label: result.setupFee.label || 'Setup fee', price: u.money(setupAmt), note: 'One-time setup.' });
+      // Waived because one setup fee covers the bundle (engine.bundleSetupFees, 10-01-2026): SAID,
+      // rather than the line silently disappearing and reading like a product with no setup at all.
+      else if (result.setupFee && result.setupFee.waived) cards.push({ label: result.setupFee.label || 'Setup fee', price: 'Waived', note: 'One setup fee covers the services quoted together.' });
       if (renewAmt != null && renewAmt > 0) cards.push({ label: result.renewalFee.label || 'Annual renewal', price: u.money(renewAmt), note: 'Per year.' });
     }
     if (result.docsFee) cards.push({ label: result.docsFee.label || 'Documents', price: u.money(result.docsFee.amount), note: 'One-time.' });
@@ -434,7 +437,7 @@ ABYQuote.renderer = (function () {
       // told an employer it was a one-time charge that never renews. Nothing showed it while POP
       // was a dropdown; it appears the moment two options with different fee shapes sit together.
       // ⛔ Measured on the rendered page before this was written, not reasoned about.
-      var setup = r.setupFee ? u.money(r.setupFee.amount) : '—';
+      var setup = r.setupFee ? (r.setupFee.waived ? 'Waived' : u.money(r.setupFee.amount)) : '—';
       var renew = (r.renewalFee != null) ? u.money(r.renewalFee.amount)
                 : (r.annualFee != null) ? u.money(r.annualFee.amount)
                 : 'n/a';
@@ -769,7 +772,7 @@ ABYQuote.renderer = (function () {
     // count it assumed -- price, then workings.
     function feeSummary(r, meta) {
       var parts = [];
-      if (r.setupFee) parts.push('Setup ' + u.money(r.setupFee.amount));
+      if (r.setupFee) parts.push('Setup ' + (r.setupFee.waived ? 'waived' : u.money(r.setupFee.amount)));
       if (r.docsFee) parts.push('Documents ' + u.money(r.docsFee.amount));
       if (r.renewalFee != null) parts.push('Renewal ' + u.money(r.renewalFee.amount) + '/yr');
       if (r.annualFee != null) parts.push(u.money(r.annualFee.amount) + '/yr');
