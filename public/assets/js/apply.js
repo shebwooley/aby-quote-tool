@@ -246,6 +246,12 @@
           return '<label><input type="checkbox" data-multi="' + esc(q.key) + '" value="' + esc(o) + '"' + (on ? ' checked' : '') + dis + '> ' + esc(o) + '</label>';
         }).join('') + '</div>';
         break;
+      case 'check':
+        // One box to tick (10-01-2026: "same as the HR contact"). Ticked is true; unticked is false.
+        lbl = '';
+        input = '<div class="opts"><label><input type="checkbox" data-check="' + esc(q.key) + '"' + (v === true ? ' checked' : '') + dis + '> ' +
+          esc(q.label) + tag + '</label></div>';
+        break;
       case 'state':
         input = '<select' + attr + dis + '><option value="">Choose a state</option>' + A.STATES.map(function (s) {
           return '<option' + (v === s ? ' selected' : '') + '>' + s + '</option>';
@@ -346,6 +352,9 @@
         else val = inp.value;
         set(k, val, inp.type === 'radio' || inp.tagName === 'SELECT');
       });
+    });
+    app.querySelectorAll('input[data-check]').forEach(function (inp) {
+      inp.addEventListener('change', function () { set(inp.getAttribute('data-check'), inp.checked, true); });
     });
     app.querySelectorAll('input[data-multi]').forEach(function (inp) {
       inp.addEventListener('change', function () {

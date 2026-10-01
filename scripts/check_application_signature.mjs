@@ -104,4 +104,21 @@ console.log('APPLICATION SIGNATURE AND THE ANYTHING-ELSE BOX (10-01-2026)\n');
 }
 
 console.log(fails ? '\n' + fails + ' failed' : '\nall green');
-process.exit(fails ? 1 : 0);
+if (fails) process.exit(1);
+
+// ── Niels' call, second round (10-01-2026) ────────────────────────────────────────────────────
+{
+  const { createRequire } = await import('node:module');
+  const Q = createRequire(import.meta.url)('../public/assets/js/data/application-questions.js');
+  const keys = Q.allKeys();
+  let f2 = 0;
+  const c2 = (name, cond, detail) => { console.log((cond ? '  ok   ' : '  FAIL ') + name + (cond ? '' : '  <- ' + detail)); if (!cond) f2++; };
+  console.log('\nNIELS, ROUND TWO (10-01-2026)\n');
+  c2('the minimum-reimbursement question is gone from every form', !keys.some((k) => /minReimb/.test(k)), keys.filter((k) => /minReimb/.test(k)).join());
+  const billing = (a) => Q.visible(['cobra'], a).find((s) => s.section.id === 'contacts').questions.map((q) => q.key).filter((k) => /^contact\.billing\./.test(k));
+  c2('billing questions show when the box is not ticked', billing({}).length === 4, billing({}).join());
+  c2('ticking "same as HR" hides the billing questions', billing({ 'contact.billingSameAsHr': true }).length === 0, billing({ 'contact.billingSameAsHr': true }).join());
+  const opt = Q.SECTIONS.find((s) => s.id === 'contacts').questions.filter((q) => /^contact\.other\./.test(q.key));
+  c2('the additional contact is optional and says so', opt.length === 4 && opt.every((q) => q.optional) && /optional/i.test(opt[0].label), JSON.stringify(opt.map((q) => [q.key, !!q.optional])));
+  if (f2) process.exit(1);
+}

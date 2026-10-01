@@ -33,7 +33,7 @@ FORMS = {k: v['title'] for k, v in data['forms'].items()}
 VALUE = {
     'text': 'text', 'textarea': 'text (up to 2,000 characters)', 'email': 'text (an email address)',
     'tel': 'text (a phone number)', 'state': 'text: two-letter state code, e.g. "TX"',
-    'yesno': 'true or false', 'choice': 'text: exactly one of the choices listed',
+    'yesno': 'true or false', 'check': 'true when ticked, false when unticked; absent if never touched', 'choice': 'text: exactly one of the choices listed',
     'multi': 'list of text: any of the choices listed', 'list': 'list of text',
     # The four below are typed freely; the page suggests the format but does not enforce it, so the
     # list must not promise one (a date box, by contrast, always yields YYYY-MM-DD).
@@ -57,6 +57,9 @@ def cond_text(c):
     if 'equals' in c:
         v = c['equals']
         return who + ' is ' + ('Yes' if v is True else 'No' if v is False else '"' + str(v) + '"')
+    if 'notEquals' in c:
+        v = c['notEquals']
+        return who + ' is not ' + ('ticked' if v is True else '"' + str(v) + '"')
     if 'includes' in c:
         return who + ' includes "' + c['includes'] + '"'
     if 'includesAny' in c:
@@ -108,6 +111,10 @@ readme = [
      'The wording of a question may be improved without changing its name.'],
     ['Not in the JSON, on purpose', 'Social Security numbers, dates of birth and bank account details. Those go '
      'through a secure upload, never the web form or the export.'],
+    ['Billing contact', 'For COBRA and HSA, the employer can tick "same as the HR / payroll contact" '
+     '(contact.billingSameAsHr = true). Then the billing questions are not asked: use contact.hr.* as the billing contact.'],
+    ['Retired fields', 'hra.minReimb, hra.minReimbOther, mhra.minReimb, mhra.minReimbOther, fsa.minReimb and '
+     'fsa.minReimbOther (minimum reimbursement) were removed on 10-01-2026 and will not appear.'],
     ['Signatures', 'Both signatures are a picture (a PNG data URL, "data:image/png;base64,..."): '
      'acceptance.signature_image on the authorization, application.signature_image on the setup questions.'],
     ['Count', str(sum(len(s['questions']) for s in data['sections'])) + ' setup-question fields in '

@@ -114,13 +114,17 @@
   var ELIG = ['hra', 'mhra', 'pop', 'fsa', 'erisa'];      // eligibility, exclusions, waiting period
   var CAF = ['pop', 'fsa'];
 
-  function contact(prefix, who, forms) {
+  // `more` is merged into all four questions (a `show` condition, `optional: true`).
+  function contact(prefix, who, forms, more) {
     return [
       { key: prefix + '.name',  label: who + ' - name',  type: 'text',  forms: forms },
       { key: prefix + '.title', label: 'Title',          type: 'text',  forms: forms, half: true },
       { key: prefix + '.email', label: 'Email',          type: 'email', forms: forms, half: true },
       { key: prefix + '.phone', label: 'Phone',          type: 'tel',   forms: forms, half: true }
-    ];
+    ].map(function (q) {
+      Object.keys(more || {}).forEach(function (k) { q[k] = more[k]; });
+      return q;
+    });
   }
 
   // One COBRA benefit block (the form has room for 4 medical, dental, vision and 2 additional).
@@ -158,6 +162,8 @@
   // THE HRA AND THE MEDICARE HRA ARE ONE FORM WITH DIFFERENCES (read side by side, 09-30-2026): the
   // Medicare kit drops the "which kind of HRA" section, covers Medicare premiums, offers only the
   // employee and employee + spouse tiers, adds a $5 minimum and asks about a debit card.
+  // (The minimum-reimbursement question itself was removed from every form on 10-01-2026 - Niels was
+  // fine without it. Its keys, *.minReimb and *.minReimbOther, are retired: never reuse them.)
   function hraQuestions(p, form, medicare) {
     var F = [form];
     var capBy = { key: p + '.capType', equals: 'By coverage level' };
@@ -211,8 +217,6 @@
       { key: p + '.runout', label: 'Run-out period', type: 'choice', forms: F, options: ['60 days', '90 days', 'Other'],
         hint: 'How long after the plan year ends employees can still submit claims from that year.' },
       { key: p + '.runoutOther', label: 'Run-out period (days)', type: 'number', forms: F, show: { key: p + '.runout', equals: 'Other' } },
-      { key: p + '.minReimb', label: 'Minimum reimbursement amount', type: 'choice', forms: F, options: medicare ? ['$5', '$10', 'Other'] : ['$10', 'Other'] },
-      { key: p + '.minReimbOther', label: 'Minimum amount', type: 'money', forms: F, show: { key: p + '.minReimb', equals: 'Other' } },
       { key: p + '.fromEmployerAccount', label: 'Should ABY issue reimbursements (checks or direct deposit) from your company account?', type: 'yesno', forms: F,
         hint: 'If yes, ABY needs your bank details and a signature for printing checks. Those go through the secure upload, never on this page. There is an additional charge of $5 per check printed.' },
       { key: p + '.checksTo', label: 'Checks should be', type: 'choice', forms: F, options: ['Sent to the employee', 'Sent to the employer for signature'],
@@ -275,13 +279,19 @@
     {
       id: 'contacts',
       title: 'Who ABY should work with',
-      intro: 'Leave a contact blank if it is the same person as the one above it.',
+      intro: 'Leave a contact blank if it is the same person as the one above it. The additional contact is optional.',
       questions: []
         .concat(contact('contact.signer', 'Authorized signer', ALL))
         .concat(contact('contact.hr', 'HR / payroll / plan contact', ORG))
-        .concat(contact('contact.billing', 'Billing / accounts payable contact', ['cobra', 'hsa']))
-        .concat(contact('contact.other', 'Additional contact', ['cobra', 'hsa']))
-        .concat(contact('contact.legal', 'Legal representative (if any)', ['erisa']))
+        // Niels, 10-01-2026: billing is often the HR contact, so one tick saves typing them twice.
+        // Ticked, the billing questions disappear and ABY uses the HR contact's details.
+        .concat([{ key: 'contact.billingSameAsHr', label: 'The billing contact is the same as the HR / payroll contact', type: 'check',
+          forms: ['cobra', 'hsa'], optional: true, head: true }])
+        .concat(contact('contact.billing', 'Billing / accounts payable contact', ['cobra', 'hsa'],
+          { show: { key: 'contact.billingSameAsHr', notEquals: true } }))
+        // Eric, 10-01-2026: make it clear the third contact is optional.
+        .concat(contact('contact.other', 'Additional contact (optional)', ['cobra', 'hsa'], { optional: true }))
+        .concat(contact('contact.legal', 'Legal representative (if any)', ['erisa'], { optional: true }))
         .concat([
         { key: 'plan.broker.office',  label: "Broker's office", type: 'text',  forms: PLAN, half: true, head: true },
         { key: 'plan.broker.contact', label: 'Broker contact',  type: 'text',  forms: PLAN, half: true },
@@ -443,9 +453,7 @@
           options: ['0 days', '30 days', '60 days'], show: fsaLine('Dependent care FSA') },
         { key: 'fsa.runDcTerm', label: 'Dependent care FSA run-out period after someone leaves', type: 'choice', forms: ['fsa'], half: true,
           options: ['0 days', '30 days', '60 days'], show: fsaLine('Dependent care FSA') },
-        { key: 'fsa.minReimb', label: 'Minimum reimbursement amount', type: 'choice', forms: ['fsa'], options: ['$5', '$10', 'Other'], head: true },
-        { key: 'fsa.minReimbOther', label: 'Minimum amount', type: 'money', forms: ['fsa'], show: { key: 'fsa.minReimb', equals: 'Other' } },
-        { key: 'fsa.abyIssues', label: 'Should ABY issue employee reimbursements?', type: 'yesno', forms: ['fsa'] },
+        { key: 'fsa.abyIssues', label: 'Should ABY issue employee reimbursements?', type: 'yesno', forms: ['fsa'], head: true },
         { key: 'fsa.issueHow', label: 'How?', type: 'multi', forms: ['fsa'], options: ['By check', 'By direct deposit'],
           show: { key: 'fsa.abyIssues', equals: true },
           hint: 'Checks cost an additional $5 each. ABY will need your bank details and a signature for printing checks, sent through the secure upload.' },
@@ -661,6 +669,8 @@
       if (cond.all) return cond.all.every(function (c) { return holds(c, answers); });
       var v = answers[cond.key];
       if ('equals' in cond) return v === cond.equals;
+      // The one condition an unanswered question DOES satisfy: "not ticked" includes "never touched".
+      if ('notEquals' in cond) return v !== cond.notEquals;
       if (cond.includes) return Array.isArray(v) && v.indexOf(cond.includes) >= 0;
       if (cond.includesAny) return Array.isArray(v) && cond.includesAny.some(function (x) { return v.indexOf(x) >= 0; });
       if (cond.oneOf) return cond.oneOf.indexOf(v) >= 0;
