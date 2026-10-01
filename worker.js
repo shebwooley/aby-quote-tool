@@ -20319,8 +20319,10 @@ const ABY_INTERNAL_JS = `
       // Shape-checked rather than trusted: mode and amount are what the engine branches on, and a
       // malformed object would throw inside calculateAll on every keystroke.
       var adj = carried && carried.adjustment;
-      if (adj && typeof adj === 'object'
-          && ['percent', 'flat', 'set'].indexOf(String(adj.mode)) !== -1) {
+      var oneOk = function (a) {
+        return !!a && typeof a === 'object' && ['percent', 'flat', 'set'].indexOf(String(a.mode)) !== -1;
+      };
+      if (oneOk(adj) || (adj && adj.mode === 'multi' && Array.isArray(adj.items) && adj.items.length && adj.items.every(oneOk))) {
         window.ABY_ADJUSTMENT = adj;
         window.ABY_ADJ_NOTE = String(carried.adjustmentNote || '');
       }
@@ -20332,13 +20334,19 @@ const ABY_INTERNAL_JS = `
   window.ABYQuote.engine.calculateAll = function (selections, commissioned, state) {
     var st = window.ABY_STATE || state || 'TX';
     var results = origCalcAll.call(this, selections, commissioned, st);
-    if (window.ABY_ADJUSTMENT) {
-      results = (window.ABY_ADJUSTMENT.mode === 'set')
-        ? applySetPrice(results, window.ABY_ADJUSTMENT)
-        : window.ABYQuote.engine.applyAdjustment(results, window.ABY_ADJUSTMENT);
-    }
-    return results;
+    return applyAnyAdjustment(results, window.ABY_ADJUSTMENT);
   };
+
+  // One adjustment, or several applied top to bottom (10-01-2026: { mode: 'multi', items }).
+  function applyAnyAdjustment(results, adj) {
+    if (!adj) return results;
+    if (adj.mode === 'multi') {
+      return (adj.items || []).reduce(function (r, it) { return applyAnyAdjustment(r, it); }, results);
+    }
+    return (adj.mode === 'set')
+      ? applySetPrice(results, adj)
+      : window.ABYQuote.engine.applyAdjustment(results, adj);
+  }
 
   // 2) Attach state + adjustment to the save (internal only; never on client PDF).
   var origFetch = window.fetch;
@@ -20457,10 +20465,26 @@ const ABY_INTERNAL_JS = `
     });
   }
 
+  // The product's short name ("COBRA"), not its id ("cobra"), on the internal note.
+  function scopeName(scope) {
+    if (!scope || scope === 'all') return 'all products';
+    var p = (window.ABYQuote.products || []).filter(function (x) { return x.id === scope; })[0];
+    return p ? (p.shortName || p.name || scope) : scope;
+  }
+
   function describeOverride(adj) {
     if (!adj) return '';
-    if (adj.mode !== 'set') return window.ABYQuote.engine.describeAdjustment(adj);
-    var scope = (!adj.scope || adj.scope === 'all') ? 'all products' : adj.scope;
+    if (adj.mode === 'multi') {
+      return (adj.items || []).map(describeOverride).filter(Boolean).join('; ');
+    }
+    if (adj.mode !== 'set') {
+      var named = {};
+      Object.keys(adj).forEach(function (k) { named[k] = adj[k]; });
+      named.scope = scopeName(adj.scope);
+      if (named.scope === 'all products') named.scope = 'all';
+      return window.ABYQuote.engine.describeAdjustment(named);
+    }
+    var scope = scopeName(adj.scope);
     var parts = [];
     SET_FIELDS.forEach(function (f) {
       var v = (adj.prices || {})[f.key];
@@ -20478,73 +20502,121 @@ const ABY_INTERNAL_JS = `
   // show two places, because "$3,837.00" on a fee line is noise.
   function rateMoney(n) { return (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(2); }
 
+  // ── SEVERAL ADJUSTMENTS ON ONE QUOTE (Eric and Niels, 10-01-2026) ─────────────────────────
+  // "What if we're quoting FSA, HRA, and COBRA ... make it $0 on COBRA and $0 on HRA and charge it
+  // on FSA." One adjustment could only name one product or all of them, so the panel now holds a
+  // LIST of rows, each with its own kind, amount and product, applied top to bottom.
+  // ⭐ WHAT IS STORED: no rows is null; ONE row is that row's object, exactly the shape every quote
+  // saved before today carries; two or more is { mode: 'multi', items: [...] }. So a quote with one
+  // adjustment is stored the same way it always was, and everything that reads the column keeps
+  // working.
+  var ADJ_ROW_STYLE = 'display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-top:10px;padding-top:10px;border-top:1px dashed #a9c2e0;';
+  var LBL = 'font-size:12px;color:#143c73;';
+
+  function adjRowHTML(scopeOpts, withPercent) {
+    return '' +
+      '<label style="' + LBL + '">Price Adjustment<br><select class="adjMode" style="padding:6px;">' +
+        '<option value="none">None</option><option value="flat">Flat ($)</option><option value="set">Set price ($)</option>' +
+        (withPercent ? '<option value="percent">Percent (older quote)</option>' : '') +
+      '</select></label>' +
+      '<label class="adjAmtWrap" style="' + LBL + '">Amount<br><input class="adjAmt" type="number" step="0.01" placeholder="e.g. -250" style="padding:6px;width:130px;"></label>' +
+      '<label style="' + LBL + '">Applies to<br><select class="adjScope" style="padding:6px;min-width:150px;">' + scopeOpts + '</select></label>' +
+      '<span class="adjSet" style="display:none;flex-wrap:wrap;gap:12px;align-items:flex-end;">' +
+        '<label style="' + LBL + '">Setup<br><input class="setSetup" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:110px;"></label>' +
+        '<label style="' + LBL + '">Renewal<br><input class="setRenewal" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:110px;"></label>' +
+        '<label style="' + LBL + '">Annual<br><input class="setAnnual" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:110px;"></label>' +
+        '<label style="' + LBL + '">Monthly admin<br><input class="setMonthly" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:120px;"></label>' +
+        '<label style="' + LBL + '">Per participant<br><input class="setPerPart" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:120px;"></label>' +
+      '</span>' +
+      '<button type="button" class="adjRemove" style="font-size:12px;background:none;border:none;color:#b3261e;cursor:pointer;padding:6px 0;">Remove</button>';
+  }
+
+  var SET_INPUTS = [
+    { cls: 'setSetup',   key: 'setupFee',    label: 'Setup' },
+    { cls: 'setRenewal', key: 'renewalFee',  label: 'Renewal' },
+    { cls: 'setAnnual',  key: 'annualFee',   label: 'Annual' },
+    { cls: 'setMonthly', key: 'monthlyFee',  label: 'Monthly admin' },
+    { cls: 'setPerPart', key: 'monthlyRate', label: 'Per participant' }
+  ];
+
+  // One row -> { item } | { error } | {} (nothing entered).
+  function readAdjRow(row) {
+    var mode = row.querySelector('.adjMode').value;
+    var scope = row.querySelector('.adjScope').value;
+    row.querySelector('.adjSet').style.display = (mode === 'set') ? 'flex' : 'none';
+    row.querySelector('.adjAmtWrap').style.display = (mode === 'set') ? 'none' : '';
+    if (mode === 'set') {
+      // 🔴🔴 A SET PRICE IS A PRICE, AND A PRICE CANNOT BE NEGATIVE.
+      // ⛔ THIS PANEL USES TWO OPPOSITE SIGN CONVENTIONS IN ADJACENT FIELDS: in Flat a NEGATIVE amount
+      // is a DISCOUNT (-25 takes $25 off), so somebody who has learned that here will type -500 in Set
+      // price meaning "take 500 off" -- and used to get a setup fee of MINUS $500, applied silently,
+      // straight onto a client proposal. It REFUSES rather than clamping to 0: silently turning -500
+      // into 0 would be a second wrong price, and just as quiet.
+      var prices = {}, negatives = [];
+      SET_INPUTS.forEach(function (f) {
+        var v = parseFloat(row.querySelector('.' + f.cls).value);
+        if (isNaN(v)) return;
+        if (v < 0) { negatives.push(f.label); return; }
+        prices[f.key] = v;
+      });
+      if (negatives.length) {
+        return { error: 'a set price cannot be negative (' + negatives.join(', ') +
+          '). To take money OFF the standard price, use Flat, where a negative amount is a discount.' };
+      }
+      // Eric, 2026-08-21: a per-participant rate survives a headcount change; a monthly TOTAL does
+      // not. Typing BOTH is refused rather than resolved: either answer would be a price nobody chose.
+      if (prices.monthlyFee != null && prices.monthlyRate != null) {
+        return { error: 'it has both a monthly total and a per-participant rate, and they can disagree. Type one: the total fixes the monthly figure, the rate re-prices when the headcount changes.' };
+      }
+      if (!Object.keys(prices).length) return {};
+      return { item: { mode: 'set', scope: scope, prices: prices } };
+    }
+    var amt = parseFloat(row.querySelector('.adjAmt').value);
+    if (mode === 'none' || isNaN(amt) || amt === 0) return {};
+    return { item: { mode: mode, amount: amt, scope: scope } };
+  }
+
+  function fillAdjRow(row, adj) {
+    if (!adj) return;
+    row.querySelector('.adjMode').value = adj.mode;
+    row.querySelector('.adjScope').value = adj.scope || 'all';
+    if (adj.mode === 'set') {
+      SET_INPUTS.forEach(function (f) {
+        var v = (adj.prices || {})[f.key];
+        if (v != null && !isNaN(v)) row.querySelector('.' + f.cls).value = v;
+      });
+    } else if (adj.amount != null) {
+      row.querySelector('.adjAmt').value = adj.amount;
+    }
+  }
+
   function recompute(panel) {
-    var mode = panel.querySelector('#abyMode').value;
-    var amtEl = panel.querySelector('#abyAmt');
-    var amt = parseFloat(amtEl.value);
-    var scope = panel.querySelector('#abyScope').value;
     window.ABY_STATE = panel.querySelector('#abyState').value || 'TX';
     window.ABY_ADJ_NOTE = panel.querySelector('#abyNote').value || '';
     var summary = panel.querySelector('#abySummary');
-    var setRow = panel.querySelector('#abySetRow');
-    setRow.style.display = (mode === 'set') ? 'flex' : 'none';
-    amtEl.parentNode.style.display = (mode === 'set') ? 'none' : '';
-
-    // 'set' is not driven by #abyAmt, so it must be handled BEFORE the isNaN(amt)
-    // guard below -- otherwise an empty Amount box would silently clear a typed price.
-    if (mode === 'set') {
-      // 🔴🔴 A SET PRICE IS A PRICE, AND A PRICE CANNOT BE NEGATIVE.
-      // ⛔ THIS PANEL USES TWO OPPOSITE SIGN CONVENTIONS IN ADJACENT FIELDS: in Percent and Flat a
-      // NEGATIVE amount is a DISCOUNT (-25 takes $25 off), so somebody who has learned that here
-      // will type -500 in Set price meaning "take 500 off" -- and used to get a setup fee of
-      // MINUS $500, applied silently, with no warning anywhere, straight onto a client proposal.
-      // ⭐ It REFUSES rather than clamping to 0: silently turning -500 into 0 would be a second
-      // wrong price, and just as quiet. The message names the mode that does what they meant.
-      var prices = {}, negatives = [];
-      var readPrice = function (inputId, label, key) {
-        var v = parseFloat(panel.querySelector('#' + inputId).value);
-        if (isNaN(v)) return;
-        if (v < 0) { negatives.push(label); return; }
-        prices[key] = v;
-      };
-      SET_FIELDS.forEach(function (f) { readPrice(f.input, f.label, f.key); });
-      readPrice('abySetMonthly', 'Monthly admin', 'monthlyFee');
-      readPrice('abySetPerPart', 'Per participant', 'monthlyRate');
-      if (negatives.length) {
-        window.ABY_ADJUSTMENT = null;
-        summary.textContent = 'Not applied — a set price cannot be negative (' + negatives.join(', ') +
-          '). To take money OFF the standard price, use Flat, where a negative amount is a discount.';
-        return;
-      }
-      // Eric, 2026-08-21, describing what he actually adjusts: "if we lower the per
-      // employee fee ... it would survive if they adjust the number of employees". A typed
-      // monthly TOTAL cannot do that -- 200 dollars for 50 people is still 200 for 78 -- so
-      // the per-participant box exists to make his rule expressible.
-      // Typing BOTH is refused rather than resolved: either answer would be a price nobody
-      // chose, and this panel already refuses instead of guessing (see the negative check).
-      if (prices.monthlyFee != null && prices.monthlyRate != null) {
-        window.ABY_ADJUSTMENT = null;
-        summary.textContent = 'Not applied - you have typed both a monthly total and a per-participant rate, and they can disagree. Type one: the total fixes the monthly figure, the rate re-prices when the headcount changes.';
-        return;
-      }
-      if (!Object.keys(prices).length) {
-        window.ABY_ADJUSTMENT = null;
-        summary.textContent = 'Set price selected, but no price typed yet. State: ' + window.ABY_STATE + '.';
-        return;
-      }
-      window.ABY_ADJUSTMENT = { mode: 'set', scope: scope, prices: prices };
-      summary.textContent = 'Applied: ' + describeOverride(window.ABY_ADJUSTMENT) +
-        '. State: ' + window.ABY_STATE + '. Re-generate the quote to apply.';
+    var rows = panel.querySelectorAll('.aby-adj-row');
+    var items = [], errors = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = readAdjRow(rows[i]);
+      if (r.error) errors.push('Adjustment ' + (i + 1) + ': ' + r.error);
+      else if (r.item) items.push(r.item);
+      // The Remove button is shown only when there is more than one row to remove.
+      rows[i].querySelector('.adjRemove').style.display = rows.length > 1 ? '' : 'none';
+    }
+    // ⛔ One bad row stops ALL of them. Applying the good rows and dropping the bad one would put a
+    // price on the proposal that is neither what was typed nor the standard price.
+    if (errors.length) {
+      window.ABY_ADJUSTMENT = null;
+      summary.textContent = 'Not applied - ' + errors.join(' ');
       return;
     }
-
-    if (mode === 'none' || isNaN(amt) || amt === 0) {
+    if (!items.length) {
       window.ABY_ADJUSTMENT = null;
       summary.textContent = 'No price adjustment. State: ' + window.ABY_STATE + '. Quotes run at standard ' + window.ABY_STATE + ' pricing.';
       return;
     }
-    window.ABY_ADJUSTMENT = { mode: mode, amount: amt, scope: scope };
-    summary.textContent = 'Applied: ' + window.ABYQuote.engine.describeAdjustment(window.ABY_ADJUSTMENT) +
+    window.ABY_ADJUSTMENT = items.length === 1 ? items[0] : { mode: 'multi', items: items };
+    summary.textContent = 'Applied: ' + describeOverride(window.ABY_ADJUSTMENT) +
       '. State: ' + window.ABY_STATE + '. Re-generate the quote to apply.';
   }
 
@@ -20565,22 +20637,13 @@ const ABY_INTERNAL_JS = `
         '<strong style="color:#143c73;font-size:15px;">ABY internal controls</strong>' +
         '<span style="background:#205aa6;color:#fff;font-size:11px;padding:2px 8px;border-radius:999px;">not visible to brokers</span>' +
       '</div>' +
-      '<p style="margin:0 0 12px;color:#4a5568;font-size:12.5px;">State pricing and price adjustments. An adjustment changes the quoted price; the adjustment itself is recorded internally and never appears on the client proposal or PDF.</p>' +
+      '<p style="margin:0 0 12px;color:#4a5568;font-size:12.5px;">State pricing and price adjustments. An adjustment changes the quoted price; the adjustment itself is recorded internally and never appears on the client proposal or PDF. Add one adjustment per product to price products differently on the same quote; they apply top to bottom.</p>' +
       '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">' +
-        '<label style="font-size:12px;color:#143c73;">State<br><select id="abyState" style="padding:6px;min-width:150px;">' + stateOpts + '</select></label>' +
-        '<label style="font-size:12px;color:#143c73;">Price Adjustment<br><select id="abyMode" style="padding:6px;"><option value="none">None</option><option value="flat">Flat ($)</option><option value="set">Set price ($)</option></select></label>' +
-        '<label style="font-size:12px;color:#143c73;">Amount<br><input id="abyAmt" type="number" step="0.01" placeholder="e.g. -250" style="padding:6px;width:130px;"></label>' +
-        '<label style="font-size:12px;color:#143c73;">Applies to<br><select id="abyScope" style="padding:6px;min-width:150px;">' + scopeOpts + '</select></label>' +
-        '<label style="font-size:12px;color:#143c73;flex:1;min-width:180px;">Reason (internal note)<br><input id="abyNote" type="text" placeholder="e.g. DFW regional / ABC brokerage discount" style="padding:6px;width:100%;box-sizing:border-box;"></label>' +
+        '<label style="' + LBL + '">State<br><select id="abyState" style="padding:6px;min-width:150px;">' + stateOpts + '</select></label>' +
+        '<label style="' + LBL + 'flex:1;min-width:180px;">Reason (internal note)<br><input id="abyNote" type="text" placeholder="e.g. DFW regional / ABC brokerage discount" style="padding:6px;width:100%;box-sizing:border-box;"></label>' +
       '</div>' +
-      '<div id="abySetRow" style="display:none;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-top:12px;padding-top:12px;border-top:1px dashed #a9c2e0;">' +
-        '<span style="font-size:12px;color:#143c73;width:100%;">Type the agreed price. Any box left blank keeps the standard price.</span>' +
-        '<label style="font-size:12px;color:#143c73;">Setup<br><input id="abySetSetup" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:120px;"></label>' +
-        '<label style="font-size:12px;color:#143c73;">Renewal<br><input id="abySetRenewal" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:120px;"></label>' +
-        '<label style="font-size:12px;color:#143c73;">Annual<br><input id="abySetAnnual" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:120px;"></label>' +
-        '<label style="font-size:12px;color:#143c73;">Monthly admin<br><input id="abySetMonthly" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:130px;"></label>' +
-        '<label style="font-size:12px;color:#143c73;">Per participant<br><input id="abySetPerPart" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:130px;"></label>' +
-      '</div>' +
+      '<div id="abyAdjRows"></div>' +
+      '<button type="button" id="abyAddAdj" style="margin-top:10px;font-size:13px;font-weight:bold;background:#fff;border:1px solid #205aa6;color:#143c73;border-radius:6px;padding:6px 12px;cursor:pointer;">+ Add another adjustment</button>' +
       '<div id="abyVersionRow" style="display:none;margin-top:12px;padding-top:12px;border-top:1px dashed #a9c2e0;font-size:12.5px;color:#143c73;">' +
         '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">' +
           '<input id="abyNewVersion" type="checkbox" style="margin-top:3px;">' +
@@ -20592,6 +20655,42 @@ const ABY_INTERNAL_JS = `
 
     if (host === form && form.parentNode) form.parentNode.insertBefore(panel, form);
     else host.insertBefore(panel, host.firstChild);
+
+    var rowsBox = panel.querySelector('#abyAdjRows');
+    function addRow(adj) {
+      var row = document.createElement('div');
+      row.className = 'aby-adj-row';
+      row.style.cssText = ADJ_ROW_STYLE;
+      row.innerHTML = adjRowHTML(scopeOpts, !!(adj && adj.mode === 'percent'));
+      rowsBox.appendChild(row);
+      fillAdjRow(row, adj);
+      row.querySelectorAll('input, select').forEach(function (el) {
+        el.addEventListener('input', function () { recompute(panel); });
+        el.addEventListener('change', function () { recompute(panel); });
+      });
+      row.querySelector('.adjRemove').addEventListener('click', function () {
+        rowsBox.removeChild(row);
+        if (!rowsBox.children.length) addRow(null);
+        recompute(panel);
+      });
+      return row;
+    }
+
+    // 🔴 A RE-RUN OPENS WITH ITS DISCOUNT IN THE ROWS (Eric, 2026-08-31: "It should start as the exact
+    // same quote (including any discounts)"). FIXED 10-01-2026: the carried adjustment was read at the
+    // top of this file, and then the first recompute() - which read an empty panel - set it back to
+    // null, so every re-run priced at the standard rate. The rows are now filled from it first.
+    var carried = window.ABY_ADJUSTMENT;
+    var start = !carried ? [null] : (carried.mode === 'multi' ? (carried.items || []) : [carried]);
+    if (!start.length) start = [null];
+    start.forEach(function (a) { addRow(a); });
+    if (window.ABY_ADJ_NOTE) panel.querySelector('#abyNote').value = window.ABY_ADJ_NOTE;
+    panel.querySelector('#abyAddAdj').addEventListener('click', function () {
+      var row = addRow(null);
+      var sel = row.querySelector('.adjMode');
+      if (sel && sel.focus) sel.focus();
+      recompute(panel);
+    });
 
     // 🔴 IT IS ALWAYS SHOWN, AND THE FIRST VERSION OF THIS WAS WRONG. It keyed on ?rerun= being in
     // the address bar, which is true when the admin link opens the page and NOT true a moment later
@@ -20611,8 +20710,7 @@ const ABY_INTERNAL_JS = `
       vBox.addEventListener('change', function () { window.ABY_NEW_VERSION = !!vBox.checked; });
     }
 
-    ['abyState', 'abyMode', 'abyAmt', 'abyScope', 'abyNote',
-     'abySetSetup', 'abySetRenewal', 'abySetAnnual', 'abySetMonthly', 'abySetPerPart'].forEach(function (id) {
+    ['abyState', 'abyNote'].forEach(function (id) {
       var el = panel.querySelector('#' + id);
       el.addEventListener('input', function () { recompute(panel); });
       el.addEventListener('change', function () { recompute(panel); });

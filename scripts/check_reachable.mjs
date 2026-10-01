@@ -579,7 +579,9 @@ const RULES = [
       && /adjustmentNote: q\.adjustment_note \|\| ''/.test(f.worker)
       // read in the overlay, shape-checked, and NOT in the public bundle
       && /window\.ABY_ADJUSTMENT = adj;/.test(f.worker)
-      && /\['percent', 'flat', 'set'\]\.indexOf\(String\(adj\.mode\)\) !== -1/.test(f.worker)
+      // 10-01-2026: several adjustments per quote; EACH carried item is shape-checked the same way.
+      && /\['percent', 'flat', 'set'\]\.indexOf\(String\(a\.mode\)\) !== -1/.test(f.worker)
+      && /adj\.items\.every\(oneOk\)/.test(f.worker)
       && !/ABY_ADJUSTMENT/.test(f.app),
   },
     {
