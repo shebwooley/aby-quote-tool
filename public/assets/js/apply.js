@@ -83,7 +83,7 @@
     return list;
   }
   function blanks(questions) {
-    return questions.filter(function (q) { return isBlank(state.answers[q.key]); });
+    return questions.filter(function (q) { return !q.optional && isBlank(state.answers[q.key]); });
   }
 
   function render() {
@@ -151,7 +151,46 @@
         return '<div class="pv-row"><div>' + esc(q.label) + '</div><div class="a' + (a ? '' : ' blank') + '">' + (a ? esc(a) : 'blank') + '</div></div>';
       }).join('') + '</div>';
     });
+    out += signedBlock(true);
     pv.innerHTML = out;
+  }
+
+  // ── the signature (Eric and Niels, 10-01-2026: the application ends with one, like the authorization)
+  function signedBlock(forPrint) {
+    var d = state.data;
+    if (d.status !== 'submitted') return '';
+    var img = d.signatureImage
+      ? '<img src="' + esc(d.signatureImage) + '" alt="Signature" style="max-width:320px;height:64px;display:block;border-bottom:1.5px solid #333">'
+      : '<div style="font-style:italic;color:#666">' + (adminMode ? 'No drawn signature stored (submitted before signing existed, or the database was not yet updated).' : 'Submitted electronically.') + '</div>';
+    return '<div class="' + (forPrint ? 'pv-sec' : 'review-sec') + '" style="margin-top:18px">' +
+      (forPrint ? '<h3>Signature</h3>' : '<h2 style="margin-top:22px">Signature</h2>') + img +
+      '<div style="margin-top:6px">' + esc(d.submittedBy || '') + (d.submittedAt ? ' &middot; ' + esc(usDate(d.submittedAt)) : '') + '</div></div>';
+  }
+
+  // A fixed 600x160 canvas so the saved picture stays small on any screen; pointer events cover mouse,
+  // finger and pen. The same pad the authorization page uses (app.js abyInitSigPad).
+  function initSigPad() {
+    var c = document.getElementById('sigPad');
+    if (!c) return;
+    c.width = 600; c.height = 160;
+    var x = c.getContext('2d');
+    x.lineWidth = 2.6; x.lineCap = 'round'; x.lineJoin = 'round'; x.strokeStyle = '#143c73'; x.fillStyle = '#143c73';
+    state.sigInk = false;
+    var down = false, lx = 0, ly = 0;
+    function pt(e) { var r = c.getBoundingClientRect(); return [(e.clientX - r.left) * c.width / r.width, (e.clientY - r.top) * c.height / r.height]; }
+    c.addEventListener('pointerdown', function (e) {
+      down = true; try { c.setPointerCapture(e.pointerId); } catch (_) {}
+      var p = pt(e); lx = p[0]; ly = p[1];
+      x.beginPath(); x.arc(lx, ly, 1.3, 0, 6.3); x.fill(); state.sigInk = true; e.preventDefault();
+    });
+    c.addEventListener('pointermove', function (e) {
+      if (!down) return;
+      var p = pt(e); x.beginPath(); x.moveTo(lx, ly); x.lineTo(p[0], p[1]); x.stroke(); lx = p[0]; ly = p[1]; e.preventDefault();
+    });
+    function up() { down = false; }
+    c.addEventListener('pointerup', up); c.addEventListener('pointercancel', up); c.addEventListener('pointerleave', up);
+    var b = document.getElementById('sigClear');
+    if (b) b.addEventListener('click', function () { x.clearRect(0, 0, c.width, c.height); state.sigInk = false; });
   }
 
   function intro() {
@@ -213,7 +252,8 @@
         }).join('') + '</select>';
         break;
       case 'textarea':
-        input = '<textarea' + attr + ro + '>' + esc(v || '') + '</textarea>';
+        // The server keeps 2,000 characters of an answer; the box stops there too, so nothing is cut silently.
+        input = '<textarea' + attr + ' maxlength="2000"' + ro + '>' + esc(v || '') + '</textarea>';
         break;
       case 'list':
         var arr = Array.isArray(v) ? v : [];
@@ -268,16 +308,19 @@
       if (bank) out += '<p class="intro" style="margin-top:12px">Bank details for reimbursements or contributions also go through the secure upload, never by email.</p>';
     }
 
-    if (state.readonly) return out;
+    if (state.readonly) return out + signedBlock(false);
 
-    out += '<h2 style="margin-top:26px">Submit to ABY</h2>' +
+    out += '<h2 style="margin-top:26px">Sign and submit to ABY</h2>' +
       '<p class="intro">Submitting sends your answers to ABY. It is not a contract: ABY will send the Administrative Services Agreement for signature separately.</p>' +
       '<div class="grid">' +
       '<div class="q half"><label for="subName">Your name</label><input type="text" id="subName" value="' + esc(state.answers['contact.signer.name'] || '') + '"></div>' +
       '<div class="q half"><label for="subEmail">Your email</label><input type="email" id="subEmail" value="' + esc(state.answers['contact.signer.email'] || '') + '"></div>' +
       '<div class="q"><div class="opts"><label><input type="checkbox" id="subOk"> To the best of my knowledge, these answers are accurate.</label></div></div>' +
+      '<div class="q"><div class="lbl">Sign here with your mouse or finger</div>' +
+      '<canvas id="sigPad" style="width:100%;max-width:600px;height:130px;border:1.5px dashed #9fb3c4;border-radius:8px;background:#fff;touch-action:none;cursor:crosshair;display:block"></canvas>' +
+      '<div><button type="button" id="sigClear" style="margin-top:6px;font:inherit;font-size:14px;background:none;border:none;color:var(--blue);cursor:pointer;padding:0">Clear signature</button></div></div>' +
       '</div>' +
-      '<div class="nav"><span></span><button class="btn" type="button" id="submitBtn">Submit to ABY</button></div>' +
+      '<div class="nav"><span></span><button class="btn" type="button" id="submitBtn">Sign and submit to ABY</button></div>' +
       '<div id="subMsg"></div>';
     return out;
   }
@@ -322,6 +365,7 @@
     });
     var sb = document.getElementById('submitBtn');
     if (sb) sb.addEventListener('click', submit);
+    initSigPad();
   }
 
   // A choice can open or close follow-up questions, so it redraws the step; typing does not,
@@ -377,27 +421,31 @@
     var email = (document.getElementById('subEmail').value || '').trim();
     if (!name || !email) { msg.innerHTML = '<div class="note bad">Please enter your name and email.</div>'; return; }
     if (!document.getElementById('subOk').checked) { msg.innerHTML = '<div class="note bad">Please check the box to confirm the answers.</div>'; return; }
+    var pad = document.getElementById('sigPad');
+    if (!pad || !state.sigInk) { msg.innerHTML = '<div class="note bad">Please sign in the signature box.</div>'; return; }
+    var sig = pad.toDataURL('image/png');
     var btn = document.getElementById('submitBtn');
     btn.disabled = true; btn.textContent = 'Submitting...';
     fetch(API + '/submit', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ answers: state.answers, submittedBy: name, submittedEmail: email, confirmed: true }) })
+      body: JSON.stringify({ answers: state.answers, submittedBy: name, submittedEmail: email, confirmed: true, signatureImage: sig }) })
       .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { status: r.status, body: j }; }); })
       .then(function (res) {
         if (res.status === 200 && res.body.ok) {
           state.data.status = 'submitted';
           state.data.submittedAt = res.body.submittedAt;
           state.data.submittedBy = name;
+          state.data.signatureImage = sig;
           state.readonly = true; state.dirty = false;
           state.step = 0;
           render();
           window.scrollTo(0, 0);
         } else {
-          btn.disabled = false; btn.textContent = 'Submit to ABY';
+          btn.disabled = false; btn.textContent = 'Sign and submit to ABY';
           msg.innerHTML = '<div class="note bad">' + esc((res.body && res.body.message) || 'That did not go through. Please try again, or call ABY Benefits at 817-731-6258.') + '</div>';
         }
       })
       .catch(function () {
-        btn.disabled = false; btn.textContent = 'Submit to ABY';
+        btn.disabled = false; btn.textContent = 'Sign and submit to ABY';
         msg.innerHTML = '<div class="note bad">Network error. Your answers are saved; please try submitting again.</div>';
       });
   }

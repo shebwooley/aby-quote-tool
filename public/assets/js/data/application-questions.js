@@ -25,8 +25,13 @@
  * here asks it properly. Where a form printed stale IRS limits, no figure is repeated here.
  *
  * NEVER ASKED HERE, ON PURPOSE: Social Security numbers, dates of birth, bank routing or account
- * numbers, direct-deposit (debit) authorizations, or handwritten signatures. The census and the bank
- * details go through the secure upload (Eric: "I think those will need to be sent securely").
+ * numbers, direct-deposit (debit) authorizations, or the check-printing signatures some forms ask
+ * for. The census and the bank details go through the secure upload (Eric: "I think those will need
+ * to be sent securely"). The employer DOES sign the finished application, on the submit step, the
+ * way they signed the authorization (Eric and Niels, 10-01-2026) - that is apply.js, not a question.
+ *
+ * `optional: true` marks a question that is never counted as "to go" or "still blank": the closing
+ * free-text box is an invitation, not a gap.
  *
  * KEYS ARE PERMANENT once real answers exist. An answer is stored under its key, so renaming a key
  * orphans every saved answer. Change the words freely; add a new key rather than reuse an old one.
@@ -624,6 +629,18 @@
         { key: 'f5500.providerList', label: 'Each provider: name, EIN and address', type: 'textarea', forms: ['f5500'], show: { key: 'f5500.providers', equals: true } },
         { key: 'f5500.extension', label: 'Would you like help filing an extension (Form 5558)?', type: 'yesno', forms: ['f5500'],
           hint: 'The Form 5500 is due seven months after the plan year ends unless it is extended.' }
+      ]
+    },
+    {
+      // Eric and Niels, 10-01-2026: "a free text box where the employer can tell us anything else we
+      // need to know about the setup, timing, ask questions, etc." Every application gets it, once,
+      // as the last step before review.
+      id: 'notes',
+      title: 'Anything else',
+      intro: 'Tell ABY anything the questions above did not cover.',
+      questions: [
+        { key: 'notes.anythingElse', label: 'Anything else ABY should know?', type: 'textarea', forms: ALL, optional: true,
+          hint: 'For example: timing or deadlines, how you would like something set up, or questions for ABY. Optional.' }
       ]
     }
   ];
