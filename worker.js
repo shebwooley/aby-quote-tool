@@ -16250,7 +16250,7 @@ function adminAskHTML(cap) {
     '.card{background:#fff;border:2px solid #D97757;border-radius:10px;padding:24px 26px}' +
     'h2{font-size:24px;margin:0 0 6px;color:#111}' +
     '.lead{margin:0 0 16px;color:#1f2937}' +
-    '#aaQuestion{width:100%;min-height:80px;padding:12px 14px;border:1px solid #D97757;border-radius:8px;font-family:inherit;font-size:16px;line-height:1.5;color:#111;resize:vertical}' +
+    '#aaQuestion{width:100%;min-height:80px;padding:12px 14px;border:2px solid #D97757;border-radius:8px;font-family:inherit;font-size:16px;line-height:1.5;color:#111;resize:vertical}' +
     '.row{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}' +
     '.ex{margin-top:18px} .ex b{display:block;margin-bottom:6px;color:#111}' +
     '.ex button{display:block;width:100%;text-align:left;background:#fff;border:1px solid #d6dde6;border-radius:7px;' +
