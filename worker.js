@@ -345,6 +345,11 @@ export default {
     }
 
     // ── Admin page ──────────────────────────────────────────────────────────────
+    // F-603: Ask Claude, one page reached from the menu on every admin screen.
+    if (path === '/admin/ask') {
+      return withAuth(request, env, () => new Response(adminAskHTML(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
+    }
     if (path === '/admin/today') {
       return withAuth(request, env, () => new Response(adminTodayHTML(), {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
@@ -13725,6 +13730,9 @@ header a:hover{background:rgba(255,255,255,.15);color:white}
 header a.here{background:rgba(255,255,255,.2);color:white}
 header a.act{background:#2f9e73;color:white;font-weight:700}
 header a.act:hover{background:#37b284}
+header a.claude{background:#A84E2C;color:white;font-weight:700}
+header a.claude:hover{background:#9A4526}
+header a.claude.here{background:#9A4526;box-shadow:inset 0 0 0 2px #fff}
 header .logout{color:rgba(255,255,255,.75);font-size:.875rem;cursor:pointer;background:none;
                border:none;padding:4px 8px;border-radius:4px}
 header .logout:hover{background:rgba(255,255,255,.15);color:white}
@@ -16087,6 +16095,61 @@ ${abyAdminNav('/admin/today')}
 </body></html>`;
 }
 
+/**
+ * /admin/ask -- ASK CLAUDE, ONE PLACE ON EVERY ADMIN PAGE (F-603, Eric 10-06-2026: "do you think we should add an
+ * Ask Claude button to the menu? Seems like we could get it to help us with some things and it would be one place
+ * we could click.").
+ *
+ * The same read-only assistant as the quote log's box (handleAdminAssistant, job 'ask'): it looks things up across
+ * the whole database and answers. It changes nothing. Eric and Niels only; the office login is told so on asking.
+ * ⭐ Built by string concatenation, not a template literal, so the page carries no backtick risk at all.
+ * ⭐ Text on WHITE, 16px, near-black (Eric, 10-06-2026: "once again, you make it light and it's difficult to read").
+ */
+function adminAskHTML() {
+  const examples = [
+    'Which firms quoted the most this year but bought nothing?',
+    'What is our history with Lone Star Insurance?',
+    'How many quotes did we run each month this year, and how many sold?',
+    'Which brokers have gone quiet - quoted a lot before 2026 and nothing since?',
+  ];
+  return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>Ask Claude &mdash; ABY admin</title><style>' +
+    '*{box-sizing:border-box} body{margin:0;font:16px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#111}' +
+    ADMIN_HEADER_CSS +
+    'main{max-width:52em;margin:26px auto 80px;padding:0 22px}' +
+    '.card{background:#fff;border:2px solid #D97757;border-radius:10px;padding:24px 26px}' +
+    'h2{font-size:24px;margin:0 0 6px;color:#111}' +
+    '.lead{margin:0 0 16px;color:#1f2937}' +
+    '#aaQuestion{width:100%;min-height:96px;padding:12px 14px;border:1px solid #D97757;border-radius:8px;font-family:inherit;font-size:16px;line-height:1.5;color:#111;resize:vertical}' +
+    '.row{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}' +
+    '.ex{margin-top:18px} .ex b{display:block;margin-bottom:6px;color:#111}' +
+    '.ex button{display:block;width:100%;text-align:left;background:#fff;border:1px solid #d6dde6;border-radius:7px;' +
+      'padding:10px 13px;margin:0 0 6px;font-family:inherit;font-size:16px;line-height:1.4;color:#111;cursor:pointer}' +
+    '.ex button:hover{border-color:#D97757;background:#fffaf7}' +
+    '.note{margin:14px 0 0;font-size:15px;color:#1f2937}' +
+    '</style></head><body>' +
+    abyAdminNav('/admin/ask') +
+    '<main><div class="card">' +
+    '<h2>Ask Claude</h2>' +
+    '<p class="lead">Ask anything about ABY&rsquo;s quotes, firms, brokers, clients and sales. Claude looks it up and answers. ' +
+    'It is AI, so check anything you act on &mdash; and it cannot change anything.</p>' +
+    '<div data-assist-line><textarea id="aaQuestion" placeholder="Type a question, then press Ask Claude"></textarea>' +
+    '<div class="row"><button class="aa-claude" data-assist="ask">Ask Claude</button>' +
+    '<span class="note" style="margin:0">Enter asks; Shift+Enter starts a new line.</span></div></div>' +
+    '<div class="ex"><b>Some things to try</b>' +
+    examples.map(function (q) {
+      return '<button type="button" onclick="var t=document.getElementById(&#39;aaQuestion&#39;);t.value=this.textContent;t.focus()">' +
+        q.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</button>';
+    }).join('') +
+    '</div>' +
+    '<p class="note">For Eric and Niels. It stops at $20 a month and starts again on the 1st.</p>' +
+    '</div></main>' +
+    '<script>function logout(){fetch("/api/admin/logout",{method:"POST"}).then(function(){location.href="/admin"})}</script>' +
+    '<script src="/assets/js/admin-assist.js"></script>' +
+    '</body></html>';
+}
+
 const ABY_ADMIN_LINKS = [
   { href: '/aby',              label: 'Run a quote',          cls: 'act',
     title: 'Run a quote as ABY, with the internal price adjustments' },
@@ -16094,6 +16157,10 @@ const ABY_ADMIN_LINKS = [
   // Second, and deliberately not last: it is the screen you open to find out what today holds, so
   // burying it behind the reference pages would make it the page nobody starts on.
   { href: '/admin/today',      label: 'Today' },
+  // F-603, Eric 10-06-2026: "add an Ask Claude button to the menu ... it would be one place we could click." Orange so
+  // it reads as AI at a glance (his ask, same day); third, so it is in reach from every page without hunting.
+  { href: '/admin/ask',        label: 'Ask Claude',            cls: 'claude',
+    title: 'Ask Claude (AI) about quotes, firms, brokers, clients and sales. It reads and answers; it changes nothing.' },
   // Sits next to the quote log because the two answer adjacent questions -- who we quoted, and
   // who we actually serve -- and the whole point of F-377 is that those are not the same list.
   { href: '/admin/clients',    label: 'Clients' },
@@ -16159,7 +16226,7 @@ function abyAdminNav(here) {
   const links = ABY_ADMIN_LINKS.map((l) => {
     // The current page wins over the accent style: on /aby, "Run a quote" is where you ARE, not a
     // call to action, and leaving it green would make the bar look like it linked somewhere else.
-    const cls = (l.href === here) ? 'here' : (l.cls || '');
+    const cls = (l.href === here) ? ((l.cls === 'claude' ? 'claude ' : '') + 'here') : (l.cls || '');
     return '<a href="' + l.href + '"' + (cls ? ' class="' + cls + '"' : '') +
            (l.title ? ' title="' + l.title + '"' : '') + '>' + l.label + '</a>';
   }).join('');
@@ -16193,6 +16260,7 @@ async function serveAbyTool(request, env) {
     '.aby-adminbar nav a:hover{background:rgba(255,255,255,.15);color:#fff}' +
     '.aby-adminbar nav a.here{background:rgba(255,255,255,.2);color:#fff}' +
     '.aby-adminbar nav a.act{background:#2f9e73;color:#fff;font-weight:700}' +
+    '.aby-adminbar nav a.claude{background:#A84E2C;color:#fff;font-weight:700}' +
     '.aby-adminbar .logout{color:rgba(255,255,255,.75);font-size:.875rem;cursor:pointer;' +
       'background:none;border:none;padding:4px 8px;border-radius:4px}' +
     '.aby-adminbar .logout:hover{background:rgba(255,255,255,.15);color:#fff}' +

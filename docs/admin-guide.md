@@ -736,7 +736,9 @@ refuses anything but reading. Signed in as the office, every door answers that i
   that is a person's name*): it reads both records and says *likely the same*, *likely different* or
   *cannot tell*, with the evidence. **The Keep / Same firm / Not the same buttons are still yours to
   press**; personal email addresses are never treated as evidence.
-- **Ask** on the quote log: a question about the log, answered from the data, with what it looked up.
+- ⭐ **Ask Claude in the menu** (orange, on every admin page): one page to ask anything about quotes, firms,
+  brokers, clients and sales, with a few examples to start from.
+- **Ask Claude** on the quote log: the same thing, in a box above the tabs.
 
 Every answer shows *What it looked up*, so you can see where it came from. ⚠️ It needs ABY's model key
 on the Worker (`ANTHROPIC_API_KEY`), added 10-06-2026.

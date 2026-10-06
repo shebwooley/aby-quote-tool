@@ -44,7 +44,12 @@ ok('door: Look into this, same person twice', src.includes('data-assist="tidy-pe
 ok('door: Look into this, two records for one firm', src.includes('data-assist="tidy-firms"'));
 ok('door: Look into this, a firm named for a person', src.includes('data-assist="tidy-named"'));
 ok('door: the question box on the quote log', src.includes('id="aaQuestion"') && src.includes('data-assist="ask"'));
-ok('the screen half is loaded by both pages', (src.match(/<script src="\/assets\/js\/admin-assist\.js"><\/script>/g) || []).length === 2);
+ok('the screen half is loaded by the three pages that ask (tidy, quote log, Ask Claude)', (src.match(/<script src="\/assets\/js\/admin-assist\.js"><\/script>/g) || []).length === 3);
+// Eric, 10-06-2026: "add an Ask Claude button to the menu ... one place we could click."
+ok('the menu has Ask Claude, in orange', src.includes("{ href: '/admin/ask',        label: 'Ask Claude',            cls: 'claude',"));
+ok('and it routes to its page behind the login', /path === '\/admin\/ask'\) \{\n\s+return withAuth\(request, env, \(\) => new Response\(adminAskHTML\(\)/.test(src));
+ok('the page asks with the ask job', /function adminAskHTML[\s\S]*?data-assist="ask">Ask Claude<\/button>/.test(src));
+ok('the orange menu item is styled on the admin pages and on /aby', src.includes('header a.claude{background:#A84E2C') && src.includes('.aby-adminbar nav a.claude{background:#A84E2C'));
 const client = readFileSync(new URL('../public/assets/js/admin-assist.js', import.meta.url), 'utf8');
 ok('the screen half posts to the route', client.includes("fetch('/api/admin/assistant'"));
 ok('and says nothing was saved or changed', client.includes('Nothing has been saved or changed.'));

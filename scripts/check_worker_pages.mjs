@@ -137,7 +137,9 @@ const PAGES = ["adminHTML", "adminBrokersHTML", "adminRatesHTML",
                "retiredQuoteHTML",
                // The admin guide. Its BODY is generated from docs/admin-guide.md, so what is checked
                // here is the page SHELL -- that the wrapper still emits valid HTML around it.
-               "adminGuideHTML"];
+               "adminGuideHTML",
+               // F-603 (10-06-2026): Ask Claude, the menu's one place to ask the assistant.
+               "adminAskHTML"];
 
 // Template-literal constants served verbatim to a browser (not page functions).
 const RAW_LITERALS = ["ABY_INTERNAL_JS"];
