@@ -2761,6 +2761,10 @@ function assistSystem(job, who) {
   ];
   if (job === 'ask') {
     rules.push('Your job now: answer the question about the quote log. Look things up as needed. Give the answer first, in a sentence or two, then the few figures behind it. If the data cannot answer it, say so and say what is missing.');
+    // A CONVERSATION (Eric, 10-06-2026: "would it know what I was talking about if I said yes they are the same").
+    rules.push('This may be a follow-up: the earlier turns of the conversation come before the newest question, so use them to know what "it", "they" or "those" mean. ' +
+      'If the user tells you a fact (for example that two firms are the same business, or what happened to a quote), thank them, restate exactly what they confirmed, and say plainly that you cannot change records yourself. ' +
+      'Then say where it is done: firms and people are combined on Brokers & Agencies, Marketing view, under Tidy up (or on the firm\'s own page); a quote\'s status is changed on the quote log.');
   } else {
     rules.push('Your job now: the tidy screen paired these records because a rule thinks they may be the same ' + (job === 'tidy-people' ? 'person' : 'firm') + '. ' +
       'Read the facts given (and look up more if useful) and write: first line "Likely the same", "Likely different" or "Cannot tell"; then 2 to 5 short lines of evidence (quote dates, whether the histories overlap or follow one another, cities, BUSINESS email domains, who quoted); then one line on what a person should check before deciding. ' +
@@ -2841,6 +2845,23 @@ async function handleAssistUsage(env) {
   }
 }
 
+// THE EARLIER TURNS OF AN Ask Claude CONVERSATION, as the page sends them: [{ role, text }], oldest first. Only the
+// final words of each turn travel (not the lookups behind them). Kept to what the model API accepts - starts with the
+// person, alternates, ends with Claude - and trimmed from the OLDEST end so a long conversation cannot run up the
+// cost: at most 12 turns and about 24,000 characters. Anything malformed is dropped rather than guessed at.
+function assistHistory(raw) {
+  if (!Array.isArray(raw)) return [];
+  let turns = raw.filter((t) => t && (t.role === 'user' || t.role === 'assistant') && typeof t.text === 'string' && t.text.trim())
+    .map((t) => ({ role: t.role, content: t.text.slice(0, 6000) }));
+  turns = turns.slice(-12);
+  while (turns.length && turns[0].role !== 'user') turns.shift();
+  for (let i = 1; i < turns.length; i++) if (turns[i].role === turns[i - 1].role) return [];
+  if (turns.length && turns[turns.length - 1].role !== 'assistant') turns.pop();
+  let size = turns.reduce((n, t) => n + t.content.length, 0);
+  while (turns.length >= 2 && size > 24000) { size -= turns[0].content.length + turns[1].content.length; turns = turns.slice(2); }
+  return turns;
+}
+
 async function handleAdminAssistant(request, env, who) {
   if (!ASSIST_PEOPLE.includes(who)) return jsonResp({ error: 'The assistant is for Eric and Niels for now.' }, 403);
   if (!env.ANTHROPIC_API_KEY) return jsonResp({ error: "The assistant is not switched on yet. It needs ABY's model key added to the Worker." }, 503);
@@ -2852,7 +2873,8 @@ async function handleAdminAssistant(request, env, who) {
     .map((x) => String(x).trim()).filter(Boolean).slice(0, 10);
   const key = '';
   const label = String(body.label || '').slice(0, 200);
-  const question = String(body.question || '').slice(0, 1000).trim();
+  const question = String(body.question || '').slice(0, 2000).trim();
+  const history = job === 'ask' ? assistHistory(body.history) : [];
   if (job === 'ask' && !question) return jsonResp({ error: 'Type a question first.' }, 400);
   if (job.startsWith('tidy') && ids.length < 1) return jsonResp({ error: 'Nothing to look at.' }, 400);
   const month = new Date().toISOString().slice(0, 7);
@@ -2877,7 +2899,7 @@ async function handleAdminAssistant(request, env, who) {
       why: { type: 'string', description: 'In a few plain words, what you are checking.' },
     }, required: ['sql', 'why'] },
   }];
-  const messages = [{ role: 'user', content: first }];
+  const messages = history.concat([{ role: 'user', content: first }]);
   const looked = [];
   for (let turn = 0; turn < ASSIST_MAX_TURNS; turn++) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -16136,28 +16158,34 @@ function adminAskHTML(cap) {
     '.card{background:#fff;border:2px solid #D97757;border-radius:10px;padding:24px 26px}' +
     'h2{font-size:24px;margin:0 0 6px;color:#111}' +
     '.lead{margin:0 0 16px;color:#1f2937}' +
-    '#aaQuestion{width:100%;min-height:96px;padding:12px 14px;border:1px solid #D97757;border-radius:8px;font-family:inherit;font-size:16px;line-height:1.5;color:#111;resize:vertical}' +
+    '#aaQuestion{width:100%;min-height:80px;padding:12px 14px;border:1px solid #D97757;border-radius:8px;font-family:inherit;font-size:16px;line-height:1.5;color:#111;resize:vertical}' +
     '.row{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}' +
     '.ex{margin-top:18px} .ex b{display:block;margin-bottom:6px;color:#111}' +
     '.ex button{display:block;width:100%;text-align:left;background:#fff;border:1px solid #d6dde6;border-radius:7px;' +
       'padding:10px 13px;margin:0 0 6px;font-family:inherit;font-size:16px;line-height:1.4;color:#111;cursor:pointer}' +
     '.ex button:hover{border-color:#D97757;background:#fffaf7}' +
     '.note{margin:14px 0 0;font-size:15px;color:#1f2937}' +
+    '.composer{margin-top:16px}' +
+    '.aa-new{background:#fff;color:#111;border:1px solid #9aa5b1;border-radius:6px;font-size:14px;font-weight:600;padding:6px 12px;cursor:pointer}' +
     '</style></head><body>' +
     abyAdminNav('/admin/ask') +
     '<main><div class="card">' +
     '<h2>Ask Claude</h2>' +
-    '<p class="lead">Ask anything about ABY&rsquo;s quotes, firms, brokers, clients and sales. Claude looks it up and answers. ' +
-    'It is AI, so check anything you act on &mdash; and it cannot change anything.</p>' +
-    '<div data-assist-line><textarea id="aaQuestion" placeholder="Type a question, then press Ask Claude"></textarea>' +
-    '<div class="row"><button class="aa-claude" data-assist="ask">Ask Claude</button>' +
-    '<span class="note" style="margin:0">Enter asks; Shift+Enter starts a new line.</span></div></div>' +
-    '<div class="ex"><b>Some things to try</b>' +
+    '<p class="lead">Ask anything about ABY&rsquo;s quotes, firms, brokers, clients and sales. Claude looks it up and answers, ' +
+    'and remembers this conversation, so you can follow up. It is AI, so check anything you act on &mdash; and it cannot change anything.</p>' +
+    // ⭐ A CONVERSATION, NOT TWO BOXES (Eric, 10-06-2026: "I sort of wish that it looked a little more like chatting with
+    // Claude or ChatGPT"). admin-assist.js fills #aaChat; the box to type in stays at the bottom, under the last answer.
+    '<div id="aaChat"></div>' +
+    '<div class="ex" id="aaExamples"><b>Some things to try</b>' +
     examples.map(function (q) {
       return '<button type="button" onclick="var t=document.getElementById(&#39;aaQuestion&#39;);t.value=this.textContent;t.focus()">' +
         q.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</button>';
     }).join('') +
     '</div>' +
+    '<div class="composer"><textarea id="aaQuestion" placeholder="Type a question or a follow-up, then press Ask Claude"></textarea>' +
+    '<div class="row"><button class="aa-claude" data-assist="ask" data-chat="1">Ask Claude</button>' +
+    '<button type="button" class="aa-new" data-aa-new>New conversation</button>' +
+    '<span class="note" style="margin:0">Enter asks; Shift+Enter starts a new line.</span></div></div>' +
     '<p class="note">For Eric and Niels. It stops at $' + cap + ' a month and starts again on the 1st. ' +
     '<b id="aaUsage"></b></p>' +
     '</div></main>' +

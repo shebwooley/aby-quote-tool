@@ -35,7 +35,13 @@
     '.aa-claude.aa-sm{font-size:12.5px;padding:3px 10px}' +
     '.aa-out{border:2px solid #D97757;background:#fff}' +
     '.aa-out .aa-who{font-weight:700;color:#8a3d20;margin-bottom:6px}' +
-    '#aaQuestion::placeholder{color:#4b5563;opacity:1}';
+    '#aaQuestion::placeholder{color:#4b5563;opacity:1}' +
+    // The conversation: your question on the right in a white card with a dark border, Claude's answer in the orange-edged
+    // card. White behind every word of reading text (Eric: no shaded backgrounds).
+    '.aa-me{background:#fff;border:1px solid #6b7280;border-radius:10px;padding:10px 14px;margin:16px 0 6px auto;max-width:85%;width:fit-content;' +
+      'white-space:pre-wrap;font-size:16px;line-height:1.5;color:#111}' +
+    '.aa-me .aa-mewho{font-weight:700;color:#111;margin-bottom:2px;font-size:15px}' +
+    '.aa-turn{margin:8px 0 6px}';
   document.head.appendChild(css);
 
   function boxAfter(btn) {
@@ -88,7 +94,78 @@
     box.__text = d.text || '';
   }
 
+  // ── A CONVERSATION (the Ask Claude page; Eric, 10-06-2026: "I sort of wish that it looked a little more like chatting
+  // with Claude or ChatGPT ... would it know what I was talking about if I said yes they are the same") ─────────────
+  // Each turn is kept here and the earlier ones are sent with every new question (the server trims them), so a follow-up
+  // knows what "they" means. Kept for this browser tab (sessionStorage): a reload keeps it, closing the tab ends it,
+  // and New conversation clears it. ⛔ Never localStorage - a conversation about clients should not outlive the tab.
+  var CHAT_KEY = 'aby.askClaude.chat';
+  var chat = [];
+  try { chat = JSON.parse(sessionStorage.getItem(CHAT_KEY) || '[]'); if (!Array.isArray(chat)) chat = []; } catch (e) { chat = []; }
+  function saveChat() { try { sessionStorage.setItem(CHAT_KEY, JSON.stringify(chat)); } catch (e) { /* not kept */ } }
+
+  function turnHTML(t) {
+    if (t.role === 'user') return '<div class="aa-me"><div class="aa-mewho">You</div>' + esc(t.text) + '</div>';
+    var looked = t.looked || [];
+    var h = '<div class="aa-out aa-turn"><div class="aa-who">Claude’s answer (AI – check it before you act on it)</div>' +
+            '<div class="aa-text">' + esc(t.text) + '</div>';
+    if (looked.length) {
+      h += '<details><summary>What it looked up (' + looked.length + ')</summary><ul>';
+      for (var i = 0; i < looked.length; i++) {
+        var l = looked[i];
+        h += '<li>' + esc(l.why || 'a lookup') + (l.refused ? ' (refused)' : (l.rows != null ? ' (' + l.rows + ' rows)' : '')) + '</li>';
+      }
+      h += '</ul></details>';
+    }
+    return h + '</div>';
+  }
+  function paintChat(pending, err) {
+    var el = document.getElementById('aaChat');
+    if (!el) return;
+    var h = chat.map(turnHTML).join('');
+    if (pending) h += '<div class="aa-out aa-turn"><div class="aa-who">Asking Claude…</div><div class="aa-text">Claude is reading the records. This takes a few seconds.</div></div>';
+    if (err) h += '<div class="aa-out aa-turn"><div class="aa-err">' + esc(err) + '</div></div>';
+    el.innerHTML = h;
+    var ex = document.getElementById('aaExamples');
+    if (ex) ex.style.display = chat.length || pending ? 'none' : '';
+    var last = el.lastElementChild;
+    if (last && (pending || err || chat.length)) last.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  async function runChat(btn) {
+    var box = document.getElementById('aaQuestion');
+    var q = box ? box.value.trim() : '';
+    if (!q) { if (box) box.focus(); return; }
+    var history = chat.slice();
+    chat.push({ role: 'user', text: q });
+    box.value = '';
+    paintChat(true);
+    btn.disabled = true;
+    try {
+      var r = await fetch('/api/admin/assistant', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job: 'ask', question: q, history: history.map(function (t) { return { role: t.role, text: t.text }; }) }),
+      });
+      var d = await r.json().catch(function () { return { error: 'The answer could not be read (' + r.status + ').' }; });
+      if (d.usage) paintUsage(d.usage);
+      if (d.error) throw new Error(d.error);
+      chat.push({ role: 'assistant', text: d.text || '', looked: d.looked || [] });
+      saveChat();
+      paintChat(false);
+    } catch (e) {
+      // The question did not get an answer, so it leaves the conversation and goes back in the box to try again -
+      // otherwise the next question would be sent with an unanswered one in front of it.
+      chat.pop();
+      box.value = q;
+      paintChat(false, (e && e.message) || 'Could not reach the assistant. Check the connection and try again.');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  if (document.getElementById('aaChat')) paintChat(false);
+
   async function run(btn) {
+    if (btn.getAttribute('data-chat') && document.getElementById('aaChat')) return runChat(btn);
     var job = btn.getAttribute('data-assist');
     var payload = { job: job, ids: btn.getAttribute('data-ids') || '', key: btn.getAttribute('data-key') || '', label: btn.getAttribute('data-label') || '' };
     if (job === 'ask') {
@@ -120,6 +197,11 @@
     if (copy) {
       var box = copy.closest('.aa-out');
       if (box && navigator.clipboard) navigator.clipboard.writeText(box.__text || '').then(function () { copy.textContent = 'Copied'; });
+      return;
+    }
+    if (t.closest('[data-aa-new]')) {
+      chat = []; saveChat(); paintChat(false);
+      var qb = document.getElementById('aaQuestion'); if (qb) { qb.value = ''; qb.focus(); }
       return;
     }
     var close = t.closest('[data-aa-close]');

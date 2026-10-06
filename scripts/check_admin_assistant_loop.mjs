@@ -37,6 +37,7 @@ let calls = 0;
 const fakeFetch = async (url, init) => {
   calls++;
   const body = JSON.parse(init.body);
+  if (calls === 1) fakeFetch.firstMessages = body.messages;
   if (calls === 1) return { ok: true, json: async () => ({ stop_reason: 'tool_use', usage: { input_tokens: 1000000, output_tokens: 0 }, content: [
     { type: 'tool_use', id: 't1', name: 'look_up', input: { sql: 'SELECT client_name FROM quotes LIMIT 3', why: 'their open quotes' } },
     { type: 'tool_use', id: 't2', name: 'look_up', input: { sql: 'DELETE FROM quotes', why: 'tidying' } },
@@ -82,8 +83,27 @@ spentSoFar = 19.5; calls = 0;
 r = await handle(req({ job: 'ask', question: 'how many quotes?' }), { DB: stubDB(), ANTHROPIC_API_KEY: 'k' }, 'eric');
 ok('under the cap it answers', r.status === 200);
 
+// A CONVERSATION (Eric, 10-06-2026: "would it know what I was talking about if I said yes they are the same").
+const assistHistory = new Function('jsonResp', 'fetch', block + '; return assistHistory;')(jsonResp, fakeFetch);
+const turn = (role, text) => ({ role, text });
+const two = [turn('user', 'Tell me about Lone Star Insurance'), turn('assistant', 'Possibly related: Lone Star Benefits, 4 quotes.')];
+ok('a well-formed history passes through, oldest first', JSON.stringify(assistHistory(two)) === JSON.stringify([{ role: 'user', content: two[0].text }, { role: 'assistant', content: two[1].text }]));
+ok('a history that does not alternate is dropped, not guessed at', assistHistory([turn('user', 'a'), turn('user', 'b'), turn('assistant', 'c')]).length === 0);
+ok('a dangling unanswered question at the end is dropped', assistHistory([...two, turn('user', 'and?')]).length === 2);
+ok('it never starts with Claude', assistHistory([turn('assistant', 'x'), ...two])[0].role === 'user');
+ok('a long conversation is trimmed from the oldest end', (() => { const big = []; for (let i = 0; i < 10; i++) big.push(turn('user', 'q' + i + 'x'.repeat(5000)), turn('assistant', 'a' + i)); const h = assistHistory(big); return h.length <= 12 && h[h.length - 1].content === 'a9' && h.reduce((n, m) => n + m.content.length, 0) <= 24000; })());
+ok('not an array: no history', assistHistory('nope').length === 0 && assistHistory(null).length === 0);
+
+calls = 0; spentSoFar = 0; fakeFetch.firstMessages = null;
+r = await handle(req({ job: 'ask', question: 'Yes, Lone Star Benefits is the same firm', history: two }), { DB: stubDB(), ANTHROPIC_API_KEY: 'k' }, 'eric');
+const fm = fakeFetch.firstMessages || [];
+ok('a follow-up reaches the model WITH the earlier turns before it', r.status === 200 && fm.length === 3 && fm[0].content === two[0].text && fm[1].role === 'assistant' && /same firm/.test(fm[2].content));
+calls = 0; fakeFetch.firstMessages = null;
+r = await handle(req({ job: 'tidy-firms', ids: '7,8', history: two }), { DB: stubDB(), ANTHROPIC_API_KEY: 'k' }, 'eric');
+ok('history is only for Ask, never a tidy case', (fakeFetch.firstMessages || []).length === 1);
+
 let fail = 0;
 for (const [n, c] of out) { console.log((c ? 'ok    ' : 'FAIL  ') + n); if (!c) fail++; }
-if (out.length < 17) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
+if (out.length < 25) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
 console.log('\ncheck_admin_assistant_loop - ' + (out.length - fail) + ' of ' + out.length + ' passed');
 process.exit(fail ? 1 : 0);

@@ -34,7 +34,7 @@ ok('only Eric and Niels may use it', /const ASSIST_PEOPLE = \['eric', 'niels'\];
 ok('and the handler checks it first', /if \(!ASSIST_PEOPLE\.includes\(who\)\) return jsonResp/.test(src));
 ok('the route hands the handler WHO', src.includes("withAuth(request, env, (who) => handleAdminAssistant(request, env, who))"));
 ok('a missing key says so before anything else', /if \(!env\.ANTHROPIC_API_KEY\) return jsonResp/.test(src));
-const tools = src.slice(src.indexOf('const tools = [{', src.indexOf('async function handleAdminAssistant')), src.indexOf('const messages = [', src.indexOf('async function handleAdminAssistant')));
+const tools = src.slice(src.indexOf('const tools = [{', src.indexOf('async function handleAdminAssistant')), src.indexOf('const messages = ', src.indexOf('async function handleAdminAssistant')));
 ok('its only tool is the lookup', (tools.match(/name: '/g) || []).length === 1 && tools.includes("name: 'look_up'"));
 ok('every lookup goes through the gate', /const safe = assistLookupSafe\(sql\);/.test(src));
 
@@ -66,8 +66,18 @@ ok('each answer reports the month so far', /usage: \{ month, spent: await assist
 ok('the Ask Claude page has the usage line, and the cap is not typed twice', src.includes('<b id="aaUsage"></b>') && src.includes("It stops at $' + cap + ' a month") && src.includes('adminAskHTML(ASSIST_MONTHLY_CAP_USD)'));
 ok('the page fills it in', client.includes("'Used this month: ' + money(u.spent)") && client.includes("fetch('/api/admin/assistant/usage')"));
 
+// A CONVERSATION (Eric, 10-06-2026: "I sort of wish that it looked a little more like chatting with Claude or ChatGPT").
+ok('the Ask Claude page is a conversation: turns above, the box below', /function adminAskHTML[\s\S]*?id="aaChat"[\s\S]*?id="aaQuestion"[\s\S]*?data-chat="1"/.test(src));
+ok('it has New conversation', /function adminAskHTML[\s\S]*?data-aa-new>New conversation</.test(src));
+ok('each follow-up sends the earlier turns', client.includes("body: JSON.stringify({ job: 'ask', question: q, history: history.map("));
+ok('the conversation is kept for the TAB only, never in localStorage', client.includes('sessionStorage.setItem(CHAT_KEY') && !/localStorage\./.test(client));
+ok('an unanswered question leaves the conversation and goes back in the box', client.includes('chat.pop();') && client.includes('box.value = q;'));
+ok('the server reads history for Ask only', src.includes("const history = job === 'ask' ? assistHistory(body.history) : [];"));
+ok('and puts it before the new question', src.includes("const messages = history.concat([{ role: 'user', content: first }]);"));
+ok('told a fact, it says it cannot change records and where it is done', src.includes('say plainly that you cannot change records yourself'));
+
 let fail = 0;
 for (const [n, c] of out) { console.log((c ? 'ok    ' : 'FAIL  ') + n); if (!c) fail++; }
-if (out.length < 40) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
+if (out.length < 50) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
 console.log('\ncheck_admin_assistant - ' + (out.length - fail) + ' of ' + out.length + ' passed');
 process.exit(fail ? 1 : 0);
