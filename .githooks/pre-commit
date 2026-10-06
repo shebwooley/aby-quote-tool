@@ -98,6 +98,15 @@ if ! node scripts/check_application_products.mjs > /dev/null 2>&1; then
   exit 1
 fi
 
+# A REWORDED OPTION KEEPS THE ANSWERS GIVEN IN ITS OLD WORDS (10-06-2026). A saved choice IS the option's text,
+# so rewording one unticks every earlier answer unless `formerly` maps the old text to the new.
+if ! node scripts/check_reworded_options.mjs > /dev/null 2>&1; then
+  node scripts/check_reworded_options.mjs
+  echo ""
+  echo "A reworded application option would lose earlier answers. Commit refused."
+  exit 1
+fi
+
 # 🔴🔴 CAN A USER REACH WHAT WE BUILT? Added 2026-08-23 after F-367 -- the employer corrects the
 # headcount -- was found to be built, deployed, CORRECT and unreachable for a day. It renders only
 # on a shared quote link, and the only way to mint one was a button buried in an expanded row of

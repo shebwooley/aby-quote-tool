@@ -494,7 +494,11 @@
         { key: 'hsa.contribBy', label: 'Who contributes to the accounts?', type: 'multi', forms: ['hsa'], options: ['The employer', 'Employees, through payroll'], head: true },
         { key: 'hsa.funding', label: 'How should contributions reach the accounts?', type: 'choice', forms: ['hsa'],
           options: ['Option 1 (preferred): direct deposit through your payroll. ABY gives you the account numbers once the accounts open.',
-                    'Option 2: you send ABY a contribution file each payroll and ABY draws the money from your account.'],
+                    'Option 2: you upload a contribution file each payroll and ABY draws the money from your account.'],
+          // 10-06-2026, ABY's request via Eric: "upload a file instead of sending it to ABY". A saved answer IS the
+          // option's text, so an employer who picked option 2 before the change still shows it picked (apply.js).
+          formerly: { 'Option 2: you send ABY a contribution file each payroll and ABY draws the money from your account.':
+                      'Option 2: you upload a contribution file each payroll and ABY draws the money from your account.' },
           hint: 'With option 2, ABY needs your bank details and a signed debit authorization. Those go through the secure upload, never on this page.' }
       ]
     },

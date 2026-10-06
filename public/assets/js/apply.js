@@ -234,9 +234,12 @@
         break;
       case 'choice':
         lbl = '<div class="lbl">' + esc(q.label) + tag + '</div>';
+        // An option reworded after people answered it: `formerly` maps the old text to the new, so the old answer
+        // still shows as picked (10-06-2026, the HSA funding option). It is saved in the new words on the next save.
+        var cur = (q.formerly && q.formerly[v]) || v;
         input = '<div class="opts">' + q.options.map(function (o) {
           return '<label><input type="radio" name="' + id + '" data-key="' + esc(q.key) + '" value="' + esc(o) + '"' +
-            (v === o ? ' checked' : '') + dis + '> ' + esc(o) + '</label>';
+            (cur === o ? ' checked' : '') + dis + '> ' + esc(o) + '</label>';
         }).join('') + '</div>';
         break;
       case 'multi':
