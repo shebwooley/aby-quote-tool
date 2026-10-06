@@ -107,6 +107,17 @@ if ! node scripts/check_reworded_options.mjs > /dev/null 2>&1; then
   exit 1
 fi
 
+# THE ADMIN ASSISTANT READS AND DRAFTS AND CAN NEVER WRITE (F-603, 10-06-2026). Both instant: the gate, who may
+# use it and its doors; then its real server loop against a stub database and a stub model.
+for c in check_admin_assistant check_admin_assistant_loop; do
+  if ! node scripts/$c.mjs > /dev/null 2>&1; then
+    node scripts/$c.mjs
+    echo ""
+    echo "The admin assistant check failed ($c). Commit refused."
+    exit 1
+  fi
+done
+
 # 🔴🔴 CAN A USER REACH WHAT WE BUILT? Added 2026-08-23 after F-367 -- the employer corrects the
 # headcount -- was found to be built, deployed, CORRECT and unreachable for a day. It renders only
 # on a shared quote link, and the only way to mint one was a button buried in an expanded row of

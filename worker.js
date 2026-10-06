@@ -153,6 +153,8 @@ export default {
     if (path === '/api/admin/crm'        && method === 'GET')  return withAuth(request, env, () => handleCrmList(request, env));
     if (path === '/api/admin/crm'        && method === 'POST') return withAuth(request, env, () => handleCrmAdd(request, env));
     if (path === '/api/admin/crm/tags'   && method === 'GET')  return withAuth(request, env, () => handleCrmTags(request, env));
+    // F-603: the read-and-draft assistant. withAuth hands over WHO; the handler admits Eric and Niels only.
+    if (path === '/api/admin/assistant'  && method === 'POST') return withAuth(request, env, (who) => handleAdminAssistant(request, env, who));
     if (path === '/api/admin/crm/delete' && method === 'POST') return withAuth(request, env, () => handleCrmDelete(request, env));
     if (path === '/api/admin/crm/person'  && method === 'GET')  return withAuth(request, env, () => handleCrmPerson(request, env));
     if (path === '/api/admin/crm/link'    && method === 'POST') return withAuth(request, env, () => handleCrmLinkPerson(request, env));
@@ -2676,6 +2678,201 @@ async function withSessionGuard(resp) {
     // A guard that cannot be added must never cost the page. Serve it unmodified.
     return resp;
   }
+}
+
+// ============================================================================================
+// THE ADMIN ASSISTANT (F-603, Eric 10-06-2026: "b, c, e" and "Me and Niels only at first").
+//
+// ⭐ READ AND DRAFT, NEVER ACT. It answers three kinds of request and changes nothing anywhere:
+//   tidy-people / tidy-firms / tidy-named - reads the records the tidy screens paired and writes a
+//     short case: likely the same, likely not, or cannot tell, and why. The existing button is still
+//     pressed by a person; this never merges, renames or dismisses.
+//   followup - drafts a note to a broker asking what happened to their open quotes. It is a DRAFT on
+//     the screen: nothing is sent, nothing is saved, and no outcome is ever guessed or written.
+//   ask - answers a question about the quote log by looking things up.
+// ⛔ Its one tool is a READ-ONLY lookup (assistLookupSafe refuses anything but a plain SELECT), and
+// there is no tool that writes. That is the product, not caution: the admin's best properties are its
+// refusals (ABY-ADMIN-AGENT-2026-09-24.md in the notes).
+// 🔑 The model key is ABY's own Worker secret, ANTHROPIC_API_KEY (wrangler secret put). Absent, every
+// call answers "not switched on yet" and nothing else changes.
+// ============================================================================================
+const ASSIST_MODEL = 'claude-sonnet-5-5';
+const ASSIST_PEOPLE = ['eric', 'niels'];
+const ASSIST_JOBS = ['tidy-people', 'tidy-firms', 'tidy-named', 'followup', 'ask'];
+const ASSIST_MAX_TURNS = 6;
+
+const ASSIST_SCHEMA = [
+  'Database tables (SQLite / Cloudflare D1). Read-only for you.',
+  'quotes: id, quote_number, created_at (ISO date the quote was run), client_name (the employer), effective_date (free text; may be prose),',
+  '  broker_name, broker_agency (the firm as typed), broker_email, broker_phone, rep_name, state, products (JSON),',
+  "  status ('P' pending - which for quotes loaded from the old spreadsheet often means nobody recorded the outcome -,",
+  "  'I' in process, 'S' sold, 'D' dead, 'N' no response), source_tag (blank = made in the tool, 'import-%' = loaded from the old",
+  "  spreadsheet, 'manual' = logged by hand), agency_id, client_id, employee_count, notes, retired_at (not null = retired).",
+  'agencies (the firms): id, name, city, state, website, relationship (succeeded / alias / ...), parent_id, assigned_rep, notes, created_at.',
+  'people (agents at firms): id, name, agency_id, city, phone, source, disposition, created_at.',
+  'broker_directory (one row per email address seen on quotes): email, name, phone, agency, first_seen, last_seen, quote_count, person_id, agency_id.',
+  'aby_sales (sales announced by email): quote_id and sale details.',
+  "crm_events (notes and tags on a firm or person): entity_type ('agency' | 'person'), entity_id, kind ('note' | 'tag'), label, body, happened_at.",
+  'Quotes join to firms by lower(trim(quotes.broker_agency)) = lower(trim(agencies.name)), or by quotes.agency_id;',
+  'to people through lower(trim(quotes.broker_email)) = broker_directory.email and broker_directory.person_id.',
+].join('\n');
+
+function assistSystem(job, who) {
+  const name = who === 'niels' ? 'Niels' : 'Eric';
+  const rules = [
+    'You help ' + name + ' at ABY (a benefits administrator in Texas) inside the ABY admin. You only READ and DRAFT. You never change anything, and you have no way to.',
+    'Write plain, short American English for a busy non-technical reader. No code words, no SQL in the answer, no table names. Use dates as mm-dd-yyyy.',
+    'Never state as fact what the data does not show. Say what you looked at and how sure you are.',
+    'Personal email domains (gmail, yahoo, hotmail, outlook, aol, icloud, att, sbcglobal and the like) are NEVER evidence that two records are one firm or one person.',
+    'A solo agent whose firm really is their own name is not an error.',
+    'Never guess the outcome of a quote. A pending quote from the old spreadsheet may be open, sold elsewhere or dead, and only the broker knows.',
+    ASSIST_SCHEMA,
+  ];
+  if (job === 'followup') {
+    rules.push('Your job now: draft a short, warm email from ' + name + ' at ABY to this broker, asking which of their open quotes are still alive, listing each quote by employer name and the month it was run. ' +
+      'It is going to a broker, so it must never mention internal notes, priorities, ratings or anything ABY thinks about them. Under 150 words. ' +
+      'After the email, add one line starting "For you:" with anything ' + name + ' should know before sending (for example that most rows came from the old spreadsheet). Output the email first, with a Subject line.');
+  } else if (job === 'ask') {
+    rules.push('Your job now: answer the question about the quote log. Look things up as needed. Give the answer first, in a sentence or two, then the few figures behind it. If the data cannot answer it, say so and say what is missing.');
+  } else {
+    rules.push('Your job now: the tidy screen paired these records because a rule thinks they may be the same ' + (job === 'tidy-people' ? 'person' : 'firm') + '. ' +
+      'Read the facts given (and look up more if useful) and write: first line "Likely the same", "Likely different" or "Cannot tell"; then 2 to 5 short lines of evidence (quote dates, whether the histories overlap or follow one another, cities, BUSINESS email domains, who quoted); then one line on what a person should check before deciding. ' +
+      'The decision and the button stay with ' + name + '.');
+  }
+  return rules.join('\n\n');
+}
+
+// ⛔ THE ONLY GATE BETWEEN THE MODEL AND THE DATABASE. D1 has no read-only connection, so this refuses
+// anything that is not one plain SELECT (or WITH ... SELECT): no second statement, no write keyword.
+function assistLookupSafe(sql) {
+  let s = String(sql || '').trim();
+  while (s.endsWith(';')) s = s.slice(0, -1).trim();
+  if (!s) return null;
+  if (s.includes(';')) return null;
+  const low = s.toLowerCase();
+  if (!(low.startsWith('select') || low.startsWith('with'))) return null;
+  const banned = ['insert', 'update', 'delete', 'drop', 'alter', 'create', 'replace', 'attach', 'detach', 'pragma', 'vacuum', 'reindex', 'truncate'];
+  const words = low.split(/[^a-z_]+/);
+  for (const b of banned) if (words.includes(b)) return null;
+  return s;
+}
+
+async function assistLookup(env, sql) {
+  const safe = assistLookupSafe(sql);
+  if (!safe) return { error: 'Refused: only one plain SELECT is allowed.' };
+  try {
+    const { results } = await env.DB.prepare(safe).all();
+    const rows = (results || []).slice(0, 100);
+    let text = JSON.stringify(rows);
+    if (text.length > 20000) text = text.slice(0, 20000) + ' ...(cut)';
+    return { rows: rows.length, more: (results || []).length > 100, text };
+  } catch (e) {
+    return { error: 'The lookup failed: ' + String(e && e.message || e).slice(0, 300) };
+  }
+}
+
+// The facts each screen already found, fetched here so the model starts from the right rows rather
+// than re-deriving the screen's own matching rule.
+async function assistFacts(env, job, ids, key) {
+  const DB = env.DB;
+  const out = [];
+  if (job === 'followup') {
+    const { results } = await DB.prepare(
+      "SELECT quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_email, state, source_tag " +
+      "FROM quotes WHERE COALESCE(status,'P')='P' AND retired_at IS NULL " +
+      "AND LOWER(COALESCE(NULLIF(broker_email,''), NULLIF(broker_agency,''), '?')) = ? ORDER BY created_at DESC LIMIT 40").bind(String(key || '').toLowerCase()).all();
+    out.push({ openQuotes: results || [] });
+    return out;
+  }
+  for (const id of ids) {
+    if (job === 'tidy-people') {
+      const p = await DB.prepare('SELECT id, name, agency_id, city, phone, source, disposition, created_at FROM people WHERE id = ?').bind(id).first();
+      const em = await DB.prepare('SELECT email, name, agency, first_seen, last_seen, quote_count FROM broker_directory WHERE person_id = ?').bind(id).all();
+      const emails = (em.results || []).map((r) => String(r.email || '').toLowerCase()).filter(Boolean);
+      let quotes = [];
+      if (emails.length) {
+        const marks = emails.map(() => '?').join(',');
+        const q = await DB.prepare('SELECT created_at, client_name, broker_agency, broker_name, state, status, source_tag FROM quotes WHERE lower(trim(broker_email)) IN (' + marks + ') ORDER BY created_at DESC LIMIT 25').bind(...emails).all();
+        quotes = q.results || [];
+      }
+      out.push({ person: p, addresses: em.results || [], recentQuotes: quotes });
+    } else {
+      const a = await DB.prepare('SELECT id, name, city, state, website, relationship, created_at FROM agencies WHERE id = ?').bind(id).first();
+      let quotes = [], agents = [];
+      if (a) {
+        const q = await DB.prepare('SELECT created_at, client_name, broker_name, broker_email, state, status, source_tag FROM quotes WHERE lower(trim(broker_agency)) = lower(trim(?)) OR agency_id = ? ORDER BY created_at DESC LIMIT 25').bind(a.name, a.id).all();
+        quotes = q.results || [];
+        const g = await DB.prepare('SELECT name, city FROM people WHERE agency_id = ? LIMIT 20').bind(a.id).all();
+        agents = g.results || [];
+      }
+      out.push({ firm: a, recentQuotes: quotes, agents });
+    }
+  }
+  return out;
+}
+
+async function handleAdminAssistant(request, env, who) {
+  if (!ASSIST_PEOPLE.includes(who)) return jsonResp({ error: 'The assistant is for Eric and Niels for now.' }, 403);
+  if (!env.ANTHROPIC_API_KEY) return jsonResp({ error: "The assistant is not switched on yet. It needs ABY's model key added to the Worker." }, 503);
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const job = String(body.job || '');
+  if (!ASSIST_JOBS.includes(job)) return jsonResp({ error: 'Unknown request.' }, 400);
+  const ids = (Array.isArray(body.ids) ? body.ids : String(body.ids || '').split(','))
+    .map((x) => String(x).trim()).filter(Boolean).slice(0, 10);
+  const key = String(body.key || '').slice(0, 200);
+  const label = String(body.label || '').slice(0, 200);
+  const question = String(body.question || '').slice(0, 1000).trim();
+  if (job === 'ask' && !question) return jsonResp({ error: 'Type a question first.' }, 400);
+  if (job.startsWith('tidy') && ids.length < 1) return jsonResp({ error: 'Nothing to look at.' }, 400);
+  if (job === 'followup' && !key) return jsonResp({ error: 'Nothing to look at.' }, 400);
+
+  let first;
+  if (job === 'ask') {
+    first = 'Question: ' + question;
+  } else {
+    const facts = await assistFacts(env, job, ids, key);
+    first = (job === 'followup' ? 'The broker: ' + (label || key) + '.' : 'The records the screen paired' + (label ? ' (' + label + ')' : '') + '.') +
+      '\n\nWhat the database holds on them:\n' + JSON.stringify(facts).slice(0, 30000);
+  }
+
+  const tools = [{
+    name: 'look_up',
+    description: 'Run ONE read-only SQL SELECT against the ABY database and get up to 100 rows back as JSON. Anything that is not a plain SELECT is refused.',
+    input_schema: { type: 'object', properties: {
+      sql: { type: 'string', description: 'One SQLite SELECT statement. Use LIMIT.' },
+      why: { type: 'string', description: 'In a few plain words, what you are checking.' },
+    }, required: ['sql', 'why'] },
+  }];
+  const messages = [{ role: 'user', content: first }];
+  const looked = [];
+  for (let turn = 0; turn < ASSIST_MAX_TURNS; turn++) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify({ model: ASSIST_MODEL, max_tokens: 1500, system: assistSystem(job, who), tools, messages }),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      return jsonResp({ error: 'The assistant could not answer just now (' + res.status + '). ' + t.slice(0, 200) }, 502);
+    }
+    const msg = await res.json();
+    const content = msg.content || [];
+    const uses = content.filter((c) => c.type === 'tool_use');
+    if (msg.stop_reason !== 'tool_use' || !uses.length || turn === ASSIST_MAX_TURNS - 1) {
+      const text = content.filter((c) => c.type === 'text').map((c) => c.text).join('\n').trim();
+      return jsonResp({ ok: true, job, text: text || 'No answer came back.', looked });
+    }
+    messages.push({ role: 'assistant', content });
+    const results = [];
+    for (const u of uses) {
+      const r = await assistLookup(env, u.input && u.input.sql);
+      looked.push({ why: String(u.input && u.input.why || ''), rows: r.rows == null ? null : r.rows, refused: !!r.error });
+      results.push({ type: 'tool_result', tool_use_id: u.id, content: r.error ? r.error : (r.text + (r.more ? ' (more rows exist)' : '')) });
+    }
+    messages.push({ role: 'user', content: results });
+  }
+  return jsonResp({ error: 'The assistant ran out of steps.' }, 502);
 }
 
 async function withAuth(request, env, handler) {
@@ -9281,7 +9478,8 @@ ${abyAdminNav('/admin/brokers')}
       + '<button style="font-size:12px;padding:3px 9px" onclick="noteGroup(' + "'" + kind + "'" + ',' + g + ')">Tell me</button>'
       + '<span class="muted" id="ntm_' + kind + '_' + g + '" style="font-size:12px"></span></div>';
    h += '<div style="margin-top:5px"><a href="#" onclick="notDupes(' + "'" + kind + "'" + ',' + g + ');return false" '
-      + 'style="font-size:12px;color:#5b6b7f">These are different firms &mdash; leave them alone</a></div></div>';
+      + 'style="font-size:12px;color:#5b6b7f">These are different firms &mdash; leave them alone</a> '
+      + '<button class="aa-btn" data-assist="tidy-firms" data-ids="' + esc(grp.map(function(a){ return a.id; }).join(',')) + '" data-label="' + esc(grp[0] ? grp[0].name : '') + '">Look into this</button></div></div>';
    return h;
  }
 
@@ -9414,7 +9612,8 @@ ${abyAdminNav('/admin/brokers')}
        h += '<div style="margin-top:5px"><button style="font-size:12px;padding:3px 9px" '
           + 'onclick="namedNot(' + nd + ')">Not the same &mdash; leave it</button> '
           + '<span class="muted" style="font-size:12px">A solo agent&rsquo;s firm really can be '
-          + 'their own name.</span></div></div>';
+          + 'their own name.</span> <button class="aa-btn" data-assist="tidy-named" data-ids="'
+          + esc([nr.id].concat(nr.options.map(function(o){ return o.id; })).join(',')) + '" data-label="' + esc(nr.name) + '">Look into this</button></div></div>';
      }
      h += '</div>';
    }
@@ -10543,7 +10742,8 @@ ${abyAdminNav('/admin/brokers')}
      }
      h += '<div style="margin-top:5px"><button style="font-size:12px;padding:3px 9px" '
         + 'onclick="pdNot(' + i + ')">Not the same person</button> '
-        + '<span class="muted" style="font-size:12px">Two people really can share a name.</span>'
+        + '<span class="muted" style="font-size:12px">Two people really can share a name.</span> '
+        + '<button class="aa-btn" data-assist="tidy-people" data-ids="' + esc(g.people.map(function(p){ return p.id; }).join(',')) + '" data-label="' + esc(g.name) + '">Look into this</button>'
         + '</div></div>';
    }
    box.innerHTML = h;
@@ -11094,7 +11294,7 @@ ${abyAdminNav('/admin/brokers')}
    await loadMkt();
    openFirm(id);
  }
-</script></body></html>`;
+</script><script src="/assets/js/admin-assist.js"></script></body></html>`;
 }
 
 // The rate viewer. Reads the SAME pricing.js the quote tool uses, loaded as a script, so there is
@@ -15473,7 +15673,7 @@ ${abyAdminNav('/admin/today')}
 
  function rowHTML(r){
    var od = (r.days!==null && r.days<0);
-   var h='<div class="row'+(od?' od':'')+'" data-row="'+esc(r.id||'')+'">';
+   var h='<div class="row'+(od?' od':'')+'" data-row="'+esc(r.id||'')+'" data-assist-line>';
    // ⭐ THE TIME SITS UNDER THE DAY, not inside the title. It belongs to WHEN, and putting it in
    // the text would make it unsortable by eye down a column of days.
    h+='<div class="when">'+(r.dueOn?esc(dayLabel(r.dueOn)):'<span class="muted">no date</span>')
@@ -15490,6 +15690,8 @@ ${abyAdminNav('/admin/today')}
    // just need to know about; a request is work, and the place the work happens is the quote log's
    // requests tab. Without this the row tells you something is waiting and leaves you to find it.
    if(r.kind==='request') h+='<a href="/admin?view=requests" class="ed">Open</a>';
+   // F-603: a drafted note to this broker asking which open quotes are still alive. A DRAFT on screen only.
+   if(r.kind==='followup') h+='<a href="#" class="ed" data-assist="followup" data-key="'+esc(String(r.id||'').replace(/^followup:/,''))+'" data-label="'+esc(r.entity||'')+'">Draft a note</a>';
    if(r.kind==='todo'){
      // ⭐ MOVE UP AND DOWN ONLY WHERE THERE IS NO TIME. Two meetings at 9:00 and 14:00 already
      // have an order, and a hand-set number that disagreed with the clock would be a second
@@ -15868,6 +16070,7 @@ ${abyAdminNav('/admin/today')}
  if(location.search.indexOf('view=calendar')!==-1) setLens('month');
  load();
 </script>
+<script src="/assets/js/admin-assist.js"></script>
 </body></html>`;
 }
 
@@ -18003,6 +18206,11 @@ ${abyAdminNav('/admin')}
     <div class="msg" id="qMsg"></div>
   </div>
 </details>
+<!-- F-603: ask the assistant about the quote log. Eric and Niels only; it reads and answers, it changes nothing. -->
+<div style="margin:.6rem 0 .8rem;display:flex;gap:8px;align-items:center" data-assist-line>
+  <input id="aaQuestion" type="text" placeholder="Ask about the quote log - for example, which firms quoted most this year but bought nothing" style="flex:1;padding:.45rem .6rem;border:1px solid #c8d2de;border-radius:6px;font-size:14px">
+  <button class="go" data-assist="ask">Ask</button>
+</div>
 <div class="tabs">
   <button class="tab active" data-status="P">Pending</button>
   <!-- IN PROCESS. Eric agreed this status on 2026-08-18 -- "ones that are buying but we don't
@@ -20107,6 +20315,7 @@ async function deleteCommitment(id) {
   }
 }
 </script>
+<script src="/assets/js/admin-assist.js"></script>
 </body>
 </html>`;
 }

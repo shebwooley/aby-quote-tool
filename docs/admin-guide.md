@@ -130,10 +130,15 @@ sent to somebody.
 - 🔴 **CHECK BEFORE YOU RING, AND THE PAGE SAYS SO.** Most of the quotes behind these rows did not
   come through the tool at all — they were loaded from the quote spreadsheet, and **on those rows
   Pending means either *still open* or *nobody wrote down what happened*.** Nothing in the data can
-  tell the two apart. On the real book that is **122 of the 130** quotes in the window. So each row
-  says how many of its quotes came from the spreadsheet, and a line above the list gives the total.
+  tell the two apart. On the real book that was **122 of the 130** quotes in the window. *(The rows
+  used to say how many came from the spreadsheet; that count was taken off the page when the
+  follow-up wording was reworded, so check the quote log before you ring.)*
   ▶️ **If somebody knows those outcomes, recording them is what turns this from a caveat into a
   clean list.**
+- ⭐ **DRAFT A NOTE (Eric and Niels only).** Each follow-up row has *Draft a note*: the assistant reads
+  that broker's open quotes and writes a short email asking which are still alive, with one line for
+  you underneath. **It is a draft on the screen - nothing is saved and nothing is sent**, and it never
+  guesses or records an outcome. Copy it, change it, send it yourself if you want to.
 - ⏳ **RFP Watch has nothing in it yet**, so that chip reads zero. It is wired now rather than later
   because the day those dates arrive they are hard external deadlines, and a missed close date is an
   opportunity that cannot be recovered. **The chip stays on screen showing a zero rather than
@@ -725,6 +730,22 @@ domain that is simply their own name. **Press *Not the same — leave it*** and 
 changing the relationship back undoes it.
 
 ---
+
+## The assistant — Eric and Niels only (built 10-06-2026)
+
+**It reads and drafts. It never changes anything** — it has no way to: its only tool is a lookup that
+refuses anything but reading. Signed in as the office, every door answers that it is for Eric and Niels.
+
+- **Draft a note** on a Today follow-up: a short email to that broker asking which open quotes are
+  still alive, plus a line for you. Nothing is saved or sent.
+- **Look into this** on each tidy screen (*Same person twice*, *two records for one firm*, *a firm row
+  that is a person's name*): it reads both records and says *likely the same*, *likely different* or
+  *cannot tell*, with the evidence. **The Keep / Same firm / Not the same buttons are still yours to
+  press**; personal email addresses are never treated as evidence.
+- **Ask** on the quote log: a question about the log, answered from the data, with what it looked up.
+
+Every answer shows *What it looked up*, so you can see where it came from. ⚠️ It needs ABY's model key
+on the Worker (`ANTHROPIC_API_KEY`); until that is added, every door says it is not switched on yet.
 
 ## RFP Watch
 
