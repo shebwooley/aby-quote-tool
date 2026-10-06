@@ -746,6 +746,7 @@ refuses anything but reading. Signed in as the office, every door answers that i
 
 Every answer shows *What it looked up*, so you can see where it came from. ⚠️ It needs ABY's model key
 on the Worker (`ANTHROPIC_API_KEY`); until that is added, every door says it is not switched on yet.
+💵 **It stops at $20 a month** (Eric, 10-06-2026) and says so; it starts again on the 1st.
 
 ## RFP Watch
 

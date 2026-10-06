@@ -2700,6 +2700,27 @@ const ASSIST_MODEL = 'claude-sonnet-5-5';
 const ASSIST_PEOPLE = ['eric', 'niels'];
 const ASSIST_JOBS = ['tidy-people', 'tidy-firms', 'tidy-named', 'followup', 'ask'];
 const ASSIST_MAX_TURNS = 6;
+// 💵 THE MONTHLY CAP, Eric 10-06-2026: "$20". Counted in dollars from the token counts each answer reports, at
+// ASSIST_PRICE (dollars per million tokens). ⚠️ Those rates are the Sonnet list prices as known when this was
+// written - check them against Anthropic's price list if the model changes. A run already under way may finish a
+// little past the cap; the next one is refused until the 1st.
+const ASSIST_MONTHLY_CAP_USD = 20;
+const ASSIST_PRICE = { input: 3, output: 15 };
+const ASSIST_USAGE_TABLE = 'CREATE TABLE IF NOT EXISTS assist_usage (month TEXT PRIMARY KEY, dollars REAL NOT NULL DEFAULT 0, calls INTEGER NOT NULL DEFAULT 0)';
+
+async function assistSpent(env, month) {
+  await env.DB.prepare(ASSIST_USAGE_TABLE).run();
+  const row = await env.DB.prepare('SELECT dollars FROM assist_usage WHERE month = ?').bind(month).first();
+  return Number(row && row.dollars) || 0;
+}
+async function assistCharge(env, month, usage) {
+  const u = usage || {};
+  const tokensIn = (Number(u.input_tokens) || 0) + (Number(u.cache_creation_input_tokens) || 0) + (Number(u.cache_read_input_tokens) || 0);
+  const dollars = (tokensIn * ASSIST_PRICE.input + (Number(u.output_tokens) || 0) * ASSIST_PRICE.output) / 1000000;
+  await env.DB.prepare('INSERT INTO assist_usage (month, dollars, calls) VALUES (?, ?, 1) ' +
+    'ON CONFLICT(month) DO UPDATE SET dollars = dollars + excluded.dollars, calls = calls + 1').bind(month, dollars).run();
+  return dollars;
+}
 
 const ASSIST_SCHEMA = [
   'Database tables (SQLite / Cloudflare D1). Read-only for you.',
@@ -2826,6 +2847,10 @@ async function handleAdminAssistant(request, env, who) {
   if (job === 'ask' && !question) return jsonResp({ error: 'Type a question first.' }, 400);
   if (job.startsWith('tidy') && ids.length < 1) return jsonResp({ error: 'Nothing to look at.' }, 400);
   if (job === 'followup' && !key) return jsonResp({ error: 'Nothing to look at.' }, 400);
+  const month = new Date().toISOString().slice(0, 7);
+  if (await assistSpent(env, month) >= ASSIST_MONTHLY_CAP_USD) {
+    return jsonResp({ error: "This month's $" + ASSIST_MONTHLY_CAP_USD + ' limit for the assistant is used up. It starts again on the 1st.' }, 429);
+  }
 
   let first;
   if (job === 'ask') {
@@ -2857,6 +2882,7 @@ async function handleAdminAssistant(request, env, who) {
       return jsonResp({ error: 'The assistant could not answer just now (' + res.status + '). ' + t.slice(0, 200) }, 502);
     }
     const msg = await res.json();
+    await assistCharge(env, month, msg.usage);
     const content = msg.content || [];
     const uses = content.filter((c) => c.type === 'tool_use');
     if (msg.stop_reason !== 'tool_use' || !uses.length || turn === ASSIST_MAX_TURNS - 1) {
@@ -17418,6 +17444,8 @@ const MIGRATIONS = [
   ...APPLICATION_MIGRATIONS,
   // F-631: the agency's quote defaults. Defined beside their handlers in lib/agency-defaults.js.
   ...AGENCY_DEFAULT_MIGRATIONS,
+  // F-603: the admin assistant's monthly spend (its $20 cap). The handler also creates it on first use.
+  { sql: ASSIST_USAGE_TABLE, table: 'assist_usage', column: 'dollars' },
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column

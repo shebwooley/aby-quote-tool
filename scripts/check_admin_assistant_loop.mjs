@@ -17,13 +17,15 @@ const out = [];
 const ok = (n, c) => out.push([n, !!c]);
 
 const ran = [];
+let spentSoFar = 0;
 function stubDB() {
   return {
     prepare(sql) {
       const st = { sql, args: [] };
       st.bind = (...x) => { st.args = x; return st; };
       st.all = async () => { ran.push({ sql: st.sql, args: st.args }); return { results: [{ client_name: 'Acme Dental', created_at: '2026-08-02' }] }; };
-      st.first = async () => { ran.push({ sql: st.sql, args: st.args }); return { id: 1, name: 'x' }; };
+      st.first = async () => { ran.push({ sql: st.sql, args: st.args }); return /assist_usage/.test(st.sql) ? { dollars: spentSoFar } : { id: 1, name: 'x' }; };
+      st.run = async () => { ran.push({ sql: st.sql, args: st.args }); return {}; };
       return st;
     },
   };
@@ -34,7 +36,7 @@ let calls = 0;
 const fakeFetch = async (url, init) => {
   calls++;
   const body = JSON.parse(init.body);
-  if (calls === 1) return { ok: true, json: async () => ({ stop_reason: 'tool_use', content: [
+  if (calls === 1) return { ok: true, json: async () => ({ stop_reason: 'tool_use', usage: { input_tokens: 1000000, output_tokens: 0 }, content: [
     { type: 'tool_use', id: 't1', name: 'look_up', input: { sql: 'SELECT client_name FROM quotes LIMIT 3', why: 'their open quotes' } },
     { type: 'tool_use', id: 't2', name: 'look_up', input: { sql: 'DELETE FROM quotes', why: 'tidying' } },
   ] }) };
@@ -63,9 +65,21 @@ ok('and it is reported as refused', (r.data.looked || []).some((l) => l.refused 
 const lastTool = (fakeFetch.lastMessages || []).slice(-1)[0];
 ok('the model was told the write was refused', JSON.stringify(lastTool || {}).includes('Refused: only one plain SELECT'));
 ok('the model was called twice (lookup, then answer)', calls === 2);
+const charges = ran.filter((q) => /INSERT INTO assist_usage/.test(q.sql));
+ok('each answer is charged to this month', charges.length === 2 && charges[0].args[0] === new Date().toISOString().slice(0, 7));
+ok('a million input tokens is charged as $3', charges[0].args[1] === 3);
+
+// The $20 cap (Eric, 10-06-2026).
+spentSoFar = 20; calls = 0;
+r = await handle(req({ job: 'ask', question: 'how many quotes?' }), { DB: stubDB(), ANTHROPIC_API_KEY: 'k' }, 'eric');
+ok('at $20 spent this month the assistant refuses', r.status === 429 && /\$20 limit/.test(r.data.error));
+ok('and the model is never called', calls === 0);
+spentSoFar = 19.5; calls = 0;
+r = await handle(req({ job: 'ask', question: 'how many quotes?' }), { DB: stubDB(), ANTHROPIC_API_KEY: 'k' }, 'eric');
+ok('under the cap it answers', r.status === 200);
 
 let fail = 0;
 for (const [n, c] of out) { console.log((c ? 'ok    ' : 'FAIL  ') + n); if (!c) fail++; }
-if (out.length < 10) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
+if (out.length < 15) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
 console.log('\ncheck_admin_assistant_loop - ' + (out.length - fail) + ' of ' + out.length + ' passed');
 process.exit(fail ? 1 : 0);
