@@ -47,10 +47,16 @@ ok('door: the question box on the quote log', src.includes('id="aaQuestion"') &&
 ok('the screen half is loaded by both pages', (src.match(/<script src="\/assets\/js\/admin-assist\.js"><\/script>/g) || []).length === 2);
 const client = readFileSync(new URL('../public/assets/js/admin-assist.js', import.meta.url), 'utf8');
 ok('the screen half posts to the route', client.includes("fetch('/api/admin/assistant'"));
-ok('and says nothing was saved or sent', client.includes('Nothing has been saved or sent.'));
+ok('and says nothing was saved or changed', client.includes('Nothing has been saved or changed.'));
+// Eric, 10-06-2026: "I need it to be much more obvious that we're asking AI for help."
+ok('the quote log button says Ask Claude', src.includes('<button class="aa-claude" data-assist="ask">Ask Claude</button>'));
+ok('all three tidy buttons say Ask Claude about these', (src.match(/class="aa-claude aa-sm" data-assist="tidy-[a-z]+"/g) || []).length === 3 && (src.match(/>Ask Claude about these</g) || []).length === 3);
+ok('the question box is outlined in Claude orange', /border:2px solid #D97757[^"]*" data-assist-line>/.test(src));
+ok('every answer is labeled as Claude, AI', client.includes('Claude') && client.includes('(AI'));
+ok('the buttons are the readable deeper orange', client.includes('.aa-claude{background:#A84E2C;color:#fff'));
 
 let fail = 0;
 for (const [n, c] of out) { console.log((c ? 'ok    ' : 'FAIL  ') + n); if (!c) fail++; }
-if (out.length < 25) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
+if (out.length < 30) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
 console.log('\ncheck_admin_assistant - ' + (out.length - fail) + ' of ' + out.length + ' passed');
 process.exit(fail ? 1 : 0);

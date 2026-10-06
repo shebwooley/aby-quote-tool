@@ -9495,7 +9495,7 @@ ${abyAdminNav('/admin/brokers')}
       + '<span class="muted" id="ntm_' + kind + '_' + g + '" style="font-size:12px"></span></div>';
    h += '<div style="margin-top:5px"><a href="#" onclick="notDupes(' + "'" + kind + "'" + ',' + g + ');return false" '
       + 'style="font-size:12px;color:#5b6b7f">These are different firms &mdash; leave them alone</a> '
-      + '<button class="aa-btn" data-assist="tidy-firms" data-ids="' + esc(grp.map(function(a){ return a.id; }).join(',')) + '" data-label="' + esc(grp[0] ? grp[0].name : '') + '">Look into this</button></div></div>';
+      + '<button class="aa-claude aa-sm" data-assist="tidy-firms" data-ids="' + esc(grp.map(function(a){ return a.id; }).join(',')) + '" data-label="' + esc(grp[0] ? grp[0].name : '') + '">Ask Claude about these</button></div></div>';
    return h;
  }
 
@@ -9628,8 +9628,8 @@ ${abyAdminNav('/admin/brokers')}
        h += '<div style="margin-top:5px"><button style="font-size:12px;padding:3px 9px" '
           + 'onclick="namedNot(' + nd + ')">Not the same &mdash; leave it</button> '
           + '<span class="muted" style="font-size:12px">A solo agent&rsquo;s firm really can be '
-          + 'their own name.</span> <button class="aa-btn" data-assist="tidy-named" data-ids="'
-          + esc([nr.id].concat(nr.options.map(function(o){ return o.id; })).join(',')) + '" data-label="' + esc(nr.name) + '">Look into this</button></div></div>';
+          + 'their own name.</span> <button class="aa-claude aa-sm" data-assist="tidy-named" data-ids="'
+          + esc([nr.id].concat(nr.options.map(function(o){ return o.id; })).join(',')) + '" data-label="' + esc(nr.name) + '">Ask Claude about these</button></div></div>';
      }
      h += '</div>';
    }
@@ -10759,7 +10759,7 @@ ${abyAdminNav('/admin/brokers')}
      h += '<div style="margin-top:5px"><button style="font-size:12px;padding:3px 9px" '
         + 'onclick="pdNot(' + i + ')">Not the same person</button> '
         + '<span class="muted" style="font-size:12px">Two people really can share a name.</span> '
-        + '<button class="aa-btn" data-assist="tidy-people" data-ids="' + esc(g.people.map(function(p){ return p.id; }).join(',')) + '" data-label="' + esc(g.name) + '">Look into this</button>'
+        + '<button class="aa-claude aa-sm" data-assist="tidy-people" data-ids="' + esc(g.people.map(function(p){ return p.id; }).join(',')) + '" data-label="' + esc(g.name) + '">Ask Claude about these</button>'
         + '</div></div>';
    }
    box.innerHTML = h;
@@ -18221,10 +18221,12 @@ ${abyAdminNav('/admin')}
     <div class="msg" id="qMsg"></div>
   </div>
 </details>
-<!-- F-603: ask the assistant about the quote log. Eric and Niels only; it reads and answers, it changes nothing. -->
-<div style="margin:.6rem 0 .8rem;display:flex;gap:8px;align-items:center" data-assist-line>
-  <input id="aaQuestion" type="text" placeholder="Ask about the quote log - for example, which firms quoted most this year but bought nothing" style="flex:1;padding:.45rem .6rem;border:1px solid #c8d2de;border-radius:6px;font-size:14px">
-  <button class="go" data-assist="ask">Ask</button>
+<!-- F-603: ask Claude about the quote log. Eric and Niels only; it reads and answers, it changes nothing.
+     IN CLAUDE'S ORANGE ON PURPOSE (Eric, 10-06-2026: "I need it to be much more obvious that we're asking AI for help"):
+     the outline is Claude's #D97757; the button is the deeper #A84E2C so its white text reads (5.5:1). -->
+<div style="margin:.6rem 0 .8rem;display:flex;gap:8px;align-items:center;border:2px solid #D97757;border-radius:8px;padding:7px 8px;background:#fdf6f2" data-assist-line>
+  <input id="aaQuestion" type="text" placeholder="Ask Claude about the quote log - for example, which firms quoted most this year but bought nothing" style="flex:1;padding:.45rem .6rem;border:1px solid #D97757;border-radius:6px;font-size:14px;background:#fff">
+  <button class="aa-claude" data-assist="ask">Ask Claude</button>
 </div>
 <div class="tabs">
   <button class="tab active" data-status="P">Pending</button>

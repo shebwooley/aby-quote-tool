@@ -24,7 +24,15 @@
     '.aa-out .aa-bar button{font-size:12.5px;padding:3px 10px}' +
     '.aa-out details{margin-top:6px;font-size:13px;color:#4b5563}' +
     '.aa-out .aa-err{color:#a12622}' +
-    '.aa-btn{font-size:12px;padding:3px 9px}';
+    '.aa-btn{font-size:12px;padding:3px 9px}' +
+    // CLAUDE'S ORANGE (Eric, 10-06-2026: make it obvious we are asking AI). #D97757 is Claude's own orange, used for
+    // outlines (3.1:1, enough for a border); #A84E2C fills the buttons so their white text reads at 5.5:1.
+    '.aa-claude{background:#A84E2C;color:#fff;border:1px solid #A84E2C;border-radius:6px;font-weight:600;font-size:14px;padding:6px 14px;cursor:pointer}' +
+    '.aa-claude:hover{background:#9A4526;border-color:#9A4526}' +
+    '.aa-claude:disabled{opacity:.6;cursor:wait}' +
+    '.aa-claude.aa-sm{font-size:12.5px;padding:3px 10px}' +
+    '.aa-out{border:2px solid #D97757;background:#fdf6f2}' +
+    '.aa-out .aa-who{font-weight:700;color:#9A4526;margin-bottom:4px}';
   document.head.appendChild(css);
 
   function boxAfter(btn) {
@@ -44,7 +52,8 @@
       return;
     }
     var looked = d.looked || [];
-    var h = '<div class="aa-text">' + esc(d.text) + '</div>';
+    var h = '<div class="aa-who">Claude\u2019s answer (AI \u2013 check it before you act on it)</div>' +
+            '<div class="aa-text">' + esc(d.text) + '</div>';
     if (looked.length) {
       h += '<details><summary>What it looked up (' + looked.length + ')</summary><ul>';
       for (var i = 0; i < looked.length; i++) {
@@ -54,7 +63,7 @@
       h += '</ul></details>';
     }
     h += '<div class="aa-bar"><button type="button" data-aa-copy>Copy</button>' +
-         '<span>A draft for you to read. Nothing has been saved or sent.</span>' +
+         '<span>Nothing has been saved or changed.</span>' +
          '<a href="#" data-aa-close style="margin-left:auto">Close</a></div>';
     box.innerHTML = h;
     box.__text = d.text || '';
@@ -68,7 +77,7 @@
       payload.question = q ? q.value : '';
     }
     var box = boxAfter(btn);
-    box.innerHTML = '<div class="aa-text">Reading the records... this takes a few seconds.</div>';
+    box.innerHTML = '<div class="aa-who">Asking Claude\u2026</div><div class="aa-text">Claude is reading the records. This takes a few seconds.</div>';
     btn.disabled = true;
     try {
       var r = await fetch('/api/admin/assistant', {
