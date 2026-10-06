@@ -2687,8 +2687,7 @@ async function withSessionGuard(resp) {
 //   tidy-people / tidy-firms / tidy-named - reads the records the tidy screens paired and writes a
 //     short case: likely the same, likely not, or cannot tell, and why. The existing button is still
 //     pressed by a person; this never merges, renames or dismisses.
-//   followup - drafts a note to a broker asking what happened to their open quotes. It is a DRAFT on
-//     the screen: nothing is sent, nothing is saved, and no outcome is ever guessed or written.
+//   (followup - a drafted note to a broker - was built and REMOVED the same day on Eric's word; see ASSIST_JOBS.)
 //   ask - answers a question about the quote log by looking things up.
 // ⛔ Its one tool is a READ-ONLY lookup (assistLookupSafe refuses anything but a plain SELECT), and
 // there is no tool that writes. That is the product, not caution: the admin's best properties are its
@@ -2698,7 +2697,11 @@ async function withSessionGuard(resp) {
 // ============================================================================================
 const ASSIST_MODEL = 'claude-sonnet-5-5';
 const ASSIST_PEOPLE = ['eric', 'niels'];
-const ASSIST_JOBS = ['tidy-people', 'tidy-firms', 'tidy-named', 'followup', 'ask'];
+// ⛔ NO 'followup' JOB ANY MORE. Eric, 10-06-2026, after using it: "this feature doesn't really help me. I know how to
+// write an email. What came up doesn't sound like me at all" - and it listed quotes from 2023 and 2025, because its lookup
+// took every pending quote under the firm instead of Today's 90-day window. The draft job, its door and its lookup
+// were removed the same day. ⛔ Do not bring back a drafted broker email without him asking.
+const ASSIST_JOBS = ['tidy-people', 'tidy-firms', 'tidy-named', 'ask'];
 const ASSIST_MAX_TURNS = 6;
 // 💵 THE MONTHLY CAP, Eric 10-06-2026: "$20". Counted in dollars from the token counts each answer reports, at
 // ASSIST_PRICE (dollars per million tokens). ⚠️ Those rates are the Sonnet list prices as known when this was
@@ -2749,11 +2752,7 @@ function assistSystem(job, who) {
     'Never guess the outcome of a quote. A pending quote from the old spreadsheet may be open, sold elsewhere or dead, and only the broker knows.',
     ASSIST_SCHEMA,
   ];
-  if (job === 'followup') {
-    rules.push('Your job now: draft a short, warm email from ' + name + ' at ABY to this broker, asking which of their open quotes are still alive, listing each quote by employer name and the month it was run. ' +
-      'It is going to a broker, so it must never mention internal notes, priorities, ratings or anything ABY thinks about them. Under 150 words. ' +
-      'After the email, add one line starting "For you:" with anything ' + name + ' should know before sending (for example that most rows came from the old spreadsheet). Output the email first, with a Subject line.');
-  } else if (job === 'ask') {
+  if (job === 'ask') {
     rules.push('Your job now: answer the question about the quote log. Look things up as needed. Give the answer first, in a sentence or two, then the few figures behind it. If the data cannot answer it, say so and say what is missing.');
   } else {
     rules.push('Your job now: the tidy screen paired these records because a rule thinks they may be the same ' + (job === 'tidy-people' ? 'person' : 'firm') + '. ' +
@@ -2797,14 +2796,6 @@ async function assistLookup(env, sql) {
 async function assistFacts(env, job, ids, key) {
   const DB = env.DB;
   const out = [];
-  if (job === 'followup') {
-    const { results } = await DB.prepare(
-      "SELECT quote_number, created_at, client_name, effective_date, broker_name, broker_agency, broker_email, state, source_tag " +
-      "FROM quotes WHERE COALESCE(status,'P')='P' AND retired_at IS NULL " +
-      "AND LOWER(COALESCE(NULLIF(broker_email,''), NULLIF(broker_agency,''), '?')) = ? ORDER BY created_at DESC LIMIT 40").bind(String(key || '').toLowerCase()).all();
-    out.push({ openQuotes: results || [] });
-    return out;
-  }
   for (const id of ids) {
     if (job === 'tidy-people') {
       const p = await DB.prepare('SELECT id, name, agency_id, city, phone, source, disposition, created_at FROM people WHERE id = ?').bind(id).first();
@@ -2841,12 +2832,11 @@ async function handleAdminAssistant(request, env, who) {
   if (!ASSIST_JOBS.includes(job)) return jsonResp({ error: 'Unknown request.' }, 400);
   const ids = (Array.isArray(body.ids) ? body.ids : String(body.ids || '').split(','))
     .map((x) => String(x).trim()).filter(Boolean).slice(0, 10);
-  const key = String(body.key || '').slice(0, 200);
+  const key = '';
   const label = String(body.label || '').slice(0, 200);
   const question = String(body.question || '').slice(0, 1000).trim();
   if (job === 'ask' && !question) return jsonResp({ error: 'Type a question first.' }, 400);
   if (job.startsWith('tidy') && ids.length < 1) return jsonResp({ error: 'Nothing to look at.' }, 400);
-  if (job === 'followup' && !key) return jsonResp({ error: 'Nothing to look at.' }, 400);
   const month = new Date().toISOString().slice(0, 7);
   if (await assistSpent(env, month) >= ASSIST_MONTHLY_CAP_USD) {
     return jsonResp({ error: "This month's $" + ASSIST_MONTHLY_CAP_USD + ' limit for the assistant is used up. It starts again on the 1st.' }, 429);
@@ -2857,7 +2847,7 @@ async function handleAdminAssistant(request, env, who) {
     first = 'Question: ' + question;
   } else {
     const facts = await assistFacts(env, job, ids, key);
-    first = (job === 'followup' ? 'The broker: ' + (label || key) + '.' : 'The records the screen paired' + (label ? ' (' + label + ')' : '') + '.') +
+    first = 'The records the screen paired' + (label ? ' (' + label + ')' : '') + '.' +
       '\n\nWhat the database holds on them:\n' + JSON.stringify(facts).slice(0, 30000);
   }
 
@@ -15699,7 +15689,7 @@ ${abyAdminNav('/admin/today')}
 
  function rowHTML(r){
    var od = (r.days!==null && r.days<0);
-   var h='<div class="row'+(od?' od':'')+'" data-row="'+esc(r.id||'')+'" data-assist-line>';
+   var h='<div class="row'+(od?' od':'')+'" data-row="'+esc(r.id||'')+'">';
    // ⭐ THE TIME SITS UNDER THE DAY, not inside the title. It belongs to WHEN, and putting it in
    // the text would make it unsortable by eye down a column of days.
    h+='<div class="when">'+(r.dueOn?esc(dayLabel(r.dueOn)):'<span class="muted">no date</span>')
@@ -15716,8 +15706,6 @@ ${abyAdminNav('/admin/today')}
    // just need to know about; a request is work, and the place the work happens is the quote log's
    // requests tab. Without this the row tells you something is waiting and leaves you to find it.
    if(r.kind==='request') h+='<a href="/admin?view=requests" class="ed">Open</a>';
-   // F-603: a drafted note to this broker asking which open quotes are still alive. A DRAFT on screen only.
-   if(r.kind==='followup') h+='<a href="#" class="ed" data-assist="followup" data-key="'+esc(String(r.id||'').replace(/^followup:/,''))+'" data-label="'+esc(r.entity||'')+'">Draft a note</a>';
    if(r.kind==='todo'){
      // ⭐ MOVE UP AND DOWN ONLY WHERE THERE IS NO TIME. Two meetings at 9:00 and 14:00 already
      // have an order, and a hand-set number that disagreed with the clock would be a second
@@ -16096,7 +16084,6 @@ ${abyAdminNav('/admin/today')}
  if(location.search.indexOf('view=calendar')!==-1) setLens('month');
  load();
 </script>
-<script src="/assets/js/admin-assist.js"></script>
 </body></html>`;
 }
 

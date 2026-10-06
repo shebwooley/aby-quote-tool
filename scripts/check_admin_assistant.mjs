@@ -5,8 +5,9 @@
 //   · only Eric and Niels may use it (Eric: "Me and Niels only at first"); the office login is refused
 //   · its only tool is the read-only lookup
 //   · a missing model key answers "not switched on yet" before anything else happens
-//   · every door exists: Draft a note on a Today follow-up, Look into this on all three tidy screens, the
-//     question box on the quote log, and each of those pages loads the screen half
+//   · every door exists: Look into this on all three tidy screens and the question box on the quote log, and
+//     both pages load the screen half
+//   · the drafted broker email is GONE (Eric, 10-06-2026: "this feature doesn't really help me"): no job, no door
 //
 //   node scripts/check_admin_assistant.mjs
 import { readFileSync } from 'node:fs';
@@ -37,12 +38,13 @@ const tools = src.slice(src.indexOf('const tools = [{', src.indexOf('async funct
 ok('its only tool is the lookup', (tools.match(/name: '/g) || []).length === 1 && tools.includes("name: 'look_up'"));
 ok('every lookup goes through the gate', /const safe = assistLookupSafe\(sql\);/.test(src));
 
-ok('door: Draft a note on a Today follow-up', src.includes('data-assist="followup"') && src.includes('Draft a note'));
+ok('no Draft a note door on Today (Eric removed it)', !src.includes('data-assist="followup"') && !src.includes('>Draft a note<'));
+ok('and no followup job on the server', /const ASSIST_JOBS = \['tidy-people', 'tidy-firms', 'tidy-named', 'ask'\];/.test(src));
 ok('door: Look into this, same person twice', src.includes('data-assist="tidy-people"'));
 ok('door: Look into this, two records for one firm', src.includes('data-assist="tidy-firms"'));
 ok('door: Look into this, a firm named for a person', src.includes('data-assist="tidy-named"'));
 ok('door: the question box on the quote log', src.includes('id="aaQuestion"') && src.includes('data-assist="ask"'));
-ok('the screen half is loaded by all three pages', (src.match(/<script src="\/assets\/js\/admin-assist\.js"><\/script>/g) || []).length === 3);
+ok('the screen half is loaded by both pages', (src.match(/<script src="\/assets\/js\/admin-assist\.js"><\/script>/g) || []).length === 2);
 const client = readFileSync(new URL('../public/assets/js/admin-assist.js', import.meta.url), 'utf8');
 ok('the screen half posts to the route', client.includes("fetch('/api/admin/assistant'"));
 ok('and says nothing was saved or sent', client.includes('Nothing has been saved or sent.'));

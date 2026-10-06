@@ -135,10 +135,6 @@ sent to somebody.
   follow-up wording was reworded, so check the quote log before you ring.)*
   ▶️ **If somebody knows those outcomes, recording them is what turns this from a caveat into a
   clean list.**
-- ⭐ **DRAFT A NOTE (Eric and Niels only).** Each follow-up row has *Draft a note*: the assistant reads
-  that broker's open quotes and writes a short email asking which are still alive, with one line for
-  you underneath. **It is a draft on the screen - nothing is saved and nothing is sent**, and it never
-  guesses or records an outcome. Copy it, change it, send it yourself if you want to.
 - ⏳ **RFP Watch has nothing in it yet**, so that chip reads zero. It is wired now rather than later
   because the day those dates arrive they are hard external deadlines, and a missed close date is an
   opportunity that cannot be recovered. **The chip stays on screen showing a zero rather than
@@ -736,8 +732,6 @@ changing the relationship back undoes it.
 **It reads and drafts. It never changes anything** — it has no way to: its only tool is a lookup that
 refuses anything but reading. Signed in as the office, every door answers that it is for Eric and Niels.
 
-- **Draft a note** on a Today follow-up: a short email to that broker asking which open quotes are
-  still alive, plus a line for you. Nothing is saved or sent.
 - **Look into this** on each tidy screen (*Same person twice*, *two records for one firm*, *a firm row
   that is a person's name*): it reads both records and says *likely the same*, *likely different* or
   *cannot tell*, with the evidence. **The Keep / Same firm / Not the same buttons are still yours to
@@ -745,7 +739,8 @@ refuses anything but reading. Signed in as the office, every door answers that i
 - **Ask** on the quote log: a question about the log, answered from the data, with what it looked up.
 
 Every answer shows *What it looked up*, so you can see where it came from. ⚠️ It needs ABY's model key
-on the Worker (`ANTHROPIC_API_KEY`); until that is added, every door says it is not switched on yet.
+on the Worker (`ANTHROPIC_API_KEY`), added 10-06-2026.
+⛔ *Draft a note* on Today's follow-ups was built and taken off the same day - Eric: *"I know how to write an email. What came up doesn't sound like me at all."*
 💵 **It stops at $20 a month** (Eric, 10-06-2026) and says so; it starts again on the 1st.
 
 ## RFP Watch
