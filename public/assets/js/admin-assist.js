@@ -18,11 +18,13 @@
 
   var css = document.createElement('style');
   css.textContent =
-    '.aa-out{margin:8px 0 4px;border:1px solid #c9d6e6;background:#f6f9fd;border-radius:7px;padding:10px 12px;font-size:14px;line-height:1.5;color:#1f2a37}' +
+    // ⭐ DARK TEXT ON WHITE, 16px (Eric, 10-06-2026: "make the answer text a little darker ... you make it light and it's
+    // difficult to read, especially with a shaded background"). No tinted background behind the answer, and no gray lines.
+    '.aa-out{margin:8px 0 4px;border:1px solid #c9d6e6;background:#fff;border-radius:7px;padding:12px 14px;font-size:16px;line-height:1.55;color:#111111}' +
     '.aa-out .aa-text{white-space:pre-wrap}' +
-    '.aa-out .aa-bar{display:flex;gap:10px;align-items:center;margin-top:8px;font-size:13px;color:#4b5563}' +
-    '.aa-out .aa-bar button{font-size:12.5px;padding:3px 10px}' +
-    '.aa-out details{margin-top:6px;font-size:13px;color:#4b5563}' +
+    '.aa-out .aa-bar{display:flex;gap:10px;align-items:center;margin-top:10px;font-size:15px;color:#1f2937}' +
+    '.aa-out .aa-bar button{font-size:14px;padding:3px 12px}' +
+    '.aa-out details{margin-top:8px;font-size:15px;color:#1f2937}' +
     '.aa-out .aa-err{color:#a12622}' +
     '.aa-btn{font-size:12px;padding:3px 9px}' +
     // CLAUDE'S ORANGE (Eric, 10-06-2026: make it obvious we are asking AI). #D97757 is Claude's own orange, used for
@@ -31,8 +33,9 @@
     '.aa-claude:hover{background:#9A4526;border-color:#9A4526}' +
     '.aa-claude:disabled{opacity:.6;cursor:wait}' +
     '.aa-claude.aa-sm{font-size:12.5px;padding:3px 10px}' +
-    '.aa-out{border:2px solid #D97757;background:#fdf6f2}' +
-    '.aa-out .aa-who{font-weight:700;color:#9A4526;margin-bottom:4px}';
+    '.aa-out{border:2px solid #D97757;background:#fff}' +
+    '.aa-out .aa-who{font-weight:700;color:#8a3d20;margin-bottom:6px}' +
+    '#aaQuestion::placeholder{color:#4b5563;opacity:1}';
   document.head.appendChild(css);
 
   function boxAfter(btn) {

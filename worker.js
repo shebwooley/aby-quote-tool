@@ -18224,8 +18224,8 @@ ${abyAdminNav('/admin')}
 <!-- F-603: ask Claude about the quote log. Eric and Niels only; it reads and answers, it changes nothing.
      IN CLAUDE'S ORANGE ON PURPOSE (Eric, 10-06-2026: "I need it to be much more obvious that we're asking AI for help"):
      the outline is Claude's #D97757; the button is the deeper #A84E2C so its white text reads (5.5:1). -->
-<div style="margin:.6rem 0 .8rem;display:flex;gap:8px;align-items:center;border:2px solid #D97757;border-radius:8px;padding:7px 8px;background:#fdf6f2" data-assist-line>
-  <input id="aaQuestion" type="text" placeholder="Ask Claude about the quote log - for example, which firms quoted most this year but bought nothing" style="flex:1;padding:.45rem .6rem;border:1px solid #D97757;border-radius:6px;font-size:14px;background:#fff">
+<div style="margin:.6rem 0 .8rem;display:flex;gap:8px;align-items:center;border:2px solid #D97757;border-radius:8px;padding:7px 8px;background:#fff" data-assist-line>
+  <input id="aaQuestion" type="text" placeholder="Ask Claude about the quote log - for example, which firms quoted most this year but bought nothing" style="flex:1;padding:.5rem .65rem;border:1px solid #D97757;border-radius:6px;font-size:16px;color:#111;background:#fff">
   <button class="aa-claude" data-assist="ask">Ask Claude</button>
 </div>
 <div class="tabs">
