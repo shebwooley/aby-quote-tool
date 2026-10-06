@@ -127,10 +127,14 @@ ok('a quote status proposal is the quote log PATCH', !!qp && qp.steps.length ===
 calls = 0; fakeFetch.seen = []; fakeFetch.script = propose({ kind: 'same_firm', ids: ['7'] });
 r = await handle(req({ job: 'ask', question: 'same' }), { DB: stubDB(), ANTHROPIC_API_KEY: 'k' }, 'eric');
 ok('a proposal naming one firm is refused, not guessed', (r.data.proposals || []).length === 0 && JSON.stringify(fakeFetch.seen[1].messages).includes('Name at least two firms'));
+calls = 0; fakeFetch.seen = []; fakeFetch.script = propose({ kind: 'bought_by', ids: ['7', '8'] });
+r = await handle(req({ job: 'ask', question: 'MHBT was bought by MMA' }), { DB: stubDB(), ANTHROPIC_API_KEY: 'k' }, 'niels');
+const bp = (r.data.proposals || [])[0];
+ok('"X was bought by Y" is the firm page succeeded request, credited to who said it', !!bp && bp.steps.length === 1 && bp.steps[0].url === '/api/admin/crm/relationship' && bp.steps[0].body.relationship === 'succeeded' && /Niels/.test(bp.steps[0].body.note));
 fakeFetch.script = null;
 
 let fail = 0;
 for (const [n, c] of out) { console.log((c ? 'ok    ' : 'FAIL  ') + n); if (!c) fail++; }
-if (out.length < 35) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
+if (out.length < 36) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
 console.log('\ncheck_admin_assistant_loop - ' + (out.length - fail) + ' of ' + out.length + ' passed');
 process.exit(fail ? 1 : 0);

@@ -85,6 +85,10 @@ ok('a failed or partial change is named, not swallowed', client.includes('Only p
 
 ok('Copy conversation is on the page and copies the turns, no AI', src.includes('data-aa-copyall>Copy conversation</button>') && client.includes("if (turn.role === 'user') return 'You:") && client.includes('navigator.clipboard.writeText(all)'));
 
+// FIRM FAMILIES (Eric, 10-06-2026: "MHBT was purchased by MMA. Why is it still showing up on this list?").
+ok('Claude is told what succeeded / alias / division mean', src.includes("'succeeded' = this firm was bought by, or became, the parent"));
+ok('and to judge a firm by its whole family, never calling a bought firm quiet', src.includes('count the FAMILY: the top firm plus every firm whose parent_id is it') && src.includes('A firm that was succeeded'));
+
 let fail = 0;
 for (const [n, c] of out) { console.log((c ? 'ok    ' : 'FAIL  ') + n); if (!c) fail++; }
 if (out.length < 55) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }

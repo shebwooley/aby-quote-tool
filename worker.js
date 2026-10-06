@@ -2739,7 +2739,16 @@ const ASSIST_SCHEMA = [
   "  status ('P' pending - which for quotes loaded from the old spreadsheet often means nobody recorded the outcome -,",
   "  'I' in process, 'S' sold, 'D' dead, 'N' no response), source_tag (blank = made in the tool, 'import-%' = loaded from the old",
   "  spreadsheet, 'manual' = logged by hand), agency_id, client_id, employee_count, notes, retired_at (not null = retired).",
-  'agencies (the firms): id, name, city, state, website, relationship (succeeded / alias / ...), parent_id, assigned_rep, notes, created_at.',
+  'agencies (the firms): id, name, city, state, website, relationship, parent_id, assigned_rep, notes, created_at.',
+  // 🔴 FIRM FAMILIES (Eric, 10-06-2026, after "MHBT was purchased by MMA. Why is it still showing up on this list?"):
+  // the records already said MHBT was succeeded by MMA - DFW, and Claude was never told what that column means.
+  '  relationship + parent_id link a firm to the firm it belongs to, ONE level only (parent_id never has a parent):',
+  "  'succeeded' = this firm was bought by, or became, the parent (a real acquisition); 'alias' = the same firm under another",
+  "  spelling; 'division' = a part of the parent. A firm with none of these stands alone.",
+  '  RULE - whenever you judge a firm\'s activity (how many quotes, when it last quoted, whether it has gone quiet, who its',
+  '  biggest clients are), count the FAMILY: the top firm plus every firm whose parent_id is it. A firm that was succeeded',
+  '  is never "quiet" in its own right - report its quotes under the parent and say it was bought. Never list a succeeded or',
+  '  alias firm as a separate firm to call.',
   'people (agents at firms): id, name, agency_id, city, phone, source, disposition, created_at.',
   'broker_directory (one row per email address seen on quotes): email, name, phone, agency, first_seen, last_seen, quote_count, person_id, agency_id.',
   'aby_sales (sales announced by email): quote_id and sale details.',
@@ -2860,9 +2869,10 @@ const ASSIST_PROPOSE_TOOL = {
     '(for example "yes, those are the same firm" or "that quote is dead"). It changes nothing: the person sees it with a ' +
     'Make this change button and decides. Never propose on your own judgment. One call per confirmed fact.',
   input_schema: { type: 'object', properties: {
-    kind: { type: 'string', enum: ['same_firm', 'different_firms', 'same_person', 'different_people', 'quote_status'] },
+    kind: { type: 'string', enum: ['same_firm', 'different_firms', 'same_person', 'different_people', 'quote_status', 'bought_by'] },
     ids: { type: 'array', items: { type: 'string' },
       description: 'Record ids from the database. same_firm / same_person: the record to KEEP first, then the ones to fold into it. ' +
+        'bought_by: the BUYER first, then the firm or firms it bought. ' +
         'different_firms / different_people: every record in the group. quote_status: the one quote id.' },
     status: { type: 'string', enum: ['P', 'I', 'S', 'D', 'N'], description: 'quote_status only: the new status.' },
   }, required: ['kind', 'ids'] },
@@ -2893,6 +2903,24 @@ async function assistProposal(env, input, who) {
     return { proposal: { kind,
       summary: 'Mark ' + rows.map((r) => r.name).join(' and ') + ' as different firms, so the tidy screen stops pairing them.',
       steps: [{ method: 'POST', url: '/api/admin/tidy-dismiss', body: { group_key: key, names: rows.map((r) => r.name).join(' / ') } }] } };
+  }
+  // BOUGHT BY (Eric, 10-06-2026: "MHBT was purchased by MMA"). The same request as recording 'succeeded' on a firm's
+  // page. ⭐ Only Eric knows which firms were genuinely bought, so this is offered only when he says so.
+  if (kind === 'bought_by') {
+    if (ids.length < 2) return { error: 'Name the buyer, then the firm it bought.' };
+    const rows = [];
+    for (const id of ids) {
+      const r = await DB.prepare('SELECT id, name, parent_id FROM agencies WHERE id = ?').bind(id).first();
+      if (!r) return { error: 'There is no firm with id ' + id + '. Look it up first.' };
+      rows.push(r);
+    }
+    if (rows[0].parent_id) return { error: rows[0].name + ' is itself under another firm. Name the top of that family as the buyer.' };
+    const buyer = rows[0], bought = rows.slice(1);
+    return { proposal: { kind,
+      summary: 'Record that ' + buyer.name + ' bought ' + bought.map((r) => r.name).join(', ') + '. Their quotes count under ' + buyer.name + ' from now on, and ' +
+        (bought.length === 1 ? 'it drops' : 'they drop') + ' off the call lists.',
+      steps: bought.map((r) => ({ method: 'POST', url: '/api/admin/crm/relationship',
+        body: { id: r.id, parent_id: buyer.id, relationship: 'succeeded', note: 'bought by ' + buyer.name + ' (told to Ask Claude by ' + by + ')' } })) } };
   }
   if (kind === 'same_person' || kind === 'different_people') {
     if (ids.length < 2) return { error: 'Name at least two records.' };
