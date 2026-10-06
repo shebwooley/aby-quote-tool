@@ -64,6 +64,8 @@
     who.innerHTML = '<strong>' + esc(d.employerName || '') + '</strong>' +
       (d.quoteNumber ? ' &middot; quote ' + esc(d.quoteNumber) : '') +
       (d.brokerName || d.brokerAgency ? ' &middot; broker: ' + esc([d.brokerName, d.brokerAgency].filter(Boolean).join(', ')) : '');
+    // ABY's view opens on the whole application (the Summary), not on the first section.
+    if (adminMode) state.step = steps().length - 1;
     render();
   }).catch(function () { fail(0, {}); });
 
@@ -79,7 +81,7 @@
   function sections() { return A.visible(state.data.forms || [], state.answers); }
   function steps() {
     var list = sections().map(function (s) { return { id: s.section.id, title: s.section.title, questions: s.questions, section: s.section }; });
-    list.push({ id: 'review', title: state.readonly ? 'Summary' : 'Review and submit', questions: [] });
+    list.push({ id: 'review', title: state.readonly ? 'Summary - all answers' : 'Review and submit', questions: [] });
     return list;
   }
   function blanks(questions) {
@@ -138,6 +140,14 @@
     if (q.type === 'money' && /^[0-9.,]+$/.test(String(v))) return '$' + v;
     return String(v);
   }
+  function sheetRows() {
+    return sections().map(function (s) {
+      return '<div class="pv-sec"><h3>' + esc(s.section.title) + '</h3>' + s.questions.map(function (q) {
+        var a = shown(q, state.answers[q.key]);
+        return '<div class="pv-row"><div>' + esc(q.label) + '</div><div class="a' + (a ? '' : ' blank') + '">' + (a ? esc(a) : 'blank') + '</div></div>';
+      }).join('') + '</div>';
+    }).join('');
+  }
   function printView() {
     var pv = document.getElementById('printview');
     if (!pv) return;
@@ -145,12 +155,7 @@
     var out = '<h1>Setup questions for ABY Benefits</h1><p>' + esc(d.employerName || '') +
       (d.quoteNumber ? ' &middot; quote ' + esc(d.quoteNumber) : '') +
       (d.status === 'submitted' ? ' &middot; submitted' + (d.submittedAt ? ' ' + esc(usDate(d.submittedAt)) : '') : ' &middot; not yet submitted') + '</p>';
-    sections().forEach(function (s) {
-      out += '<div class="pv-sec"><h3>' + esc(s.section.title) + '</h3>' + s.questions.map(function (q) {
-        var a = shown(q, state.answers[q.key]);
-        return '<div class="pv-row"><div>' + esc(q.label) + '</div><div class="a' + (a ? '' : ' blank') + '">' + (a ? esc(a) : 'blank') + '</div></div>';
-      }).join('') + '</div>';
-    });
+    out += sheetRows();
     out += signedBlock(true);
     pv.innerHTML = out;
   }
@@ -281,6 +286,15 @@
         if (q.type === 'ein') extra = ' placeholder="12-3456789" maxlength="10"';
         input = '<input type="' + type + '"' + attr + ' value="' + esc(v == null ? '' : v) + '"' + extra + ro + '>';
     }
+    // ⭐ READ-ONLY SHOWS THE ANSWER AS TEXT (10-06-2026). ABY's processor read Pinetop's submitted application as "most of
+    // the application is blank ... especially eligibility and benefits offered" - and every one of those was answered.
+    // A disabled checkbox or radio draws its tick in pale gray, so a ticked list looked empty. Read-only now says the
+    // answer in words ("Full-time employees", "Yes") and says "Left blank" when it is.
+    if (state.readonly) {
+      var said = shown(q, v);
+      return '<div class="' + cls + '"><div class="lbl">' + esc(q.label) + tag + '</div>' +
+        '<div class="ro-ans' + (said ? '' : ' blank') + '">' + (said ? esc(said) : 'Left blank') + '</div></div>';
+    }
     return '<div class="' + cls + '">' + lbl + hint + input + '</div>';
   }
 
@@ -317,7 +331,9 @@
       if (bank) out += '<p class="intro" style="margin-top:12px">Bank details for reimbursements or contributions also go through the secure upload, never by email.</p>';
     }
 
-    if (state.readonly) return out + signedBlock(false);
+    // ⭐ READ-ONLY, THE SUMMARY IS EVERY ANSWER ON ONE PAGE (10-06-2026) - it used to list only what was blank, so a
+    // processor opening Summary to see the application saw nothing but blanks and a signature.
+    if (state.readonly) return out + '<h2 style="margin-top:22px">All answers</h2><div class="sheet">' + sheetRows() + '</div>' + signedBlock(false);
 
     out += '<h2 style="margin-top:26px">Sign and submit to ABY</h2>' +
       '<p class="intro">Submitting sends your answers to ABY. It is not a contract: ABY will send the Administrative Services Agreement for signature separately.</p>' +
