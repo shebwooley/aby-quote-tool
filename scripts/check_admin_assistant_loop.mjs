@@ -61,6 +61,7 @@ ok('the removed follow-up job is refused', r.status === 400 && calls === 0);
 ran.length = 0;
 r = await handle(req({ job: 'tidy-firms', ids: '7,8', label: 'Lone Star' }), { DB: stubDB(), ANTHROPIC_API_KEY: 'k' }, 'eric');
 ok('a tidy answer comes back', r.status === 200 && r.data.ok && /Your open quotes/.test(r.data.text));
+ok("the answer reports this month's spend and the cap", !!r.data.usage && typeof r.data.usage.spent === 'number' && r.data.usage.cap === 20);
 ok('the facts were fetched for both paired firms', ['7', '8'].every((id) => ran.some((q) => /FROM agencies WHERE id = \?/.test(q.sql) && q.args[0] === id)));
 ok("the model's lookup ran", ran.some((q) => q.sql === 'SELECT client_name FROM quotes LIMIT 3'));
 ok("the model's DELETE never reached the database", !ran.some((q) => /delete/i.test(q.sql)));
@@ -83,6 +84,6 @@ ok('under the cap it answers', r.status === 200);
 
 let fail = 0;
 for (const [n, c] of out) { console.log((c ? 'ok    ' : 'FAIL  ') + n); if (!c) fail++; }
-if (out.length < 16) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
+if (out.length < 17) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
 console.log('\ncheck_admin_assistant_loop - ' + (out.length - fail) + ' of ' + out.length + ' passed');
 process.exit(fail ? 1 : 0);

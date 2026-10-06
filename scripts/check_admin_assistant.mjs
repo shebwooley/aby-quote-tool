@@ -47,7 +47,7 @@ ok('door: the question box on the quote log', src.includes('id="aaQuestion"') &&
 ok('the screen half is loaded by the three pages that ask (tidy, quote log, Ask Claude)', (src.match(/<script src="\/assets\/js\/admin-assist\.js"><\/script>/g) || []).length === 3);
 // Eric, 10-06-2026: "add an Ask Claude button to the menu ... one place we could click."
 ok('the menu has Ask Claude, in orange', src.includes("{ href: '/admin/ask',        label: 'Ask Claude',            cls: 'claude',"));
-ok('and it routes to its page behind the login', /path === '\/admin\/ask'\) \{\n\s+return withAuth\(request, env, \(\) => new Response\(adminAskHTML\(\)/.test(src));
+ok('and it routes to its page behind the login', /path === '\/admin\/ask'\) \{\n\s+return withAuth\(request, env, \(\) => new Response\(adminAskHTML\(ASSIST_MONTHLY_CAP_USD\)/.test(src));
 ok('the page asks with the ask job', /function adminAskHTML[\s\S]*?data-assist="ask">Ask Claude<\/button>/.test(src));
 ok('the orange menu item is styled on the admin pages and on /aby', src.includes('header a.claude{background:#A84E2C') && src.includes('.aby-adminbar nav a.claude{background:#A84E2C'));
 const client = readFileSync(new URL('../public/assets/js/admin-assist.js', import.meta.url), 'utf8');
@@ -60,8 +60,14 @@ ok('the question box is outlined in Claude orange', /border:2px solid #D97757[^"
 ok('every answer is labeled as Claude, AI', client.includes('Claude') && client.includes('(AI'));
 ok('the buttons are the readable deeper orange', client.includes('.aa-claude{background:#A84E2C;color:#fff'));
 
+// Eric, 10-06-2026: "it won't keep track and tell us how much we've used will it?"
+ok('the usage route exists behind the login', src.includes("path === '/api/admin/assistant/usage' && method === 'GET') return withAuth("));
+ok('each answer reports the month so far', /usage: \{ month, spent: await assistSpent\(env, month\), cap: ASSIST_MONTHLY_CAP_USD \}/.test(src));
+ok('the Ask Claude page has the usage line, and the cap is not typed twice', src.includes('<b id="aaUsage"></b>') && src.includes("It stops at $' + cap + ' a month") && src.includes('adminAskHTML(ASSIST_MONTHLY_CAP_USD)'));
+ok('the page fills it in', client.includes("'Used this month: ' + money(u.spent)") && client.includes("fetch('/api/admin/assistant/usage')"));
+
 let fail = 0;
 for (const [n, c] of out) { console.log((c ? 'ok    ' : 'FAIL  ') + n); if (!c) fail++; }
-if (out.length < 30) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
+if (out.length < 40) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
 console.log('\ncheck_admin_assistant - ' + (out.length - fail) + ' of ' + out.length + ' passed');
 process.exit(fail ? 1 : 0);

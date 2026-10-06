@@ -155,6 +155,8 @@ export default {
     if (path === '/api/admin/crm/tags'   && method === 'GET')  return withAuth(request, env, () => handleCrmTags(request, env));
     // F-603: the read-and-draft assistant. withAuth hands over WHO; the handler admits Eric and Niels only.
     if (path === '/api/admin/assistant'  && method === 'POST') return withAuth(request, env, (who) => handleAdminAssistant(request, env, who));
+    // How much of this month's cap is used (Eric, 10-06-2026: "it won't keep track and tell us how much we've used will it?").
+    if (path === '/api/admin/assistant/usage' && method === 'GET') return withAuth(request, env, () => handleAssistUsage(env));
     if (path === '/api/admin/crm/delete' && method === 'POST') return withAuth(request, env, () => handleCrmDelete(request, env));
     if (path === '/api/admin/crm/person'  && method === 'GET')  return withAuth(request, env, () => handleCrmPerson(request, env));
     if (path === '/api/admin/crm/link'    && method === 'POST') return withAuth(request, env, () => handleCrmLinkPerson(request, env));
@@ -347,7 +349,7 @@ export default {
     // ── Admin page ──────────────────────────────────────────────────────────────
     // F-603: Ask Claude, one page reached from the menu on every admin screen.
     if (path === '/admin/ask') {
-      return withAuth(request, env, () => new Response(adminAskHTML(), {
+      return withAuth(request, env, () => new Response(adminAskHTML(ASSIST_MONTHLY_CAP_USD), {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
     }
     if (path === '/admin/today') {
@@ -2828,6 +2830,17 @@ async function assistFacts(env, job, ids, key) {
   return out;
 }
 
+// ⭐ THE RUNNING TOTAL WAS ALWAYS KEPT (it is how the cap works); this only SHOWS it. ⚠️ It is an estimate from the
+// token counts at list prices - the Anthropic console's billing page is the real bill.
+async function handleAssistUsage(env) {
+  const month = new Date().toISOString().slice(0, 7);
+  try {
+    return jsonResp({ month, spent: await assistSpent(env, month), cap: ASSIST_MONTHLY_CAP_USD });
+  } catch (e) {
+    return jsonResp({ error: 'Could not read the usage.' }, 500);
+  }
+}
+
 async function handleAdminAssistant(request, env, who) {
   if (!ASSIST_PEOPLE.includes(who)) return jsonResp({ error: 'The assistant is for Eric and Niels for now.' }, 403);
   if (!env.ANTHROPIC_API_KEY) return jsonResp({ error: "The assistant is not switched on yet. It needs ABY's model key added to the Worker." }, 503);
@@ -2882,7 +2895,8 @@ async function handleAdminAssistant(request, env, who) {
     const uses = content.filter((c) => c.type === 'tool_use');
     if (msg.stop_reason !== 'tool_use' || !uses.length || turn === ASSIST_MAX_TURNS - 1) {
       const text = content.filter((c) => c.type === 'text').map((c) => c.text).join('\n').trim();
-      return jsonResp({ ok: true, job, text: text || 'No answer came back.', looked });
+      return jsonResp({ ok: true, job, text: text || 'No answer came back.', looked,
+        usage: { month, spent: await assistSpent(env, month), cap: ASSIST_MONTHLY_CAP_USD } });
     }
     messages.push({ role: 'assistant', content });
     const results = [];
@@ -16105,7 +16119,8 @@ ${abyAdminNav('/admin/today')}
  * ⭐ Built by string concatenation, not a template literal, so the page carries no backtick risk at all.
  * ⭐ Text on WHITE, 16px, near-black (Eric, 10-06-2026: "once again, you make it light and it's difficult to read").
  */
-function adminAskHTML() {
+// `cap` is passed in by the route (ASSIST_MONTHLY_CAP_USD) so the page never types the figure a second time.
+function adminAskHTML(cap) {
   const examples = [
     'Which firms quoted the most this year but bought nothing?',
     'What is our history with Lone Star Insurance?',
@@ -16143,7 +16158,8 @@ function adminAskHTML() {
         q.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</button>';
     }).join('') +
     '</div>' +
-    '<p class="note">For Eric and Niels. It stops at $20 a month and starts again on the 1st.</p>' +
+    '<p class="note">For Eric and Niels. It stops at $' + cap + ' a month and starts again on the 1st. ' +
+    '<b id="aaUsage"></b></p>' +
     '</div></main>' +
     '<script>function logout(){fetch("/api/admin/logout",{method:"POST"}).then(function(){location.href="/admin"})}</script>' +
     '<script src="/assets/js/admin-assist.js"></script>' +

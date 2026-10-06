@@ -49,7 +49,23 @@
     return box;
   }
 
+  // HOW MUCH OF THE MONTH'S CAP IS USED (Eric, 10-06-2026). Shown wherever the page has a #aaUsage line; refreshed
+  // after every answer. An estimate from the token counts - the Anthropic console is the real bill.
+  function money(n) {
+    n = Number(n) || 0;
+    return n > 0 && n < 0.01 ? 'less than 1\u00a2' : '$' + n.toFixed(2);
+  }
+  function paintUsage(u) {
+    var el = document.getElementById('aaUsage');
+    if (!el || !u || u.error) return;
+    el.textContent = 'Used this month: ' + money(u.spent) + ' of $' + u.cap + '.';
+  }
+  if (document.getElementById('aaUsage')) {
+    fetch('/api/admin/assistant/usage').then(function (r) { return r.json(); }).then(paintUsage).catch(function () {});
+  }
+
   function show(box, d) {
+    if (d && d.usage) paintUsage(d.usage);
     if (d.error) {
       box.innerHTML = '<div class="aa-err">' + esc(d.error) + '</div>';
       return;
