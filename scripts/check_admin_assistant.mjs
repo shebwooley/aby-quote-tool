@@ -83,6 +83,8 @@ ok('the page runs only the tidy screens own requests', ['/api/admin/crm/relation
 ok('a change happens only on the Make this change button', client.includes('data-aa-do=') && client.includes('>Make this change</button>') && client.includes('makeChange(doBtn)'));
 ok('a failed or partial change is named, not swallowed', client.includes('Only partly made (') && client.includes("'Not made: '"));
 
+ok('Copy conversation is on the page and copies the turns, no AI', src.includes('data-aa-copyall>Copy conversation</button>') && client.includes("if (turn.role === 'user') return 'You:") && client.includes('navigator.clipboard.writeText(all)'));
+
 let fail = 0;
 for (const [n, c] of out) { console.log((c ? 'ok    ' : 'FAIL  ') + n); if (!c) fail++; }
 if (out.length < 55) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }

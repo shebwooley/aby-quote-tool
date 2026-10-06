@@ -275,6 +275,23 @@
     }
     var doBtn = t.closest('[data-aa-do]');
     if (doBtn) { e.preventDefault(); makeChange(doBtn); return; }
+    // COPY THE WHOLE CONVERSATION (Eric, 10-06-2026). Plain text, in order, with each proposed change and whether it
+    // was made. ⭐ No AI is involved - it copies what is already on the page, so it costs nothing.
+    var copyAll = t.closest('[data-aa-copyall]');
+    if (copyAll) {
+      var lines = chat.map(function (turn) {
+        if (turn.role === 'user') return 'You:\n' + turn.text;
+        var extra = (turn.proposals || []).map(function (p) {
+          return 'Proposed change: ' + p.summary + (p.done ? ' [' + p.done + ']' : ' [not made]');
+        });
+        return 'Claude:\n' + turn.text + (extra.length ? '\n' + extra.join('\n') : '');
+      });
+      var all = lines.join('\n\n');
+      if (!all) { copyAll.textContent = 'Nothing to copy yet'; setTimeout(function () { copyAll.textContent = 'Copy conversation'; }, 1800); return; }
+      var done = function () { copyAll.textContent = 'Copied'; setTimeout(function () { copyAll.textContent = 'Copy conversation'; }, 1800); };
+      if (navigator.clipboard) navigator.clipboard.writeText(all).then(done, function () { copyAll.textContent = 'Could not copy'; });
+      return;
+    }
     if (t.closest('[data-aa-new]')) {
       chat = []; saveChat(); paintChat(false);
       var qb = document.getElementById('aaQuestion'); if (qb) { qb.value = ''; qb.focus(); }

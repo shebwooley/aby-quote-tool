@@ -16279,6 +16279,9 @@ function adminAskHTML(cap) {
     '<div class="composer"><textarea id="aaQuestion" placeholder="Type a question or a follow-up, then press Ask Claude"></textarea>' +
     '<div class="row"><button class="aa-claude" data-assist="ask" data-chat="1">Ask Claude</button>' +
     '<button type="button" class="aa-new" data-aa-new>New conversation</button>' +
+    // Eric, 10-06-2026: "Should we have the option of copying the conversation with the click of a button?" No AI cost:
+    // it copies the words already on the page.
+    '<button type="button" class="aa-new" data-aa-copyall>Copy conversation</button>' +
     '<span class="note" style="margin:0">Enter asks; Shift+Enter starts a new line.</span></div></div>' +
     '<p class="note">For Eric and Niels. It stops at $' + cap + ' a month and starts again on the 1st. ' +
     '<b id="aaUsage"></b></p>' +
