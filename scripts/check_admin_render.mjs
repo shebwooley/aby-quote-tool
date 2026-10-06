@@ -66,8 +66,24 @@ function slice(decl, text) {
   return end === -1 ? null : text.slice(at, end + close.length);
 }
 
+// 10-06-2026: an admin page now calls the SERVER's esc() while rendering, and this checker died with "esc is not
+// defined" before any rule ran (on the code before that day's change too). There are THREE `function esc(` in
+// worker.js and two live inside page <script> template text, so the plain name finds the wrong one. The server's
+// copy is found by its own first two lines, which no other copy shares.
+const SERVER_ESC = "\nfunction esc(s) {\n  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n}";
+
 function build(text) {
   const parts = [];
+  if (text.indexOf(SERVER_ESC) === -1) throw new Error("could not find the server-side esc() - its first lines changed; update SERVER_ESC");
+  parts.push(SERVER_ESC);
+  // Declarations the slicer cannot end by its usual closers (a string built with + that ends in a quote), each with
+  // the marker that closes it. Added 10-06-2026 for the broker-invite text the admin now renders.
+  for (const [start, end] of [["\nconst ABY_INVITE_EMAIL_DEFAULT = ", "';\n"]]) {
+    const a = text.indexOf(start);
+    const b = a === -1 ? -1 : text.indexOf(end, a);
+    if (a === -1 || b === -1) throw new Error("could not find " + start.trim());
+    parts.push(text.slice(a, b + end.length));
+  }
   for (const d of DEPS) {
     const s = slice(d, text);
     if (!s) throw new Error("could not find " + d.trim() + " at module scope");
