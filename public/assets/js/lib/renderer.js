@@ -770,19 +770,36 @@ ABYQuote.renderer = (function () {
     // (and the per employee amount)."
     // ORDER IS DELIBERATE: the amount first, then the rate that produced it, then the
     // count it assumed -- price, then workings.
+    // 10-06-2026 (Eric: "Yes, ship it", F-448): TWO LINES instead of one run-on line joined by bars. feeSummary is
+    // the RECURRING price and the rate that produced it (printed bold); feeDetail is setup, documents, renewal and the
+    // count, printed once underneath. A flat sentence that already opens with the amount ("$55 per month minimum
+    // billing. From 65 participants, ...") stands alone rather than repeating the amount.
     function feeSummary(r, meta) {
-      var parts = [];
-      if (r.setupFee) parts.push('Setup ' + (r.setupFee.waived ? 'waived' : u.money(r.setupFee.amount)));
-      if (r.docsFee) parts.push('Documents ' + u.money(r.docsFee.amount));
-      if (r.renewalFee != null) parts.push('Renewal ' + u.money(r.renewalFee.amount) + '/yr');
-      if (r.annualFee != null) parts.push(u.money(r.annualFee.amount) + '/yr');
       if (r.monthlyFee) {
-        parts.push(u.money(r.monthlyFee.amount) + '/mo');
-        if (r.monthlyFee.breakdown) parts.push(r.monthlyFee.breakdown);
+        var amt = u.money(r.monthlyFee.amount);
+        var bd = r.monthlyFee.breakdown || '';
+        if (bd && bd.indexOf(amt) === 0) return bd;
+        return amt + ' per month' + (bd ? ' - ' + bd : '');
       }
+      if (r.annualFee != null) return u.money(r.annualFee.amount) + ' per year';
+      // A product whose setup and renewal are the SAME amount is a yearly price (POP: "$350 per year", Eric's approved
+      // wording), the same reading the pricing cards give it ("Annual Fee (setup / renewal)").
+      if (sameYearly(r)) return u.money(r.setupFee.amount) + ' per year';
+      return '';
+    }
+    function sameYearly(r) {
+      return !r.monthlyFee && r.annualFee == null && r.setupFee && !r.setupFee.waived && r.renewalFee != null
+        && r.setupFee.amount > 0 && r.setupFee.amount === r.renewalFee.amount;
+    }
+    function feeDetail(r, meta) {
+      var parts = [];
+      var yearly = sameYearly(r);
+      if (r.setupFee && !yearly) parts.push(r.setupFee.waived ? 'Setup waived' : 'Setup ' + u.money(r.setupFee.amount) + ' (one time)');
+      if (r.docsFee) parts.push('Documents ' + u.money(r.docsFee.amount));
+      if (r.renewalFee != null && !yearly) parts.push('Renewal ' + u.money(r.renewalFee.amount) + ' per year');
       var cn = countNote(r.monthlyFee || r.annualFee, meta);
       if (cn) parts.push(cn.replace(/\.$/, ''));
-      return parts.join('  |  ');
+      return parts.length ? parts.join('. ') + '.' : '';
     }
     // 🔴 CAPTURED UNDER A DIFFERENT NAME BECAUSE THE CALLBACK BELOW SHADOWS `opts`.
     // The multi-package branch declares its own `var opts = g.results.map(...)` for the <option>
@@ -803,11 +820,17 @@ ABYQuote.renderer = (function () {
         // The employer would then have signed for one option having read a total for another.
         // `defaultOptionFor` is the single answer to "which one does this quote assume".
         var pre = defaultOptionFor(g, form);
-        var opts = g.results.map(function (r) {
+        // The detail line is printed ONCE under the picker when every option shares it (the usual case: one setup and
+        // renewal fee per product). When the options differ, each option carries its own, so the line under the
+        // picker can never describe an option the employer did not choose.
+        var details = g.results.map(function (r) { return feeDetail(r, meta); });
+        var sharedDetail = details.every(function (d) { return d === details[0]; }) ? details[0] : null;
+        var opts = g.results.map(function (r, ri) {
           var pkg = findPackage(meta, r.packageId) || {};
           var parsed = splitPackageName(pkg.name || r.packageId);
           var label = parsed.name + (parsed.detail ? ': ' + parsed.detail : '');
           var fs = feeSummary(r, meta);
+          if (sharedDetail === null && details[ri]) fs = fs ? fs + '. ' + details[ri] : details[ri];
           if (fs) label += '  (' + fs + ')';
           var sel = (r.packageId === pre) ? ' selected' : '';
           // `value` stays the SHORT NAME: it is what `abyElectedProducts()` appends to the
@@ -817,10 +840,15 @@ ABYQuote.renderer = (function () {
                  ' data-opt-package="' + esc(r.packageId) + '"' + sel + '>' + esc(label) + '</option>';
         }).join('');
         tier = '<div class="opt-tier"><label>Option:</label><select class="opt-tier-select"' +
-               ' data-opt-product="' + esc(g.productId) + '">' + opts + '</select></div>';
+               ' data-opt-product="' + esc(g.productId) + '">' + opts + '</select></div>' +
+               (sharedDetail ? '<div class="opt-desc">' + esc(sharedDetail) + '</div>' : '');
       } else {
         var fs2 = feeSummary(g.results[0], meta);
-        if (fs2) desc = '<div class="opt-desc">' + esc(fs2) + '</div>';
+        var fd2 = feeDetail(g.results[0], meta);
+        if (fs2 || fd2) {
+          desc = '<div class="opt-desc">' + (fs2 ? '<strong>' + esc(fs2) + '</strong>' : '') +
+                 (fs2 && fd2 ? '<br>' : '') + (fd2 ? esc(fd2) : '') + '</div>';
+        }
       }
       // THE EMPLOYER'S OWN COUNT, at the signature line and nowhere else (F-367).
       // Eric: "if they change it on the quote that number should appear near the bottom in the
