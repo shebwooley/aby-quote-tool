@@ -65,7 +65,7 @@
       (d.quoteNumber ? ' &middot; quote ' + esc(d.quoteNumber) : '') +
       (d.brokerName || d.brokerAgency ? ' &middot; broker: ' + esc([d.brokerName, d.brokerAgency].filter(Boolean).join(', ')) : '');
     // ABY's view opens on the whole application (the Summary), not on the first section.
-    if (adminMode) state.step = steps().length - 1;
+    if (adminMode || (state.readonly && /[?&]view=all\b/.test(location.search))) state.step = steps().length - 1;
     render();
   }).catch(function () { fail(0, {}); });
 
@@ -96,6 +96,13 @@
 
     var html = '';
     html += '<h1>' + (adminMode ? 'Setup questions (ABY view)' : 'Setting up your ABY services') + '</h1>';
+    // The no-login link, at the top of every step of the ABY view (it opens on the Summary, not on step 0).
+    if (adminMode && d.shareLink && d.status === 'submitted') {
+      var full = location.origin + d.shareLink;
+      html += '<div class="note info share"><strong>To send this to someone without an ABY login</strong> (an account manager), copy this link. ' +
+        'It opens on all the answers and cannot change anything once submitted.<div class="share-row"><input type="text" readonly id="shareLink" value="' + esc(full) + '">' +
+        '<button class="btn ghost" type="button" id="copyShare">Copy link</button></div></div>';
+    }
     if (state.step === 0) {
       html += '<p class="lead">' + (adminMode
         ? 'What the employer has answered so far. This view is read-only.'
@@ -354,6 +361,13 @@
   function wire() {
     app.querySelectorAll('[data-step]').forEach(function (b) {
       b.addEventListener('click', function () { go(Number(b.getAttribute('data-step'))); });
+    });
+    var cs = document.getElementById('copyShare');
+    if (cs) cs.addEventListener('click', function () {
+      var f = document.getElementById('shareLink');
+      var done = function () { cs.textContent = 'Copied'; setTimeout(function () { cs.textContent = 'Copy link'; }, 1800); };
+      if (navigator.clipboard) navigator.clipboard.writeText(f.value).then(done, function () { f.select(); });
+      else { f.select(); }
     });
     var pb = document.getElementById('printBtn');
     if (pb) pb.addEventListener('click', function () { if (state.dirty) saveNow(); printView(); window.print(); });
