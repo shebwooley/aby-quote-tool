@@ -74,10 +74,17 @@ ok('the conversation is kept for the TAB only, never in localStorage', client.in
 ok('an unanswered question leaves the conversation and goes back in the box', client.includes('chat.pop();') && client.includes('box.value = q;'));
 ok('the server reads history for Ask only', src.includes("const history = job === 'ask' ? assistHistory(body.history) : [];"));
 ok('and puts it before the new question', src.includes("const messages = history.concat([{ role: 'user', content: first }]);"));
-ok('told a fact, it says it cannot change records and where it is done', src.includes('say plainly that you cannot change records yourself'));
+ok('told a fact, it may PROPOSE, and says nothing has changed until pressed', src.includes('Say plainly that nothing has changed until they press it. Never propose a change they have not confirmed.'));
+// MAKE THIS CHANGE (Eric, 10-06-2026: "Yes, build the button").
+const ap = src.slice(src.indexOf('async function assistProposal('), src.indexOf('\n}\n', src.indexOf('async function assistProposal(')));
+ok('the proposal builder only READS the database', ap.length > 500 && (ap.match(/DB\.prepare\('([^']*)'/g) || []).length >= 4 && (ap.match(/DB\.prepare\('([^']*)'/g) || []).every((m) => /prepare\('SELECT /.test(m)));
+ok('the propose tool is offered in Ask only', src.includes("if (job === 'ask') tools.push(ASSIST_PROPOSE_TOOL);"));
+ok('the page runs only the tidy screens own requests', ['/api/admin/crm/relationship', '/api/admin/crm/rename', '/api/admin/tidy-dismiss', '/api/admin/crm/merge-person'].every((u) => client.includes("return u === '" + u + "';")) && client.includes('steps.every(allowed)'));
+ok('a change happens only on the Make this change button', client.includes('data-aa-do=') && client.includes('>Make this change</button>') && client.includes('makeChange(doBtn)'));
+ok('a failed or partial change is named, not swallowed', client.includes('Only partly made (') && client.includes("'Not made: '"));
 
 let fail = 0;
 for (const [n, c] of out) { console.log((c ? 'ok    ' : 'FAIL  ') + n); if (!c) fail++; }
-if (out.length < 50) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
+if (out.length < 55) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
 console.log('\ncheck_admin_assistant - ' + (out.length - fail) + ' of ' + out.length + ' passed');
 process.exit(fail ? 1 : 0);

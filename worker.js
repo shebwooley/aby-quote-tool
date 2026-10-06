@@ -2763,8 +2763,10 @@ function assistSystem(job, who) {
     rules.push('Your job now: answer the question about the quote log. Look things up as needed. Give the answer first, in a sentence or two, then the few figures behind it. If the data cannot answer it, say so and say what is missing.');
     // A CONVERSATION (Eric, 10-06-2026: "would it know what I was talking about if I said yes they are the same").
     rules.push('This may be a follow-up: the earlier turns of the conversation come before the newest question, so use them to know what "it", "they" or "those" mean. ' +
-      'If the user tells you a fact (for example that two firms are the same business, or what happened to a quote), thank them, restate exactly what they confirmed, and say plainly that you cannot change records yourself. ' +
-      'Then say where it is done: firms and people are combined on Brokers & Agencies, Marketing view, under Tidy up (or on the firm\'s own page); a quote\'s status is changed on the quote log.');
+      'If the user tells you a fact (for example that two firms are the same business, or what happened to a quote), thank them and restate exactly what they confirmed. ' +
+      'If it matches one of the changes propose_change offers, look up the exact record ids and call propose_change once - the person then sees a Make this change button and decides. ' +
+      'Say plainly that nothing has changed until they press it. Never propose a change they have not confirmed. ' +
+      'If it is not one of those changes, say you cannot make it and where it is done: firms and people on Brokers & Agencies, Marketing view, under Tidy up; a quote\'s status on the quote log.');
   } else {
     rules.push('Your job now: the tidy screen paired these records because a rule thinks they may be the same ' + (job === 'tidy-people' ? 'person' : 'firm') + '. ' +
       'Read the facts given (and look up more if useful) and write: first line "Likely the same", "Likely different" or "Cannot tell"; then 2 to 5 short lines of evidence (quote dates, whether the histories overlap or follow one another, cities, BUSINESS email domains, who quoted); then one line on what a person should check before deciding. ' +
@@ -2845,6 +2847,86 @@ async function handleAssistUsage(env) {
   }
 }
 
+// ⭐ MAKE THIS CHANGE (Eric, 10-06-2026: "Yes, build the button"). When the person CONFIRMS a fact in Ask Claude ("yes,
+// those are the same firm"), Claude may PROPOSE the matching change. A proposal changes nothing: the server checks every
+// record it names exists, turns it into the SAME requests the tidy screens' own buttons send, and the page shows it with
+// a Make this change button. ⛔ Only a person pressing that button changes anything - "nothing merges on its own" stands.
+// Five kinds, each mirroring an existing button: same_firm (Keep this / Same firm), different_firms (These are different
+// firms), same_person (Keep this one), different_people (Not the same person), quote_status (the quote log's status).
+const ASSIST_STATUS_NAMES = { P: 'Pending', I: 'In process', S: 'Sold', D: 'Dead', N: 'No response' };
+const ASSIST_PROPOSE_TOOL = {
+  name: 'propose_change',
+  description: 'Offer the person a change to make, ONLY after they have clearly told you the answer in this conversation ' +
+    '(for example "yes, those are the same firm" or "that quote is dead"). It changes nothing: the person sees it with a ' +
+    'Make this change button and decides. Never propose on your own judgment. One call per confirmed fact.',
+  input_schema: { type: 'object', properties: {
+    kind: { type: 'string', enum: ['same_firm', 'different_firms', 'same_person', 'different_people', 'quote_status'] },
+    ids: { type: 'array', items: { type: 'string' },
+      description: 'Record ids from the database. same_firm / same_person: the record to KEEP first, then the ones to fold into it. ' +
+        'different_firms / different_people: every record in the group. quote_status: the one quote id.' },
+    status: { type: 'string', enum: ['P', 'I', 'S', 'D', 'N'], description: 'quote_status only: the new status.' },
+  }, required: ['kind', 'ids'] },
+};
+
+async function assistProposal(env, input, who) {
+  const DB = env.DB;
+  const kind = String(input && input.kind || '');
+  const ids = (Array.isArray(input && input.ids) ? input.ids : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 6);
+  const by = who === 'niels' ? 'Niels' : 'Eric';
+  const key = ids.slice().sort().join('|');
+  if (kind === 'same_firm' || kind === 'different_firms') {
+    if (ids.length < 2) return { error: 'Name at least two firms.' };
+    const rows = [];
+    for (const id of ids) {
+      const r = await DB.prepare('SELECT id, name FROM agencies WHERE id = ?').bind(id).first();
+      if (!r) return { error: 'There is no firm with id ' + id + '. Look it up first.' };
+      rows.push(r);
+    }
+    const keep = rows[0], others = rows.slice(1);
+    if (kind === 'same_firm') {
+      return { proposal: { kind,
+        summary: 'Combine ' + others.map((r) => r.name).join(', ') + ' into ' + keep.name + '. Their quotes count under ' + keep.name + ' from now on, and the tidy screen stops asking.',
+        steps: others.map((r) => ({ method: 'POST', url: '/api/admin/crm/relationship',
+          body: { id: r.id, parent_id: keep.id, relationship: 'alias', note: 'the same firm as ' + keep.name + ' (confirmed by ' + by + ' in Ask Claude)' } }))
+          .concat([{ method: 'POST', url: '/api/admin/crm/rename', body: { id: keep.id, confirm: true } }]) } };
+    }
+    return { proposal: { kind,
+      summary: 'Mark ' + rows.map((r) => r.name).join(' and ') + ' as different firms, so the tidy screen stops pairing them.',
+      steps: [{ method: 'POST', url: '/api/admin/tidy-dismiss', body: { group_key: key, names: rows.map((r) => r.name).join(' / ') } }] } };
+  }
+  if (kind === 'same_person' || kind === 'different_people') {
+    if (ids.length < 2) return { error: 'Name at least two records.' };
+    const rows = [];
+    for (const id of ids) {
+      const r = await DB.prepare('SELECT id, name FROM people WHERE id = ?').bind(id).first();
+      if (!r) return { error: 'There is no person with id ' + id + '. Look it up first.' };
+      const em = await DB.prepare('SELECT email FROM broker_directory WHERE person_id = ? LIMIT 2').bind(id).all();
+      r.emails = (em.results || []).map((x) => x.email).filter(Boolean);
+      rows.push(r);
+    }
+    const label = (r) => r.name + (r.emails.length ? ' (' + r.emails.join(', ') + ')' : ' (no email)');
+    if (kind === 'same_person') {
+      return { proposal: { kind,
+        summary: 'Combine ' + rows.slice(1).map(label).join(', ') + ' into ' + label(rows[0]) + ', one person with all of their quotes.',
+        steps: [{ method: 'POST', url: '/api/admin/crm/merge-person', body: { keep: rows[0].id, drop: rows.slice(1).map((r) => r.id) } }] } };
+    }
+    return { proposal: { kind,
+      summary: 'Mark ' + rows.map(label).join(' and ') + ' as different people, so the tidy screen stops pairing them.',
+      steps: [{ method: 'POST', url: '/api/admin/tidy-dismiss', body: { group_key: key, names: rows[0].name + ' (Ask Claude)' } }] } };
+  }
+  if (kind === 'quote_status') {
+    const status = String(input && input.status || '');
+    if (!ASSIST_STATUS_NAMES[status] || ids.length !== 1) return { error: 'Name one quote and a status (P, I, S, D or N).' };
+    const q = await DB.prepare('SELECT id, quote_number, client_name, status FROM quotes WHERE id = ? OR quote_number = ? LIMIT 1').bind(ids[0], ids[0]).first();
+    if (!q) return { error: 'There is no quote ' + ids[0] + '. Look it up first.' };
+    return { proposal: { kind,
+      summary: 'Change quote ' + (q.quote_number || q.id) + (q.client_name ? ' (' + q.client_name + ')' : '') + ' from ' +
+        (ASSIST_STATUS_NAMES[q.status || 'P'] || q.status) + ' to ' + ASSIST_STATUS_NAMES[status] + '.',
+      steps: [{ method: 'PATCH', url: '/api/quotes/' + encodeURIComponent(q.id), body: { status } }] } };
+  }
+  return { error: 'Unknown kind of change.' };
+}
+
 // THE EARLIER TURNS OF AN Ask Claude CONVERSATION, as the page sends them: [{ role, text }], oldest first. Only the
 // final words of each turn travel (not the lookups behind them). Kept to what the model API accepts - starts with the
 // person, alternates, ends with Claude - and trimmed from the OLDEST end so a long conversation cannot run up the
@@ -2899,8 +2981,11 @@ async function handleAdminAssistant(request, env, who) {
       why: { type: 'string', description: 'In a few plain words, what you are checking.' },
     }, required: ['sql', 'why'] },
   }];
+  // Make this change is offered in Ask only - a tidy case is Claude's opinion, never a confirmed fact.
+  if (job === 'ask') tools.push(ASSIST_PROPOSE_TOOL);
   const messages = history.concat([{ role: 'user', content: first }]);
   const looked = [];
+  const proposals = [];
   for (let turn = 0; turn < ASSIST_MAX_TURNS; turn++) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -2917,12 +3002,19 @@ async function handleAdminAssistant(request, env, who) {
     const uses = content.filter((c) => c.type === 'tool_use');
     if (msg.stop_reason !== 'tool_use' || !uses.length || turn === ASSIST_MAX_TURNS - 1) {
       const text = content.filter((c) => c.type === 'text').map((c) => c.text).join('\n').trim();
-      return jsonResp({ ok: true, job, text: text || 'No answer came back.', looked,
+      return jsonResp({ ok: true, job, text: text || 'No answer came back.', looked, proposals,
         usage: { month, spent: await assistSpent(env, month), cap: ASSIST_MONTHLY_CAP_USD } });
     }
     messages.push({ role: 'assistant', content });
     const results = [];
     for (const u of uses) {
+      if (u.name === 'propose_change') {
+        const pr = job === 'ask' ? await assistProposal(env, u.input, who) : { error: 'Not offered here.' };
+        if (pr.proposal) proposals.push(pr.proposal);
+        results.push({ type: 'tool_result', tool_use_id: u.id, content: pr.error ? pr.error :
+          'Shown to the person as: ' + pr.proposal.summary + ' It has NOT been made; it happens only if they press Make this change.' });
+        continue;
+      }
       const r = await assistLookup(env, u.input && u.input.sql);
       looked.push({ why: String(u.input && u.input.why || ''), rows: r.rows == null ? null : r.rows, refused: !!r.error });
       results.push({ type: 'tool_result', tool_use_id: u.id, content: r.error ? r.error : (r.text + (r.more ? ' (more rows exist)' : '')) });
@@ -16172,7 +16264,9 @@ function adminAskHTML(cap) {
     '<main><div class="card">' +
     '<h2>Ask Claude</h2>' +
     '<p class="lead">Ask anything about ABY&rsquo;s quotes, firms, brokers, clients and sales. Claude looks it up and answers, ' +
-    'and remembers this conversation, so you can follow up. It is AI, so check anything you act on &mdash; and it cannot change anything.</p>' +
+    'and remembers this conversation, so you can follow up. It is AI, so check anything you act on. ' +
+    'It changes nothing on its own: when you tell it something (&ldquo;those are the same firm&rdquo;), it can offer a ' +
+    '<b>Make this change</b> button, and only your click changes the record.</p>' +
     // ⭐ A CONVERSATION, NOT TWO BOXES (Eric, 10-06-2026: "I sort of wish that it looked a little more like chatting with
     // Claude or ChatGPT"). admin-assist.js fills #aaChat; the box to type in stays at the bottom, under the last answer.
     '<div id="aaChat"></div>' +

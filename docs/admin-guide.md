@@ -739,6 +739,12 @@ refuses anything but reading. Signed in as the office, every door answers that i
 - ⭐ **Ask Claude in the menu** (orange, on every admin page): one page to ask anything about quotes, firms,
   brokers, clients and sales, with a few examples to start from.
 - **Ask Claude** on the quote log: the same thing, in a box above the tabs.
+- ⭐ **It remembers the conversation** (until you close the tab or press *New conversation*), so a follow-up
+  like "yes, those are the same firm" makes sense to it.
+- ⭐ **Make this change.** When you confirm something it can act on, it shows the exact change with a
+  *Make this change* button: combine two firms, combine two people, mark them as different, or change a
+  quote's status. **The button does exactly what the tidy screen's or quote log's own button does, and
+  nothing changes until you press it.** It never proposes a change you have not told it.
 
 Every answer shows *What it looked up*, so you can see where it came from. ⚠️ It needs ABY's model key
 on the Worker (`ANTHROPIC_API_KEY`), added 10-06-2026.

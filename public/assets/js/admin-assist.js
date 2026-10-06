@@ -41,7 +41,11 @@
     '.aa-me{background:#fff;border:1px solid #6b7280;border-radius:10px;padding:10px 14px;margin:16px 0 6px auto;max-width:85%;width:fit-content;' +
       'white-space:pre-wrap;font-size:16px;line-height:1.5;color:#111}' +
     '.aa-me .aa-mewho{font-weight:700;color:#111;margin-bottom:2px;font-size:15px}' +
-    '.aa-turn{margin:8px 0 6px}';
+    '.aa-turn{margin:8px 0 6px}' +
+    '.aa-prop{margin-top:10px;border:1px solid #D97757;border-left:5px solid #D97757;border-radius:7px;padding:10px 12px;background:#fff;color:#111}' +
+    '.aa-prop .aa-prop-what{margin-bottom:8px}' +
+    '.aa-prop .aa-prop-note{margin-left:10px;font-size:15px;color:#1f2937}' +
+    '.aa-prop .aa-prop-done{font-weight:700;color:#111}';
   document.head.appendChild(css);
 
   function boxAfter(btn) {
@@ -87,11 +91,13 @@
       }
       h += '</ul></details>';
     }
+    h += '<div class="aa-props">' + proposalsHTML(d.proposals) + '</div>';
     h += '<div class="aa-bar"><button type="button" data-aa-copy>Copy</button>' +
          '<span>Nothing has been saved or changed.</span>' +
          '<a href="#" data-aa-close style="margin-left:auto">Close</a></div>';
     box.innerHTML = h;
     box.__text = d.text || '';
+    box.__props = d.proposals || [];
   }
 
   // ── A CONVERSATION (the Ask Claude page; Eric, 10-06-2026: "I sort of wish that it looked a little more like chatting
@@ -103,6 +109,67 @@
   var chat = [];
   try { chat = JSON.parse(sessionStorage.getItem(CHAT_KEY) || '[]'); if (!Array.isArray(chat)) chat = []; } catch (e) { chat = []; }
   function saveChat() { try { sessionStorage.setItem(CHAT_KEY, JSON.stringify(chat)); } catch (e) { /* not kept */ } }
+
+  // ── MAKE THIS CHANGE (Eric, 10-06-2026: "Yes, build the button") ────────────────────────────────────────────────
+  // A proposal arrives from the server already turned into the SAME requests the tidy screens' own buttons send. It is
+  // shown with one button; nothing happens until it is pressed. ⛔ Only these requests may run from here - anything
+  // else in a proposal is refused rather than sent.
+  var ALLOWED = [
+    { method: 'POST', test: function (u) { return u === '/api/admin/crm/relationship'; } },
+    { method: 'POST', test: function (u) { return u === '/api/admin/crm/rename'; } },
+    { method: 'POST', test: function (u) { return u === '/api/admin/tidy-dismiss'; } },
+    { method: 'POST', test: function (u) { return u === '/api/admin/crm/merge-person'; } },
+    { method: 'PATCH', test: function (u) { return /^\/api\/quotes\/[^/]+$/.test(u); } },
+  ];
+  function allowed(step) {
+    return !!step && ALLOWED.some(function (a) { return a.method === step.method && a.test(String(step.url || '')); });
+  }
+  function proposalsHTML(props) {
+    return (props || []).map(function (p, i) {
+      return '<div class="aa-prop"><div class="aa-prop-what"><b>Proposed change:</b> ' + esc(p.summary) + '</div>' +
+        (p.done
+          ? '<div class="aa-prop-done">' + esc(p.done) + '</div>'
+          : '<button type="button" class="aa-claude aa-sm" data-aa-do="' + i + '">Make this change</button>' +
+            '<span class="aa-prop-note">Nothing has changed yet.</span>') +
+        '</div>';
+    }).join('');
+  }
+  async function makeChange(btn) {
+    var card = btn.closest('.aa-out');
+    var props = card && card.__props;
+    var p = props && props[Number(btn.getAttribute('data-aa-do'))];
+    if (!p || p.done) return;
+    var steps = p.steps || [];
+    if (!steps.length || !steps.every(allowed)) {
+      p.done = 'Not made: this change is not one the page is allowed to make.';
+      if (card.__save) card.__save();
+      repaintProps(card);
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Making the change…';
+    var failed = '';
+    for (var i = 0; i < steps.length; i++) {
+      try {
+        var r = await fetch(steps[i].url, { method: steps[i].method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(steps[i].body || {}) });
+        if (!r.ok) {
+          var d = await r.json().catch(function () { return {}; });
+          failed = d.error || ('it did not save (' + r.status + ')');
+          break;
+        }
+      } catch (e) { failed = 'the connection dropped'; break; }
+    }
+    // ⛔ A FAILURE IS NAMED, NOT SWALLOWED - the same rule the tidy screens follow. A part-made change says so.
+    p.done = failed
+      ? (i > 0 ? 'Only partly made (' + i + ' of ' + steps.length + ' steps): ' : 'Not made: ') + failed
+      : 'Done. The change is saved.';
+    if (card.__save) card.__save();
+    repaintProps(card);
+  }
+  function repaintProps(card) {
+    var box = card.querySelector('.aa-props');
+    if (box) box.innerHTML = proposalsHTML(card.__props);
+  }
 
   function turnHTML(t) {
     if (t.role === 'user') return '<div class="aa-me"><div class="aa-mewho">You</div>' + esc(t.text) + '</div>';
@@ -117,6 +184,7 @@
       }
       h += '</ul></details>';
     }
+    h += '<div class="aa-props">' + proposalsHTML(t.proposals) + '</div>';
     return h + '</div>';
   }
   function paintChat(pending, err) {
@@ -126,6 +194,12 @@
     if (pending) h += '<div class="aa-out aa-turn"><div class="aa-who">Asking Claude…</div><div class="aa-text">Claude is reading the records. This takes a few seconds.</div></div>';
     if (err) h += '<div class="aa-out aa-turn"><div class="aa-err">' + esc(err) + '</div></div>';
     el.innerHTML = h;
+    var cards = el.querySelectorAll('.aa-turn'), k = 0;
+    chat.forEach(function (t) {
+      if (t.role !== 'assistant') return;
+      var c = cards[k++];
+      if (c) { c.__props = t.proposals || []; c.__save = saveChat; }
+    });
     var ex = document.getElementById('aaExamples');
     if (ex) ex.style.display = chat.length || pending ? 'none' : '';
     var last = el.lastElementChild;
@@ -149,7 +223,7 @@
       var d = await r.json().catch(function () { return { error: 'The answer could not be read (' + r.status + ').' }; });
       if (d.usage) paintUsage(d.usage);
       if (d.error) throw new Error(d.error);
-      chat.push({ role: 'assistant', text: d.text || '', looked: d.looked || [] });
+      chat.push({ role: 'assistant', text: d.text || '', looked: d.looked || [], proposals: d.proposals || [] });
       saveChat();
       paintChat(false);
     } catch (e) {
@@ -199,6 +273,8 @@
       if (box && navigator.clipboard) navigator.clipboard.writeText(box.__text || '').then(function () { copy.textContent = 'Copied'; });
       return;
     }
+    var doBtn = t.closest('[data-aa-do]');
+    if (doBtn) { e.preventDefault(); makeChange(doBtn); return; }
     if (t.closest('[data-aa-new]')) {
       chat = []; saveChat(); paintChat(false);
       var qb = document.getElementById('aaQuestion'); if (qb) { qb.value = ''; qb.focus(); }

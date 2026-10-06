@@ -37,6 +37,7 @@ let calls = 0;
 const fakeFetch = async (url, init) => {
   calls++;
   const body = JSON.parse(init.body);
+  if (fakeFetch.script) { fakeFetch.seen = (fakeFetch.seen || []).concat([body]); return fakeFetch.script(calls, body); }
   if (calls === 1) fakeFetch.firstMessages = body.messages;
   if (calls === 1) return { ok: true, json: async () => ({ stop_reason: 'tool_use', usage: { input_tokens: 1000000, output_tokens: 0 }, content: [
     { type: 'tool_use', id: 't1', name: 'look_up', input: { sql: 'SELECT client_name FROM quotes LIMIT 3', why: 'their open quotes' } },
@@ -102,8 +103,34 @@ calls = 0; fakeFetch.firstMessages = null;
 r = await handle(req({ job: 'tidy-firms', ids: '7,8', history: two }), { DB: stubDB(), ANTHROPIC_API_KEY: 'k' }, 'eric');
 ok('history is only for Ask, never a tidy case', (fakeFetch.firstMessages || []).length === 1);
 
+// MAKE THIS CHANGE (Eric, 10-06-2026: "Yes, build the button"). The model may only PROPOSE; nothing is written.
+const propose = (input) => (n) => n === 1
+  ? { ok: true, json: async () => ({ stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'p1', name: 'propose_change', input }] }) }
+  : { ok: true, json: async () => ({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'Press Make this change if that is right.' }] }) };
+calls = 0; ran.length = 0; fakeFetch.seen = []; fakeFetch.script = propose({ kind: 'same_firm', ids: ['7', '8'] });
+r = await handle(req({ job: 'ask', question: 'Yes, they are the same firm', history: two }), { DB: stubDB(), ANTHROPIC_API_KEY: 'k' }, 'eric');
+const prop = (r.data.proposals || [])[0];
+ok('a confirmed same-firm comes back as ONE proposal', r.status === 200 && (r.data.proposals || []).length === 1 && prop.kind === 'same_firm');
+ok('its steps are exactly the tidy screen Keep this requests', !!prop && prop.steps.map((s) => s.method + ' ' + s.url).join(',') === 'POST /api/admin/crm/relationship,POST /api/admin/crm/rename' && prop.steps[0].body.relationship === 'alias' && prop.steps[0].body.id === 1 && prop.steps[1].body.confirm === true);
+ok('the note says who confirmed it', !!prop && /confirmed by Eric in Ask Claude/.test(prop.steps[0].body.note));
+ok('NOTHING was written while proposing (only reads and the spend line)', ran.every((q) => /^\s*(SELECT|CREATE TABLE IF NOT EXISTS assist_usage|INSERT INTO assist_usage)/i.test(q.sql)));
+ok('the model is told it has NOT been made', JSON.stringify((fakeFetch.seen[1] || {}).messages || []).includes('It has NOT been made'));
+ok('the propose tool is offered in Ask', (fakeFetch.seen[0].tools || []).some((x) => x.name === 'propose_change'));
+calls = 0; fakeFetch.seen = []; fakeFetch.script = propose({ kind: 'same_firm', ids: ['7', '8'] });
+r = await handle(req({ job: 'tidy-firms', ids: '7,8' }), { DB: stubDB(), ANTHROPIC_API_KEY: 'k' }, 'eric');
+ok('a tidy case is never offered the propose tool', !(fakeFetch.seen[0].tools || []).some((x) => x.name === 'propose_change'));
+ok('and a propose attempt there yields no proposal', (r.data.proposals || []).length === 0);
+calls = 0; fakeFetch.seen = []; fakeFetch.script = propose({ kind: 'quote_status', ids: ['q-1'], status: 'D' });
+r = await handle(req({ job: 'ask', question: 'That quote is dead' }), { DB: stubDB(), ANTHROPIC_API_KEY: 'k' }, 'eric');
+const qp = (r.data.proposals || [])[0];
+ok('a quote status proposal is the quote log PATCH', !!qp && qp.steps.length === 1 && qp.steps[0].method === 'PATCH' && /^\/api\/quotes\/[^/]+$/.test(qp.steps[0].url) && qp.steps[0].body.status === 'D');
+calls = 0; fakeFetch.seen = []; fakeFetch.script = propose({ kind: 'same_firm', ids: ['7'] });
+r = await handle(req({ job: 'ask', question: 'same' }), { DB: stubDB(), ANTHROPIC_API_KEY: 'k' }, 'eric');
+ok('a proposal naming one firm is refused, not guessed', (r.data.proposals || []).length === 0 && JSON.stringify(fakeFetch.seen[1].messages).includes('Name at least two firms'));
+fakeFetch.script = null;
+
 let fail = 0;
 for (const [n, c] of out) { console.log((c ? 'ok    ' : 'FAIL  ') + n); if (!c) fail++; }
-if (out.length < 25) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
+if (out.length < 35) { console.log('FAIL  only ' + out.length + ' rules ran'); fail++; }
 console.log('\ncheck_admin_assistant_loop - ' + (out.length - fail) + ' of ' + out.length + ' passed');
 process.exit(fail ? 1 : 0);
