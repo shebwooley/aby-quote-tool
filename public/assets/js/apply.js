@@ -2,6 +2,11 @@
  * The employer application page (F-625). Served at /q/<token>/apply and, read-only, at
  * /admin/application?cid=<commitment id>. The questions are data: assets/js/data/application-questions.js.
  *
+ * ABY ADDS OR CHANGES ANSWERS (10-07-2026, Eric: "Niels would like to add some missing answers ... We need to be able to
+ * do that."): the ABY view has "Add or change answers". It edits in place and saves to /api/admin/application/answers;
+ * the employer's submission and signature are untouched, and every answer ABY writes shows "Added by ABY" here, on
+ * the employer's link and on the printout.
+ *
  * SAVE AND COME BACK (Eric, 09-29-2026: "If they can save and come back, that would be preferable.")
  * Every change saves to the server a moment after it is made, so the link itself is the saved state:
  * the employer can close the page, and a broker helping them can open the same link and carry on.
@@ -21,7 +26,9 @@
   var API = adminMode ? '/api/admin/application?cid=' + encodeURIComponent(cid)
                       : '/api/q/' + encodeURIComponent(token) + '/application';
 
-  var state = { data: null, answers: {}, prefilled: {}, step: 0, readonly: false, saveTimer: null, saving: false, dirty: false };
+  var state = { data: null, answers: {}, prefilled: {}, step: 0, readonly: false, saveTimer: null, saving: false, dirty: false, adminEdit: false };
+  var ADMIN_SAVE = '/api/admin/application/answers';
+  function abyAdded(k) { return !!(state.data && state.data.abyAdded && state.data.abyAdded[k]); }
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -103,9 +110,16 @@
         'It opens on all the answers and cannot change anything once submitted.<div class="share-row"><input type="text" readonly id="shareLink" value="' + esc(full) + '">' +
         '<button class="btn ghost" type="button" id="copyShare">Copy link</button></div></div>';
     }
+    if (adminMode) {
+      html += state.adminEdit
+        ? '<div class="note warn"><strong>Editing as ABY.</strong> Your changes save as you go and show as <em>Added by ABY</em>. ' +
+          'The employer\'s submission and signature stay as they were.<div class="share-row"><button class="btn" type="button" id="abyDone">Done editing</button></div></div>'
+        : '<div class="note info"><strong>Missing or wrong answers?</strong> ABY can fill them in here. Each one shows as <em>Added by ABY</em>, ' +
+          'and the employer\'s submission and signature stay as they were.<div class="share-row"><button class="btn" type="button" id="abyEdit">Add or change answers</button></div></div>';
+    }
     if (state.step === 0) {
       html += '<p class="lead">' + (adminMode
-        ? 'What the employer has answered so far. This view is read-only.'
+        ? (state.adminEdit ? 'Go through the sections and fill in what is missing.' : 'What the employer has answered so far.')
         : 'A few questions ABY needs to set up the services you authorized. Your answers save as you go, so you can stop and come back to this same link any time. Your broker can open it too and fill in anything they know.') + '</p>';
       html += intro();
     }
@@ -151,7 +165,8 @@
     return sections().map(function (s) {
       return '<div class="pv-sec"><h3>' + esc(s.section.title) + '</h3>' + s.questions.map(function (q) {
         var a = shown(q, state.answers[q.key]);
-        return '<div class="pv-row"><div>' + esc(q.label) + '</div><div class="a' + (a ? '' : ' blank') + '">' + (a ? esc(a) : 'blank') + '</div></div>';
+        return '<div class="pv-row"><div>' + esc(q.label) + '</div><div class="a' + (a ? '' : ' blank') + '">' + (a ? esc(a) : 'blank') +
+          (a && abyAdded(q.key) ? ' <em>(added by ABY)</em>' : '') + '</div></div>';
       }).join('') + '</div>';
     }).join('');
   }
@@ -176,7 +191,9 @@
       : '<div style="font-style:italic;color:#666">' + (adminMode ? 'No drawn signature stored (submitted before signing existed, or the database was not yet updated).' : 'Submitted electronically.') + '</div>';
     return '<div class="' + (forPrint ? 'pv-sec' : 'review-sec') + '" style="margin-top:18px">' +
       (forPrint ? '<h3>Signature</h3>' : '<h2 style="margin-top:22px">Signature</h2>') + img +
-      '<div style="margin-top:6px">' + esc(d.submittedBy || '') + (d.submittedAt ? ' &middot; ' + esc(usDate(d.submittedAt)) : '') + '</div></div>';
+      '<div style="margin-top:6px">' + esc(d.submittedBy || '') + (d.submittedAt ? ' &middot; ' + esc(usDate(d.submittedAt)) : '') + '</div>' +
+      (Object.keys(d.abyAdded || {}).length ? '<div style="margin-top:6px;font-style:italic">Answers marked "added by ABY" were filled in by ABY Benefits after this was signed.</div>' : '') +
+      '</div>';
   }
 
   // A fixed 600x160 canvas so the saved picture stays small on any screen; pointer events cover mouse,
@@ -228,7 +245,8 @@
     var ro = state.readonly ? ' readonly' : '';
     var dis = state.readonly ? ' disabled' : '';
     var cls = 'q' + (q.half ? ' half' : '') + (q.third ? ' third' : '') + (q.head ? ' head' : '');
-    var tag = state.prefilled[q.key] ? '<span class="tag">From your authorization</span>' : '';
+    var tag = abyAdded(q.key) ? '<span class="tag">Added by ABY</span>'
+      : state.prefilled[q.key] ? '<span class="tag">From your authorization</span>' : '';
     var id = 'f_' + q.key.replace(/[^a-z0-9]/gi, '_');
     var lbl = '<label for="' + id + '">' + esc(q.label) + tag + '</label>';
     var hint = q.hint ? '<div class="hint">' + esc(q.hint) + '</div>' : '';
@@ -340,7 +358,7 @@
 
     // ⭐ READ-ONLY, THE SUMMARY IS EVERY ANSWER ON ONE PAGE (10-06-2026) - it used to list only what was blank, so a
     // processor opening Summary to see the application saw nothing but blanks and a signature.
-    if (state.readonly) return out + '<h2 style="margin-top:22px">All answers</h2><div class="sheet">' + sheetRows() + '</div>' + signedBlock(false);
+    if (state.readonly || adminMode) return out + '<h2 style="margin-top:22px">All answers</h2><div class="sheet">' + sheetRows() + '</div>' + signedBlock(false);
 
     out += '<h2 style="margin-top:26px">Sign and submit to ABY</h2>' +
       '<p class="intro">Submitting sends your answers to ABY. It is not a contract: ABY will send the Administrative Services Agreement for signature separately.</p>' +
@@ -373,6 +391,13 @@
     if (pb) pb.addEventListener('click', function () { if (state.dirty) saveNow(); printView(); window.print(); });
     app.querySelectorAll('[data-go]').forEach(function (b) {
       b.addEventListener('click', function () { go(state.step + Number(b.getAttribute('data-go'))); });
+    });
+    var ae = document.getElementById('abyEdit');
+    if (ae) ae.addEventListener('click', function () { state.adminEdit = true; state.readonly = false; state.step = 0; render(); window.scrollTo(0, 0); });
+    var ad = document.getElementById('abyDone');
+    if (ad) ad.addEventListener('click', function () {
+      if (state.dirty) saveNow();
+      state.adminEdit = false; state.readonly = true; state.step = steps().length - 1; render(); window.scrollTo(0, 0);
     });
     if (state.readonly) return;
 
@@ -430,6 +455,7 @@
 
   function savedText() {
     if (state.readonly) return '';
+    if (adminMode && !state.saveError && !state.saving && state.data.abyUpdatedAt) return 'Saved ' + esc(usDate(state.data.abyUpdatedAt));
     if (state.saveError) return '<span class="saved err">' + esc(state.saveError) + '</span>';
     if (state.saving) return 'Saving...';
     if (state.data && state.data.updatedAt) return 'Saved ' + esc(usDate(state.data.updatedAt));
@@ -445,11 +471,20 @@
     clearTimeout(state.saveTimer);
     if (!state.dirty || state.saving) return;
     state.saving = true; state.dirty = false; showSaved();
-    fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answers: state.answers }) })
+    var body = { answers: state.answers };
+    if (adminMode) {
+      var mine = {};
+      Object.keys(state.answers).forEach(function (k) { if (!state.prefilled[k]) mine[k] = state.answers[k]; });
+      body = { cid: cid, answers: mine };
+    }
+    fetch(adminMode ? ADMIN_SAVE : API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { status: r.status, body: j }; }); })
       .then(function (res) {
         state.saving = false;
-        if (res.status === 200 && res.body.ok) { state.saveError = ''; state.data.updatedAt = res.body.updatedAt; }
+        if (res.status === 200 && res.body.ok) {
+          state.saveError = ''; state.data.updatedAt = res.body.updatedAt;
+          if (adminMode) { state.data.abyUpdatedAt = res.body.updatedAt; state.data.abyAdded = res.body.abyAdded || {}; }   // tags refresh on the next step change; redrawing now would move the cursor out of the box being typed in
+        }
         else { state.dirty = true; state.saveError = (res.body && res.body.message) || 'Not saved - please check your connection and try again.'; }
         showSaved();
         if (state.dirty && !state.saveError) scheduleSave();

@@ -109,7 +109,7 @@ fi
 
 # THE ADMIN ASSISTANT READS AND DRAFTS AND CAN NEVER WRITE (F-603, 10-06-2026). Both instant: the gate, who may
 # use it and its doors; then its real server loop against a stub database and a stub model.
-for c in check_admin_assistant check_admin_assistant_loop check_application_readonly; do
+for c in check_admin_assistant check_admin_assistant_loop check_application_readonly check_application_aby_edit; do
   if ! node scripts/$c.mjs > /dev/null 2>&1; then
     node scripts/$c.mjs
     echo ""

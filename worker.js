@@ -73,7 +73,7 @@ import { ADMIN_GUIDE_HTML } from './docs/admin-guide.generated.js';
 // The employer application after the authorization (F-625). Its own file on purpose - see its header.
 import {
   APPLICATION_MIGRATIONS, handleGetApplication, handleSaveApplication, handleSubmitApplication,
-  handleAdminGetApplication, handleAdminReopenApplication, applicationForExport, sendApplicationEmail,
+  handleAdminGetApplication, handleAdminReopenApplication, handleAdminSaveApplication, applicationForExport, sendApplicationEmail,
 } from './lib/application.js';
 // F-631: per-agency quote defaults (sales rep, commission, one setup fee). Its own file, like the above.
 import {
@@ -280,6 +280,9 @@ export default {
     }
     if (path === '/api/admin/application' && method === 'GET') {
       return withAuth(request, env, () => handleAdminGetApplication(url, env));
+    }
+    if (path === '/api/admin/application/answers' && method === 'POST') {
+      return withAuth(request, env, () => handleAdminSaveApplication(request, env));
     }
     if (path === '/api/admin/application/reopen' && method === 'POST') {
       return withAuth(request, env, () => handleAdminReopenApplication(request, env));

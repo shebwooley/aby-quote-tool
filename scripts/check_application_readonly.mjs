@@ -22,7 +22,7 @@ const last = q.lastIndexOf("return '<div class=\"' + cls + '\">' + lbl + hint + 
 ok('read-only, a question returns its answer in words', ro > 0 && q.includes('var said = shown(q, v);') && q.includes("(said ? esc(said) : 'Left blank')"));
 ok('and that happens BEFORE any control is returned', ro > 0 && last > ro);
 ok('the employer\'s own view still returns the real controls', last > 0);
-ok('the read-only Summary carries every answer', js.includes("if (state.readonly) return out + '<h2 style=\"margin-top:22px\">All answers</h2><div class=\"sheet\">' + sheetRows() + '</div>' + signedBlock(false);"));
+ok('the read-only Summary carries every answer', js.includes("if (state.readonly || adminMode) return out + '<h2 style=\"margin-top:22px\">All answers</h2><div class=\"sheet\">' + sheetRows() + '</div>' + signedBlock(false);"));
 ok('the printout and the Summary use the same rows', (js.match(/sheetRows\(\)/g) || []).length >= 3 && js.includes('    out += sheetRows();'));
 ok('ABY\'s view, and a ?view=all link, open on the Summary', js.includes('if (adminMode || (state.readonly && /[?&]view=all\\b/.test(location.search))) state.step = steps().length - 1;'));
 // THE NO-LOGIN LINK (Eric, 10-06-2026: "Can we not just make that available without a login?").
