@@ -727,6 +727,28 @@ changing the relationship back undoes it.
 
 ---
 
+## Filling in a submitted application (built 10-07-2026)
+
+**What it does.** On a submitted application (Commitments, then the application link), press **Add or change
+answers**. Every section opens for editing, your changes save as you type, and **Done editing** returns to the
+summary. Eric: *"Niels would like to add some missing answers. Is there a way to edit or add? We need to be able to
+do that."*
+
+**Why it works this way.** The employer has already signed. Nothing you do here touches that: the application stays
+submitted, with the same signer, the same date and the same drawn signature, so **the employer never has to sign
+again**. Every answer ABY writes is marked **Added by ABY** on this page, on the employer's own link and on the
+printout, and the signature block says some answers were filled in by ABY after signing. That keeps the record
+honest: nobody can read it as the employer having signed an answer they never gave.
+
+**What to watch out for.**
+- Answers the page filled in from the authorization (marked *From your authorization*) are not counted as ABY's
+  unless you change them.
+- Blanking an answer you added removes it, and its mark.
+- The employer's link stays read-only. If they need to change something themselves, that is a different step
+  (reopening the application), and an answer they rewrite stops being marked as ABY's.
+
+---
+
 ## The assistant — Eric and Niels only (built 10-06-2026)
 
 **It reads and drafts. It never changes anything** — it has no way to: its only tool is a lookup that
