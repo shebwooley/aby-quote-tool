@@ -103,5 +103,27 @@ await handleSaveApplication(TOKEN, new Request('https://x.test', { method: 'POST
   answers: { 'co.legalName': 'Test Employer', 'notes.anythingElse': 'The employer rewrote it' } }) }), env);
 check('an employer save keeps no stray marks key in their answers', (await get()).answers._aby === undefined, '');
 
+// Eric, 10-07-2026: "definitely don't keep that for anything we answer before it's submitted."
+const T2 = 'zyxwvutsrqpnmkjh';
+db.prepare('INSERT INTO quotes VALUES (?,?,?,?,?,?,?,?,?,?)').run('q2', 'TX000002-TEST-C', 'Paper Co', '2027-01-01',
+  'Broker', 'Agency', '', 'b@example.invalid', JSON.stringify([{ id: 'hra', name: 'Health Reimbursement Arrangement' }]), T2);
+db.prepare('INSERT INTO commitments (id, share_token, submitted_at, employer_name, products) VALUES (?,?,?,?,?)')
+  .run('c2', T2, '2026-10-01T00:00:00Z', 'Paper Co', JSON.stringify(['HRA']));
+const admin2 = (answers) => handleAdminSaveApplication(new Request('https://x.test/api/admin/application/answers',
+  { method: 'POST', body: JSON.stringify({ cid: 'c2', answers }) }), env);
+const get2 = async () => (await handleGetApplication(T2, env)).json();
+r = await admin2({ 'co.ein': '12-3456789' });
+let g2 = await get2();
+check('ABY filling in an UNSUBMITTED application marks nothing', g2.answers['co.ein'] === '12-3456789'
+  && Object.keys(g2.abyAdded || {}).length === 0 && g2.status === 'draft', JSON.stringify(g2.abyAdded));
+// a mark written before this rule (New Metals, 10-07-2026) is cleared by the next ABY save, even one that changes nothing
+db.prepare('UPDATE applications SET answers = ? WHERE share_token = ?').run(JSON.stringify({ 'co.ein': '12-3456789',
+  _aby: { 'co.ein': { at: '2026-10-07T00:00:00Z', value: '12-3456789' } } }), T2);
+check('(setup) the stale mark shows before the save', Object.keys((await get2()).abyAdded || {}).length === 1, '');
+await admin2({ 'co.ein': '12-3456789' });
+g2 = await get2();
+check('an older mark on an unsubmitted application is dropped by the next ABY save',
+  Object.keys(g2.abyAdded || {}).length === 0 && g2.answers['co.ein'] === '12-3456789', JSON.stringify(g2.abyAdded));
+
 console.log(fails ? '\n' + fails + ' failed' : '\nall green');
 if (fails) process.exit(1);
