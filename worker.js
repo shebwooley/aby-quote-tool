@@ -115,6 +115,11 @@ export default {
     // A quote REQUEST arriving from BenefitLab (F-609). Same bearer secret as the read above and
     // for the same reason: the caller is the BenefitLab SERVER, not a person with a cookie.
     if (path === '/api/quote-request' && method === 'POST') return handleQuoteRequest(request, env);
+    // The Monday RFP search (a Claude Code routine) reports here, and reads back what is already
+    // open so it can re-check it. Its OWN bearer secret, RFP_WATCH_TOKEN, never the integration
+    // token: this caller may add RFP leads and read the open RFP list, and nothing else.
+    if (path === '/api/rfp-watch/digest' && method === 'POST') return handleRfpDigest(request, env);
+    if (path === '/api/rfp-watch/open' && method === 'GET') return handleRfpOpenList(request, env);
 
     // ── Broker accounts (F-6). Their own gate: a signed `aby_broker` cookie, NOT the admin one.
     if (path === '/api/broker/signup'  && method === 'POST') return handleBrokerSignup(request, env);
@@ -14312,6 +14317,7 @@ async function handleRfpList(request, env) {
 
   return jsonResp({
     today: today,
+    lastDigest: await rfpLastDigest(env),
     rows: shown,
     screenedOut: all.filter((r) => r.status === 'screened_out'),
     counts: counts,
@@ -14377,6 +14383,109 @@ async function handleRfpImport(request, env) {
     summary: added.length + (commit ? ' added' : ' new') + ', ' + known.length +
              ' already known, ' + refused.length + ' refused',
   });
+}
+
+// ── The weekly search reports itself (10-12-2026) ────────────────────────────────────────────────
+//
+// Eric, 10-12-2026: the Monday search wrote a file into Google Drive and sent a phone notification he
+// never saw, so in two weeks not one lead reached this page. *"If you can't make them appear on the
+// abyquote.com/admin area, then..."* -- so the routine now POSTs its table here itself.
+// ⭐ The rows go through the SAME parser, cleaner, date rule and duplicate match as a paste, so a
+// weekly row and a pasted row cannot differ. The two-step preview a paste has is replaced by the
+// row landing as disposition 'new' with its deadline marked unverified: nothing is decided for ABY.
+// ⭐ EVERY RUN IS RECORDED, INCLUDING A RUN THAT FOUND NOTHING. A quiet week and a search that has
+// stopped running look identical on a list of leads; the page reads the last run and says which.
+// Stored as a crm_events row (entity_type 'rfp_digest', entity_id = the run date), so no schema
+// change was needed.
+
+function rfpWatchGate(request, env) {
+  const expected = env.RFP_WATCH_TOKEN;
+  // 🔴 FAILS CLOSED: an unset secret is a 503, never an open endpoint.
+  if (!expected) return jsonResp({ error: 'This endpoint is not configured.' }, 503);
+  const m = /^Bearer\s+(.+)$/i.exec((request.headers.get('Authorization') || '').trim());
+  if (!m || !safeEqual(m[1], expected)) return jsonResp({ error: 'Unauthorized' }, 401);
+  return null;
+}
+
+/** POST /api/rfp-watch/digest -- { runDate: 'YYYY-MM-DD', summary: '<the prose>', table: '<pipe table>' } */
+async function handleRfpDigest(request, env) {
+  const refusedGate = rfpWatchGate(request, env);
+  if (refusedGate) return refusedGate;
+  let body;
+  try { body = await request.json(); } catch (e) { return jsonResp({ error: 'Bad JSON.' }, 400); }
+
+  const today = rfpToday();
+  const runDate = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(String(body.runDate || '')) ? body.runDate : today;
+  const summary = String(body.summary || '').slice(0, 20000);
+  const table = String(body.table || '');
+
+  const added = [], known = [], refused = [];
+  // A week with no rows sends no table (or the words "No rows this week"). That is not a parse
+  // failure and must not be reported as one.
+  if (table.indexOf('|') !== -1 || table.indexOf('\t') !== -1) {
+    const parsed = rfpParsePaste(table);
+    parsed.refused.forEach((r) => refused.push(r));
+    for (const row of parsed.rows) {
+      const rec = rfpClean(row);
+      if (!rec.entity_name || !rec.title) { refused.push({ line: rec.title || rec.entity_name || '(blank)', why: 'no entity or title' }); continue; }
+      const bad = rfpDateProblem(rec);
+      if (bad) { refused.push({ line: rec.entity_name + ' - ' + rec.title, why: bad }); continue; }
+      const existing = await rfpFindExisting(env, rec);
+      if (existing) { known.push({ entity: rec.entity_name, title: rec.title }); continue; }
+      await rfpInsert(env, rec, 'digest');
+      added.push({ entity: rec.entity_name, title: rec.title, state: rec.state || '', closes_at: rec.closes_at || '' });
+    }
+  }
+
+  // One record per run date: a re-run the same day replaces the earlier one rather than doubling it.
+  const now = new Date().toISOString();
+  await env.DB.prepare("DELETE FROM crm_events WHERE entity_type = 'rfp_digest' AND entity_id = ?").bind(runDate).run();
+  await env.DB.prepare(
+    'INSERT INTO crm_events (id, entity_type, entity_id, kind, label, body, happened_at, created_at, created_by) ' +
+    "VALUES (?, 'rfp_digest', ?, 'note', NULL, ?, ?, ?, 'weekly search')"
+  ).bind(crypto.randomUUID(), runDate, JSON.stringify({ summary: summary, added: added, known: known, refused: refused }),
+         runDate, now).run();
+
+  return jsonResp({
+    ok: true, runDate: runDate, added: added.length, known: known.length, refused: refused,
+    summary: added.length + ' added, ' + known.length + ' already known, ' + refused.length + ' refused',
+  });
+}
+
+/** GET /api/rfp-watch/open -- what is on the list and not yet closed, so the search re-checks it. */
+async function handleRfpOpenList(request, env) {
+  const refusedGate = rfpWatchGate(request, env);
+  if (refusedGate) return refusedGate;
+  const today = rfpToday();
+  const rows = (await env.DB.prepare(
+    'SELECT o.*, d.disposition FROM rfp_opportunity o LEFT JOIN rfp_decision d ON d.opportunity_id = o.id ' +
+    "ORDER BY COALESCE(o.closes_at, '9999-99-99') ASC"
+  ).all()).results || [];
+  const open = rows.map((r) => rfpDecorate(r, today))
+    .filter((r) => r.status !== 'closed' && r.status !== 'screened_out')
+    .map((r) => ({
+      entity: r.entity_name, state: r.state, title: r.title, number: r.solicitation_number,
+      closes_at: r.closes_at, official_url: r.official_url, listing_url: r.listing_url,
+      disposition: r.disposition || 'new',
+    }));
+  return jsonResp({ today: today, open: open });
+}
+
+/** The newest weekly-search record, for the page's "This week's search" card. */
+async function rfpLastDigest(env) {
+  try {
+    const row = await env.DB.prepare(
+      "SELECT entity_id, body, created_at FROM crm_events WHERE entity_type = 'rfp_digest' " +
+      'ORDER BY happened_at DESC, created_at DESC LIMIT 1'
+    ).first();
+    if (!row) return null;
+    let b = {};
+    try { b = JSON.parse(row.body || '{}'); } catch (e) { b = {}; }
+    return { runDate: row.entity_id, receivedAt: row.created_at, summary: b.summary || '',
+             added: b.added || [], known: b.known || [], refused: b.refused || [] };
+  } catch (e) {
+    return null;
+  }
 }
 
 /** POST /api/admin/rfp/decision -- what ABY decided. Separate from what the world is doing. */
@@ -14558,6 +14667,12 @@ ${abyAdminNav('/admin/rfp-watch')}
       </select>
       <select id="fDisp" onchange="load()"><option value="">Any disposition</option></select>
     </div>
+  </div>
+
+  <div class="card" id="digestCard">
+    <h2>This week's search</h2>
+    <p class="sub" id="digestLine">Loading&hellip;</p>
+    <div id="digestBody"></div>
   </div>
 
   <div id="lists"></div>
@@ -14897,6 +15012,7 @@ function render(j){
     j.counts.total + ' tracked, ' + j.counts.open + ' still open, ' +
     j.counts.needs_call + ' need a look at the official page, ' +
     j.counts.screened_out + ' screened out.';
+  renderDigest(j.lastDigest, j.today);
 
   var call = j.rows.filter(function(r){ return r.status === 'conflicting'; });
   var rest = j.rows.filter(function(r){ return r.status !== 'conflicting'; });
@@ -14912,6 +15028,43 @@ function render(j){
     'Screened out (' + j.screenedOut.length + ') - the rules can be wrong, so they are kept and shown';
   document.getElementById('dropped').innerHTML = j.screenedOut.length
     ? table(j.screenedOut, true) : '<p class="sub">Nothing screened out yet.</p>';
+}
+
+// The Monday search posts here itself. A week that found nothing still reports, so "nothing new"
+// and "the search has stopped" read differently: after eight days with no report the card says so.
+function usDay(iso){
+  var p = String(iso || '').slice(0, 10).split('-');
+  return p.length === 3 ? p[1] + '-' + p[2] + '-' + p[0] : String(iso || '');
+}
+function renderDigest(d, today){
+  var line = document.getElementById('digestLine'), body = document.getElementById('digestBody');
+  if (!d) {
+    line.textContent = 'The Monday search has not reported here yet. It runs every Monday at 7am Central.';
+    body.innerHTML = '';
+    return;
+  }
+  var age = Math.round((Date.parse(today) - Date.parse(d.runDate)) / 86400000);
+  var txt = 'Ran ' + usDay(d.runDate) + ': ' + d.added.length + ' new lead' + (d.added.length === 1 ? '' : 's') +
+    ' added below, ' + d.known.length + ' already on the list';
+  if (d.refused.length) txt += ', ' + d.refused.length + ' it could not read';
+  txt += '.';
+  if (age > 8) txt += ' No report since then - the weekly search may have stopped running.';
+  line.textContent = txt;
+  line.style.color = age > 8 ? '#a1160a' : '';
+  var h = '';
+  if (d.added.length) {
+    h += '<p class="sub">New this week: ' + d.added.map(function(a){
+      return esc(a.entity) + ' - ' + esc(a.title) + (a.closes_at ? ' (due ' + esc(usDay(a.closes_at)) + ')' : '');
+    }).join('; ') + '</p>';
+  }
+  if (d.refused.length) {
+    h += '<p class="sub">Could not read: ' + d.refused.map(function(r){ return esc(r.line) + ' (' + esc(r.why) + ')'; }).join('; ') + '</p>';
+  }
+  if (d.summary) {
+    h += '<details><summary>What it searched and what it ruled out</summary>' +
+         '<div class="note" style="white-space:pre-wrap">' + esc(d.summary) + '</div></details>';
+  }
+  body.innerHTML = h;
 }
 
 function section(title, rows){
