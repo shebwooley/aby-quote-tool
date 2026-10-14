@@ -78,7 +78,7 @@ import {
 // The secure census / bank-details upload (F-625, C18). Its own file, like the above.
 import {
   UPLOAD_MIGRATIONS, handleUpload, handleListUploads, handleAdminListUploads, handleAdminDownload,
-  purgeExpiredUploads, uploadsForExport, sendUploadEmail,
+  purgeExpiredUploads, uploadsForExport, sendUploadEmail, handleAdminDeleteUpload,
 } from './lib/uploads.js';
 // A secure-upload link that is not a quote (Eric, 10-14-2026). /admin/secure-uploads makes it; /u/<token> uses it.
 import {
@@ -328,6 +328,10 @@ export default {
     }
     if (path === '/api/admin/uploads' && method === 'GET') {
       return withAuth(request, env, () => handleAdminListUploads(url, env));
+    }
+    // ABY deletes a file once it is saved in ABY's own system (Eric, 10-14-2026). Admin only, like the download.
+    if (path === '/api/admin/upload/delete' && method === 'POST') {
+      return withAuth(request, env, () => handleAdminDeleteUpload(request, env));
     }
     if (path === '/api/admin/upload' && method === 'GET') {
       return withAuth(request, env, () => handleAdminDownload(url, env));

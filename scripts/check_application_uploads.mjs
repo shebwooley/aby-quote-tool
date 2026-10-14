@@ -11,7 +11,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import {
-  handleUpload, handleListUploads, handleAdminListUploads, handleAdminDownload, purgeExpiredUploads,
+  handleUpload, handleListUploads, handleAdminListUploads, handleAdminDownload, purgeExpiredUploads, handleAdminDeleteUpload,
   uploadsForExport, cleanFileName, UPLOAD_MAX_FILES,
 } from '../lib/uploads.js';
 import {
@@ -178,11 +178,39 @@ console.log('SECURE UPLOAD (C18)\n');
   check('its email text carries the link on its own line', text.includes('\n\nhttps://abyquotes.com/u/x\n\n'), JSON.stringify(text));
 }
 
+// ABY DELETES A FILE once it is saved in ABY's own system (Eric, 10-14-2026).
+{
+  const { env } = fresh();
+  await handleUpload(TOKEN, up(TOKEN, 'census', 'to-delete.xlsx', new Uint8Array([7, 7])), env, null, null);
+  let j = await (await handleAdminListUploads(new URL('https://abyquotes.com/api/admin/uploads?cid=c1'), env)).json();
+  const id = j.files[0].id;
+  const del = (x) => handleAdminDeleteUpload(new Request('https://x', { method: 'POST', body: JSON.stringify({ id: x }) }), env);
+  let r = await del(id);
+  j = await r.json();
+  check('delete: the file leaves storage', r.status === 200 && env.UPLOADS.m.size === 0, `${r.status} ${env.UPLOADS.m.size}`);
+  check('delete: the record stays, marked deleted by ABY', j.file?.deletedAt && j.file?.deletedBy === 'aby', JSON.stringify(j));
+  r = await handleAdminDownload(new URL('https://abyquotes.com/api/admin/upload?id=' + id), env);
+  check('delete: a download afterwards says it is gone (410)', r.status === 410, String(r.status));
+  j = await (await handleListUploads(TOKEN, env)).json();
+  check('delete: the employer page still lists it, as removed by ABY', j.files.length === 1 && j.files[0].deletedBy === 'aby', JSON.stringify(j));
+  r = await del(id);
+  check('delete: deleting twice is harmless', r.status === 200, String(r.status));
+  r = await del('no-such-id');
+  check('delete: an unknown file is 404', r.status === 404, String(r.status));
+  const p = await purgeExpiredUploads(env, '2099-01-01T00:00:00Z');
+  check('delete: the 90-day purge does not touch a file ABY already deleted', p.deleted === 0, JSON.stringify(p));
+}
+
 check('a path in a file name is stripped', cleanFileName('..%2F..%2Fetc%2Fpasswd.csv') === 'passwd.csv', cleanFileName('..%2F..%2Fetc%2Fpasswd.csv'));
 
 // The routes: the download and the admin list must sit behind withAuth; the link routes must not offer a download.
 const w = readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 check('the download route is behind the admin login', /path === '\/api\/admin\/upload' && method === 'GET'\) \{\s*return withAuth\(/.test(w), 'route not wrapped');
+const applyJs = readFileSync(new URL('../public/assets/js/apply.js', import.meta.url), 'utf8');
+const adminPage = (await import('../lib/upload-requests.js')).adminSecureUploadsHTML('', '');
+check('deleted files fold away on both admin pages (Eric, 10-14-2026)',
+  applyJs.includes("'<details class=\"gone\"><summary>Deleted files ('") && adminPage.includes('<details class=gone><summary>Deleted files ('), 'no fold');
+check('the delete route is behind the admin login', /path === '\/api\/admin\/upload\/delete' && method === 'POST'\) \{\s*return withAuth\(/.test(w), 'route not wrapped');
 check('the admin file list is behind the admin login', /path === '\/api\/admin\/uploads' && method === 'GET'\) \{\s*return withAuth\(/.test(w), 'route not wrapped');
 const wr = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
 check('the employer upload page route exists, and the admin page and its APIs are behind the login',

@@ -89,7 +89,8 @@
     if (d.files && d.files.length) {
       html += '<h2>Received by ABY</h2><ul class="files">' + d.files.map(function (f) {
         return '<li><strong>' + esc(KIND[f.kind] || 'Document') + ':</strong> ' + esc(f.name) + ' <span class="meta">' + size(f.size) + ', ' +
-          (f.deletedAt ? 'deleted after 90 days' : 'received ' + esc(when(f.uploadedAt))) + '</span></li>';
+          // Every file ABY received, whether or not ABY has since moved it to its own system and deleted it here.
+          'received ' + esc(when(f.uploadedAt)) + '</span></li>';
       }).join('') + '</ul>';
     }
     html += '</div>';

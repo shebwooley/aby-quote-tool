@@ -97,12 +97,32 @@
   function uploadList() {
     var files = state.uploads || [];
     if (!files.length) return adminMode ? '<p class="intro">Nothing has been uploaded yet.</p>' : '';
-    return '<ul class="files">' + files.map(function (f) {
+    // ⭐ DELETED FILES ARE FOLDED AWAY (Eric, 10-14-2026: "I don't want some huge list of deleted files on the screen").
+    // What is still waiting shows; the deleted ones sit under one closed "Deleted files (N)" line.
+    if (!adminMode) return '<ul class="files">' + files.map(function (f) {
+      return '<li><strong>' + esc(f.kindLabel) + ':</strong> ' + esc(f.name) + ' <span class="meta">' + sizeText(f.size) +
+        ', received ' + esc(usDate(f.uploadedAt)) + '</span></li>';
+    }).join('') + '</ul>';
+    var live = files.filter(function (f) { return !f.deletedAt; });
+    var gone = files.filter(function (f) { return f.deletedAt; });
+    var out = live.length ? '<ul class="files">' + live.map(fileLine).join('') + '</ul>'
+      : (adminMode ? '<p class="intro">No files waiting.</p>' : '');
+    if (gone.length) out += '<details class="gone"><summary>Deleted files (' + gone.length + ')</summary><ul class="files">' + gone.map(fileLine).join('') + '</ul></details>';
+    return out;
+  }
+  function fileLine(f) {
+    return [f].map(function (f) {
       var name = esc(f.name);
       if (adminMode && !f.deletedAt) name = '<a href="/api/admin/upload?id=' + encodeURIComponent(f.id) + '" download>' + name + '</a>';
+      // A file ABY deleted after moving it to its own system says so (Eric, 10-14-2026); the 90-day purge says that.
+      var gone = !f.deletedAt ? '' : f.deletedBy === 'aby'
+        ? 'deleted by ABY ' + esc(usDate(f.deletedAt))
+        : 'deleted after 90 days';
       return '<li><strong>' + esc(f.kindLabel) + ':</strong> ' + name + ' <span class="meta">' + sizeText(f.size) + ', ' +
-        (f.deletedAt ? 'deleted after 90 days' : 'received ' + esc(usDate(f.uploadedAt))) + '</span></li>';
-    }).join('') + '</ul>';
+        (gone || 'received ' + esc(usDate(f.uploadedAt))) + '</span>' +
+        (adminMode && !f.deletedAt ? ' <button type="button" class="btn ghost sm" data-del="' + esc(f.id) + '" data-file="' + esc(f.name) + '">Delete</button>' : '') +
+        '</li>';
+    })[0];
   }
   function uploadBox(kind, label) {
     return '<div class="upl"><label class="btn ghost" for="up_' + kind + '">' + esc(label) + '</label>' +
@@ -310,7 +330,7 @@
           '<p class="hint-s">Uploads are private: ABY can open them, and this page cannot, even for you. They are deleted automatically 90 days after ABY receives them.</p>' +
           '<div id="upMsg">' + (state.upMsg || '') + '</div>';
       }
-      if (adminMode) out += '<p class="intro">Sent through the secure upload. Click a file to download it. Files are deleted automatically 90 days after they were uploaded.</p>';
+      if (adminMode) out += '<p class="intro">Sent through the secure upload. Click a file to download it. Once it is saved in your own system, press Delete beside it; anything left is deleted automatically 90 days after it was uploaded.</p>';
       out += uploadList();
     }
     return out;
@@ -485,6 +505,17 @@
     if (ad) ad.addEventListener('click', function () {
       if (state.dirty) saveNow();
       state.adminEdit = false; state.readonly = true; state.step = steps().length - 1; render(); window.scrollTo(0, 0);
+    });
+    // ABY deletes a file once it is saved in ABY's own system (Eric, 10-14-2026). Asked once: it cannot be undone.
+    app.querySelectorAll('button[data-del]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (!confirm('Delete ' + b.getAttribute('data-file') + ' from ABY\'s storage? Do this once you have saved it in your own system. It cannot be undone.')) return;
+        b.disabled = true;
+        fetch('/api/admin/upload/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: b.getAttribute('data-del') }) })
+          .then(function (r) { return r.json(); })
+          .then(function (j) { if (!j.ok) { alert('That file could not be deleted.'); b.disabled = false; return; } loadUploads(); })
+          .catch(function () { alert('That file could not be deleted.'); b.disabled = false; });
+      });
     });
     app.querySelectorAll('input[data-upload]').forEach(function (inp) {
       inp.addEventListener('change', function () { uploadFiles(inp.getAttribute('data-upload'), inp.files); inp.value = ''; });
