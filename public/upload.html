@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>ABY Benefits - Secure upload</title>
+<!-- The stand-alone secure upload (Eric, 10-14-2026): ABY makes this link on /admin/secure-uploads for an employer who
+     needs to send a census or another private document outside any quote. Upload only; the page lists the NAMES of
+     what arrived and can never open a file. Server: lib/upload-requests.js and lib/uploads.js. -->
+<style>
+  :root { --blue: #205aa6; --blue-dark: #143c73; --ink: #12263f; --muted: #3f4b56; --line: #c9d4de; --soft: #eef3f8; --ok: #1a5c3a; --bad: #b3261e; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f4f6f9; color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; }
+  header.top { display: flex; align-items: center; gap: 18px; background: #fff; border-bottom: 3px solid var(--blue-dark); padding: 14px 20px; }
+  header.top img { height: 44px; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { font-size: 26px; margin: 8px 0 6px; color: var(--blue-dark); }
+  .lead { color: var(--muted); margin: 0 0 18px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; }
+  .note { border-radius: 10px; padding: 14px 16px; font-size: 16px; margin-bottom: 16px; background: var(--soft); border: 1px solid #c8d6e6; }
+  .note.ok { background: #f1f8f3; border-color: #b9dcc4; color: var(--ok); }
+  .note.bad { background: #fdf0ef; border-color: #f0b9b4; color: var(--bad); }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; margin: 6px 0 10px; }
+  .btn { display: inline-block; font: inherit; font-size: 16px; font-weight: 600; border-radius: 8px; padding: 11px 20px; cursor: pointer;
+         border: 1px solid var(--blue-dark); background: var(--blue-dark); color: #fff; }
+  .btn.ghost { background: #fff; color: var(--blue-dark); }
+  input[type=file] { position: absolute; left: -9999px; }
+  .hint { font-size: 15px; color: var(--muted); }
+  ul.files { margin: 8px 0 0 20px; padding: 0; } ul.files li { margin: 4px 0; }
+  .meta { color: var(--muted); font-size: 15px; }
+  h2 { font-size: 19px; margin: 22px 0 4px; color: var(--blue-dark); }
+</style>
+</head>
+<body>
+<header class="top"><img src="/assets/images/aby-logo.png" alt="ABY Benefits"></header>
+<div class="wrap"><div id="app"><p class="lead">Loading...</p></div></div>
+<script>
+(function () {
+  'use strict';
+  var token = location.pathname.split('/')[2] || '';
+  var API = '/api/u/' + encodeURIComponent(token);
+  var app = document.getElementById('app');
+  var state = { data: null, msg: '' };
+  var KIND = { census: 'Employee census', bank: 'Bank details', other: 'Document' };
+
+  function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function when(iso) {
+    var d = new Date(iso); if (isNaN(d)) return '';
+    return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) + ' at ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
+  function size(n) { n = Number(n) || 0; return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+
+  function load() {
+    fetch(API, { headers: { Accept: 'application/json' } })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { status: r.status, body: j }; }); })
+      .then(function (res) {
+        if (res.status !== 200 || !res.body.ok) {
+          app.innerHTML = '<div class="note bad">We could not find this link. Please check that you have the whole address, or call ABY Benefits at 817-731-6258.</div>';
+          return;
+        }
+        state.data = res.body; render();
+      })
+      .catch(function () { app.innerHTML = '<div class="note bad">This page could not be loaded. Please try again, or call ABY Benefits at 817-731-6258.</div>'; });
+  }
+
+  function box(kind, label, ghost) {
+    return '<label class="btn' + (ghost ? ' ghost' : '') + '" for="up_' + kind + '">' + label + '</label>' +
+      '<input type="file" id="up_' + kind + '" data-kind="' + kind + '" multiple accept=".xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.heic,.doc,.docx">';
+  }
+
+  function render() {
+    var d = state.data;
+    var html = '<h1>Send your files to ABY Benefits securely</h1>' +
+      '<p class="lead">For <strong>' + esc(d.employerName) + '</strong></p>';
+    if (d.note) html += '<div class="note"><strong>What ABY needs:</strong> ' + esc(d.note) + '</div>';
+    html += '<div class="card">';
+    if (d.closed) {
+      html += '<div class="note bad">This upload link has been closed. If you still need to send something, please call ABY Benefits at 817-731-6258 for a new link.</div>';
+    } else if (!d.enabled) {
+      html += '<div class="note bad">Uploads are not available right now. Please call ABY Benefits at 817-731-6258.</div>';
+    } else {
+      html += '<p>Choose the file on your computer. You can send more than one.</p>' +
+        '<div class="row">' + box('census', 'Upload your census', false) + box('other', 'Upload another document', true) + '</div>' +
+        '<p class="hint">Uploads are private: ABY can open them, and this page cannot, even for you. Please do not email these documents. ' +
+        'Spreadsheets (Excel or CSV), PDFs, Word documents and photos, up to 20 MB each. Files are deleted automatically 90 days after ABY receives them.</p>' +
+        '<div id="msg">' + state.msg + '</div>';
+    }
+    if (d.files && d.files.length) {
+      html += '<h2>Received by ABY</h2><ul class="files">' + d.files.map(function (f) {
+        return '<li><strong>' + esc(KIND[f.kind] || 'Document') + ':</strong> ' + esc(f.name) + ' <span class="meta">' + size(f.size) + ', ' +
+          (f.deletedAt ? 'deleted after 90 days' : 'received ' + esc(when(f.uploadedAt))) + '</span></li>';
+      }).join('') + '</ul>';
+    }
+    html += '</div>';
+    app.innerHTML = html;
+    app.querySelectorAll('input[data-kind]').forEach(function (inp) {
+      inp.addEventListener('change', function () { send(inp.getAttribute('data-kind'), inp.files); inp.value = ''; });
+    });
+  }
+
+  function send(kind, files) {
+    var list = Array.prototype.slice.call(files || []);
+    if (!list.length) return;
+    var done = 0, failed = [];
+    var m = document.getElementById('msg');
+    if (m) m.innerHTML = '<div class="note">Uploading ' + list.length + (list.length === 1 ? ' file' : ' files') + '...</div>';
+    function next() {
+      if (!list.length) {
+        state.msg = (failed.length ? '<div class="note bad">' + failed.map(esc).join('<br>') + '</div>' : '') +
+          (done ? '<div class="note ok">Received ' + done + (done === 1 ? ' file' : ' files') + '. ABY has been told.</div>' : '');
+        load();
+        return;
+      }
+      var f = list.shift();
+      if (f.size > 20 * 1048576) { failed.push(f.name + ': larger than 20 MB. Please send a smaller copy, or call ABY Benefits.'); return next(); }
+      fetch(API + '/uploads?kind=' + kind, { method: 'POST',
+        headers: { 'X-File-Name': encodeURIComponent(f.name), 'Content-Type': 'application/octet-stream' }, body: f })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { status: r.status, body: j }; }); })
+        .then(function (res) {
+          if (res.status === 200 && res.body.ok) done++;
+          else failed.push(f.name + ': ' + ((res.body && res.body.message) || 'did not upload. Please try again.'));
+          next();
+        })
+        .catch(function () { failed.push(f.name + ': did not upload - please check your connection and try again.'); next(); });
+    }
+    next();
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>

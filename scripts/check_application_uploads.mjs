@@ -14,6 +14,9 @@ import {
   handleUpload, handleListUploads, handleAdminListUploads, handleAdminDownload, purgeExpiredUploads,
   uploadsForExport, cleanFileName, UPLOAD_MAX_FILES,
 } from '../lib/uploads.js';
+import {
+  handleCreateRequest, handleListRequests, handleCloseRequest, handlePublicRequest, adminSecureUploadsHTML,
+} from '../lib/upload-requests.js';
 
 let fails = 0;
 const check = (name, cond, detail) => {
@@ -126,6 +129,55 @@ console.log('SECURE UPLOAD (C18)\n');
   check('with no bucket bound, the upload says it is not switched on (503)', r.status === 503, String(r.status));
 }
 
+// THE STAND-ALONE LINK (Eric, 10-14-2026): a link that is not a quote, for an employer who needs to send a census.
+{
+  const { env } = fresh();
+  sent.length = 0;
+  const mk = (body) => new Request('https://abyquotes.com/api/admin/upload-requests', { method: 'POST', body: JSON.stringify(body) });
+  let r = await handleCreateRequest(mk({ employerName: '' }), env);
+  check('a link needs an employer name', r.status === 400, String(r.status));
+  r = await handleCreateRequest(mk({ employerName: 'Acme Plumbing', note: 'Your COBRA census' }), env);
+  let j = await r.json();
+  const tok = j.token;
+  check('a link is made, in the quote-token shape', j.ok && /^[a-z2-9]{16}$/.test(tok) && j.link === 'https://abyquotes.com/u/' + tok, JSON.stringify(j));
+  r = await handlePublicRequest(tok, env);
+  j = await r.json();
+  check('the employer page shows the name and the note from ABY', j.ok && j.employerName === 'Acme Plumbing' && j.note === 'Your COBRA census' && j.enabled, JSON.stringify(j));
+  r = await handleUpload(tok, up(tok, 'census', 'acme census.xlsx', new Uint8Array([1, 2, 3])), env, null, notify);
+  j = await r.json();
+  check('the link takes a file (no quote, no signature needed)', r.status === 200 && j.ok, r.status + ' ' + JSON.stringify(j));
+  check('ABY is told, and the email points at Secure uploads', sent.length === 1 && sent[0].viewPath === '/admin/secure-uploads' && sent[0].employerName === 'Acme Plumbing', JSON.stringify(sent));
+  r = await handlePublicRequest(tok, env);
+  j = await r.json();
+  check('the employer page lists the name, with no id and no download address',
+    j.files.length === 1 && j.files[0].name === 'acme census.xlsx' && !('id' in j.files[0]) && !JSON.stringify(j).includes('/api/admin/upload'), JSON.stringify(j));
+  r = await handleListRequests(new Request('https://abyquotes.com/api/admin/upload-requests'), env);
+  j = await r.json();
+  const row = j.requests[0];
+  check('the admin list carries the link and the file with its id', row && row.files.length === 1 && row.files[0].id && row.link.endsWith('/u/' + tok), JSON.stringify(j));
+  r = await handleAdminDownload(new URL('https://abyquotes.com/api/admin/upload?id=' + row.files[0].id), env);
+  check('ABY downloads it through the same admin route', r.status === 200 && r.headers.get('Content-Type') === 'application/octet-stream', String(r.status));
+  await handleCloseRequest(new Request('https://x', { method: 'POST', body: JSON.stringify({ id: row.id }) }), env);
+  r = await handleUpload(tok, up(tok, 'census', 'late.xlsx', new Uint8Array([1])), env, null, null);
+  check('a CLOSED link takes no more files (410)', r.status === 410, String(r.status));
+  j = await (await handlePublicRequest(tok, env)).json();
+  check('and its page says it is closed', j.closed === true, JSON.stringify(j));
+  await handleCloseRequest(new Request('https://x', { method: 'POST', body: JSON.stringify({ id: row.id, reopen: true }) }), env);
+  r = await handleUpload(tok, up(tok, 'other', 'more.pdf', new Uint8Array([1])), env, null, null);
+  check('a reopened link takes files again', r.status === 200, String(r.status));
+  r = await handleUpload('zzzzzzzzzzzzzzz9', up('zzzzzzzzzzzzzzz9', 'census', 'x.xlsx', new Uint8Array([1])), env, null, null);
+  check('a made-up link takes nothing (404)', r.status === 404, String(r.status));
+  // The admin page's inline script must parse - it is built inside a JS string, where one bad escape breaks the page.
+  const page = adminSecureUploadsHTML('<header></header>', '');
+  const js = page.slice(page.indexOf('<script>') + 8, page.lastIndexOf('</script>'));
+  let parsed = true; try { new Function(js); } catch (e) { parsed = String(e); }
+  check('the Secure uploads admin page script parses', parsed === true, parsed);
+  const emailLine = js.split('\n').find((l) => l.startsWith('function emailText'));
+  let text = '';
+  try { text = new Function(emailLine + '; return emailText("A", "https://abyquotes.com/u/x");')(); } catch (e) { text = String(e); }
+  check('its email text carries the link on its own line', text.includes('\n\nhttps://abyquotes.com/u/x\n\n'), JSON.stringify(text));
+}
+
 check('a path in a file name is stripped', cleanFileName('..%2F..%2Fetc%2Fpasswd.csv') === 'passwd.csv', cleanFileName('..%2F..%2Fetc%2Fpasswd.csv'));
 
 // The routes: the download and the admin list must sit behind withAuth; the link routes must not offer a download.
@@ -133,6 +185,11 @@ const w = readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 check('the download route is behind the admin login', /path === '\/api\/admin\/upload' && method === 'GET'\) \{\s*return withAuth\(/.test(w), 'route not wrapped');
 check('the admin file list is behind the admin login', /path === '\/api\/admin\/uploads' && method === 'GET'\) \{\s*return withAuth\(/.test(w), 'route not wrapped');
 const wr = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
+check('the employer upload page route exists, and the admin page and its APIs are behind the login',
+  w.includes('return serveUploadPage(request, env);') &&
+  /path === '\/admin\/secure-uploads' && method === 'GET'\) \{\s*return withAuth\(/.test(w) &&
+  (w.match(/path === '\/api\/admin\/upload-requests(\/close)?' && method === '(GET|POST)'\) \{\s*return withAuth\(/g) || []).length === 3,
+  'routes not as expected');
 check('wrangler binds the bucket Eric made', /"binding":\s*"UPLOADS"[\s\S]*"bucket_name":\s*"aby-secure-uploads"/.test(wr), 'no binding');
 check('wrangler schedules the daily purge', /"crons":\s*\[\s*"[^"]+"\s*\]/.test(wr), 'no cron');
 

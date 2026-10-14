@@ -80,6 +80,11 @@ import {
   UPLOAD_MIGRATIONS, handleUpload, handleListUploads, handleAdminListUploads, handleAdminDownload,
   purgeExpiredUploads, uploadsForExport, sendUploadEmail,
 } from './lib/uploads.js';
+// A secure-upload link that is not a quote (Eric, 10-14-2026). /admin/secure-uploads makes it; /u/<token> uses it.
+import {
+  UPLOAD_REQUEST_MIGRATIONS, handleCreateRequest, handleListRequests, handleCloseRequest, handlePublicRequest,
+  adminSecureUploadsHTML,
+} from './lib/upload-requests.js';
 // F-631: per-agency quote defaults (sales rep, commission, one setup fee). Its own file, like the above.
 import {
   AGENCY_DEFAULT_MIGRATIONS, agencyDefaultsFor, handleGetAgencyDefaults, handleSaveAgencyDefaults,
@@ -297,6 +302,29 @@ export default {
     }
     if (/^\/api\/q\/[a-z2-9]{16}\/uploads$/.test(path) && method === 'POST') {
       return handleUpload(path.split('/')[3], request, env, ctx, (info) => sendUploadEmail(env, info));
+    }
+    // THE STAND-ALONE SECURE UPLOAD LINK. Same write-only rule: the link lists names and adds files, never downloads.
+    if (/^\/u\/[a-z2-9]{16}$/.test(path) && method === 'GET') {
+      return serveUploadPage(request, env);
+    }
+    if (/^\/api\/u\/[a-z2-9]{16}$/.test(path) && method === 'GET') {
+      return handlePublicRequest(path.split('/')[3], env);
+    }
+    if (/^\/api\/u\/[a-z2-9]{16}\/uploads$/.test(path) && method === 'POST') {
+      return handleUpload(path.split('/')[3], request, env, ctx, (info) => sendUploadEmail(env, info));
+    }
+    if (path === '/admin/secure-uploads' && method === 'GET') {
+      return withAuth(request, env, () => new Response(adminSecureUploadsHTML(abyAdminNav('/admin/secure-uploads'), ADMIN_HEADER_CSS), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
+    }
+    if (path === '/api/admin/upload-requests' && method === 'GET') {
+      return withAuth(request, env, () => handleListRequests(request, env));
+    }
+    if (path === '/api/admin/upload-requests' && method === 'POST') {
+      return withAuth(request, env, () => handleCreateRequest(request, env));
+    }
+    if (path === '/api/admin/upload-requests/close' && method === 'POST') {
+      return withAuth(request, env, () => handleCloseRequest(request, env));
     }
     if (path === '/api/admin/uploads' && method === 'GET') {
       return withAuth(request, env, () => handleAdminListUploads(url, env));
@@ -1775,6 +1803,14 @@ async function handleEmployerCount(token, request, env) {
 async function serveApplyPage(request, env) {
   if (!env.ASSETS) return new Response('Not available here', { status: 503 });
   const res = await env.ASSETS.fetch(new Request(new URL('/apply', request.url), request));
+  return new Response(res.body, { status: res.status,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' } });
+}
+
+// The stand-alone secure upload page (public/upload.html); its script reads the token from the address.
+async function serveUploadPage(request, env) {
+  if (!env.ASSETS) return new Response('Not available here', { status: 503 });
+  const res = await env.ASSETS.fetch(new Request(new URL('/upload', request.url), request));
   return new Response(res.body, { status: res.status,
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' } });
 }
@@ -16515,6 +16551,8 @@ const ABY_ADMIN_LINKS = [
   // Sits next to the quote log because the two answer adjacent questions -- who we quoted, and
   // who we actually serve -- and the whole point of F-377 is that those are not the same list.
   { href: '/admin/clients',    label: 'Clients' },
+  // Eric, 10-14-2026: a link an employer uses to send a census or other private file, apart from any quote.
+  { href: '/admin/secure-uploads', label: 'Secure uploads' },
   { href: '/admin/brokers',    label: 'Brokers &amp; Agencies' },
   // Public entities buying direct: a different CHANNEL from Brokers & Agencies, which is the
   // firms ABY quotes THROUGH. The two lists never merge.
@@ -17850,6 +17888,7 @@ const MIGRATIONS = [
   ...APPLICATION_MIGRATIONS,
   // C18: the secure upload's file list (the files themselves are in R2). Also created on first use.
   ...UPLOAD_MIGRATIONS,
+  ...UPLOAD_REQUEST_MIGRATIONS,
   // F-631: the agency's quote defaults. Defined beside their handlers in lib/agency-defaults.js.
   ...AGENCY_DEFAULT_MIGRATIONS,
   // F-603: the admin assistant's monthly spend (its $20 cap). The handler also creates it on first use.
