@@ -59,6 +59,16 @@
   .review-sec a { color: var(--blue); cursor: pointer; text-decoration: underline; }
   .download { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
   .download a { color: var(--blue); font-weight: 600; }
+  /* The secure upload (C18). */
+  .upl-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+  .upl { position: relative; }
+  .upl label.btn { display: inline-block; }
+  .upl input:focus + label, .upl label:focus-within { outline: 2px solid rgba(32,90,166,.35); }
+  .hint-s { font-size: 15px; color: var(--muted); margin: 10px 0 12px; }
+  .files { margin: 8px 0 0 20px; padding: 0; }
+  .files li { margin: 4px 0; font-size: 16px; }
+  .files a { color: var(--blue); font-weight: 600; }
+  .files .meta { color: var(--muted); font-size: 15px; }
   /* PRINTING (Eric, 09-29-2026: printed quotes "definitely look funny" with drop-downs). The screen
      is a step-by-step form; paper gets a plain list of every question and its answer instead. */
   #printview { display: none; }
@@ -96,6 +106,6 @@
   <div id="printview"></div>
 </div>
 <script src="/assets/js/data/application-questions.js?v=20261001b"></script>
-<script src="/assets/js/apply.js?v=20261001b"></script>
+<script src="/assets/js/apply.js?v=20261014a"></script>
 </body>
 </html>

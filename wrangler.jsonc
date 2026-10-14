@@ -46,7 +46,21 @@
       "database_name": "aby-quotes",
       "database_id": "72b0d610-c55f-4b56-af26-613ab047b592"
     }
-  ]
+  ],
+
+  // The secure census / bank-details upload (C18). Eric switched R2 on and made this bucket 10-14-2026.
+  // Files are written through the employer's link and read only by a signed-in ABY admin (lib/uploads.js).
+  "r2_buckets": [
+    {
+      "binding": "UPLOADS",
+      "bucket_name": "aby-secure-uploads"
+    }
+  ],
+
+  // Once a day: delete secure-upload files older than 90 days (the scheduled() handler in worker.js).
+  "triggers": {
+    "crons": ["17 8 * * *"]
+  }
 
   // Secrets (set in Cloudflare dashboard, NOT here):
   //   RESEND_API_KEY  — from resend.com

@@ -12,6 +12,10 @@
  * the employer can close the page, and a broker helping them can open the same link and carry on.
  *
  * ASKED ONCE: the page shows the union of the questions each purchased form needs (see visible()).
+ *
+ * THE SECURE UPLOAD (C18, 10-14-2026): the census and bank details arrive as FILES on the last step, stored in R2
+ * (lib/uploads.js). The employer's link can add a file and see the names of what arrived, never download one;
+ * the ABY view lists the same files with a Download link, which only works for a signed-in ABY admin.
  */
 (function () {
   'use strict';
@@ -74,7 +78,67 @@
     // ABY's view opens on the whole application (the Summary), not on the first section.
     if (adminMode || (state.readonly && /[?&]view=all\b/.test(location.search))) state.step = steps().length - 1;
     render();
+    loadUploads();
   }).catch(function () { fail(0, {}); });
+
+  // ── the secure upload's file list ──────────────────────────────────────────────────────────
+  var UPLOADS = adminMode ? '/api/admin/uploads?cid=' + encodeURIComponent(cid)
+                          : '/api/q/' + encodeURIComponent(token) + '/uploads';
+  function loadUploads() {
+    fetch(UPLOADS, { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (j && j.ok) { state.uploads = j.files || []; state.uploadsOn = adminMode || j.enabled !== false; render(); } })
+      .catch(function () { /* the list is a convenience; the page works without it */ });
+  }
+  function sizeText(n) {
+    n = Number(n) || 0;
+    return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  }
+  function uploadList() {
+    var files = state.uploads || [];
+    if (!files.length) return adminMode ? '<p class="intro">Nothing has been uploaded yet.</p>' : '';
+    return '<ul class="files">' + files.map(function (f) {
+      var name = esc(f.name);
+      if (adminMode && !f.deletedAt) name = '<a href="/api/admin/upload?id=' + encodeURIComponent(f.id) + '" download>' + name + '</a>';
+      return '<li><strong>' + esc(f.kindLabel) + ':</strong> ' + name + ' <span class="meta">' + sizeText(f.size) + ', ' +
+        (f.deletedAt ? 'deleted after 90 days' : 'received ' + esc(usDate(f.uploadedAt))) + '</span></li>';
+    }).join('') + '</ul>';
+  }
+  function uploadBox(kind, label) {
+    return '<div class="upl"><label class="btn ghost" for="up_' + kind + '">' + esc(label) + '</label>' +
+      '<input type="file" id="up_' + kind + '" data-upload="' + kind + '" multiple ' +
+      'accept=".xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.heic,.doc,.docx" style="position:absolute;left:-9999px"></div>';
+  }
+  function uploadFiles(kind, files) {
+    var msg = document.getElementById('upMsg');
+    var list = Array.prototype.slice.call(files || []);
+    if (!list.length) return;
+    var done = 0, failed = [];
+    state.upMsg = '';
+    if (msg) msg.innerHTML = '<div class="note info">Uploading ' + list.length + (list.length === 1 ? ' file' : ' files') + '...</div>';
+    function next() {
+      if (!list.length) {
+        // Kept in state: the list reload redraws the page, and a message only in the DOM would vanish with it.
+        state.upMsg = (failed.length ? '<div class="note bad">' + failed.map(esc).join('<br>') + '</div>' : '') +
+          (done ? '<div class="note ok">Received ' + done + (done === 1 ? ' file' : ' files') + '. ABY has been told.</div>' : '');
+        if (msg) msg.innerHTML = state.upMsg;
+        loadUploads();
+        return;
+      }
+      var f = list.shift();
+      if (f.size > 20 * 1048576) { failed.push(f.name + ': larger than 20 MB. Please send a smaller copy, or call ABY Benefits.'); return next(); }
+      fetch('/api/q/' + encodeURIComponent(token) + '/uploads?kind=' + kind, {
+        method: 'POST', headers: { 'X-File-Name': encodeURIComponent(f.name), 'Content-Type': 'application/octet-stream' }, body: f
+      }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { status: r.status, body: j }; }); })
+        .then(function (res) {
+          if (res.status === 200 && res.body.ok) done++;
+          else failed.push(f.name + ': ' + ((res.body && res.body.message) || 'did not upload. Please try again.'));
+          next();
+        })
+        .catch(function () { failed.push(f.name + ': did not upload - please check your connection and try again.'); next(); });
+    }
+    next();
+  }
 
   function fail(status, body) {
     var msg = 'This page could not be loaded. Please check the link, or contact ABY Benefits at 817-731-6258.';
@@ -346,14 +410,22 @@
     var census = d.census || [];
     var bank = (d.forms || []).some(function (f) { return A.FORMS[f] && A.FORMS[f].bank; });
     if (census.length || bank) {
-      out += '<h2 style="margin-top:22px">' + (census.length ? 'Your employee census' + (bank ? ' and bank details' : '') : 'Your bank details') + '</h2>';
-      if (census.length) {
-        out += '<p class="intro">ABY also needs a list of your employees and their covered dependents, in ABY\'s spreadsheet. Download it, fill it in, and send it back through the secure upload ABY provides. Please do not email it: it holds Social Security numbers and dates of birth.</p>';
+      out += '<h2 style="margin-top:22px">' + (adminMode ? 'Census and bank details' : census.length ? 'Your employee census' + (bank ? ' and bank details' : '') : 'Your bank details') + '</h2>';
+      if (census.length && !adminMode) {
+        out += '<p class="intro">ABY also needs a list of your employees and their covered dependents, in ABY\'s spreadsheet. Download it, fill it in, and upload it here. Please do not email it: it holds Social Security numbers and dates of birth.</p>';
         out += '<div class="download">' + census.map(function (c) {
           return '<a href="/assets/forms/' + esc(c.file) + '" download>Download the ' + esc(c.label) + '</a>';
         }).join('') + '</div>';
       }
-      if (bank) out += '<p class="intro" style="margin-top:12px">Bank details for reimbursements or contributions also go through the secure upload, never by email.</p>';
+      if (bank && !adminMode) out += '<p class="intro" style="margin-top:12px">Bank details for reimbursements or contributions go here too, never by email. A voided check or a letter from your bank showing the routing and account numbers works.</p>';
+      if (!adminMode && state.uploadsOn) {
+        out += '<div class="upl-row">' + (census.length ? uploadBox('census', 'Upload your census') : '') +
+          (bank ? uploadBox('bank', 'Upload bank details') : '') + '</div>' +
+          '<p class="hint-s">Uploads are private: ABY can open them, and this page cannot, even for you. They are deleted automatically 90 days after ABY receives them.</p>' +
+          '<div id="upMsg">' + (state.upMsg || '') + '</div>';
+      }
+      if (adminMode) out += '<p class="intro">Sent through the secure upload. Click a file to download it. Files are deleted automatically 90 days after they were uploaded.</p>';
+      out += uploadList();
     }
 
     // ⭐ READ-ONLY, THE SUMMARY IS EVERY ANSWER ON ONE PAGE (10-06-2026) - it used to list only what was blank, so a
@@ -398,6 +470,9 @@
     if (ad) ad.addEventListener('click', function () {
       if (state.dirty) saveNow();
       state.adminEdit = false; state.readonly = true; state.step = steps().length - 1; render(); window.scrollTo(0, 0);
+    });
+    app.querySelectorAll('input[data-upload]').forEach(function (inp) {
+      inp.addEventListener('change', function () { uploadFiles(inp.getAttribute('data-upload'), inp.files); inp.value = ''; });
     });
     if (state.readonly) return;
 

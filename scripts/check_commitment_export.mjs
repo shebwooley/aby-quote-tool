@@ -12,7 +12,9 @@ const jsonResp = (o, s) => new Response(JSON.stringify(o), { status: s || 200 })
 // so this checker can assert the export asks for THIS link and carries what comes back.
 let askedFor = null;
 const applicationForExport = async (env, token) => { askedFor = token; return token ? { status: "draft", answers: { "co.ein": "12-3456789" } } : null; };
-const fn = new Function("jsonResp", "applicationForExport", src.slice(start, end) + "\nreturn handleCommitmentExport;")(jsonResp, applicationForExport);
+// C18: and lib/uploads.js for the names of the files sent through the secure upload.
+const uploadsForExport = async (env, token) => (token ? [{ name: "census.xlsx" }] : []);
+const fn = new Function("jsonResp", "applicationForExport", "uploadsForExport", src.slice(start, end) + "\nreturn handleCommitmentExport;")(jsonResp, applicationForExport, uploadsForExport);
 
 const db = (row, throwOnJoin) => ({
   prepare(sql) {
@@ -97,7 +99,7 @@ const sab = (name, from, to) => {
   const mutated = src.slice(start, end).replace(from, to);
   if (mutated === src.slice(start, end)) { console.log("  FAIL " + name + "  <- the mutation did not land"); fails++; return; }
   console.log("  (mutation landed) " + name);
-  return new Function("jsonResp", "applicationForExport", mutated + "\nreturn handleCommitmentExport;")(jsonResp, applicationForExport);
+  return new Function("jsonResp", "applicationForExport", "uploadsForExport", mutated + "\nreturn handleCommitmentExport;")(jsonResp, applicationForExport, uploadsForExport);
 };
 
 let f = sab("null-ing blanks removed", "return t === '' ? null : t;", "return t;");

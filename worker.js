@@ -75,12 +75,22 @@ import {
   APPLICATION_MIGRATIONS, handleGetApplication, handleSaveApplication, handleSubmitApplication,
   handleAdminGetApplication, handleAdminReopenApplication, handleAdminSaveApplication, applicationForExport, sendApplicationEmail,
 } from './lib/application.js';
+// The secure census / bank-details upload (F-625, C18). Its own file, like the above.
+import {
+  UPLOAD_MIGRATIONS, handleUpload, handleListUploads, handleAdminListUploads, handleAdminDownload,
+  purgeExpiredUploads, uploadsForExport, sendUploadEmail,
+} from './lib/uploads.js';
 // F-631: per-agency quote defaults (sales rep, commission, one setup fee). Its own file, like the above.
 import {
   AGENCY_DEFAULT_MIGRATIONS, agencyDefaultsFor, handleGetAgencyDefaults, handleSaveAgencyDefaults,
 } from './lib/agency-defaults.js';
 
 export default {
+  // The daily cron (wrangler.jsonc triggers): files sent through the secure upload are deleted 90 days on.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(purgeExpiredUploads(env).then((r) => console.log('upload purge:', JSON.stringify(r)),
+      (e) => console.error('upload purge failed:', e)));
+  },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -279,6 +289,20 @@ export default {
     if (/^\/api\/q\/[a-z2-9]{16}\/application\/submit$/.test(path) && method === 'POST') {
       return handleSubmitApplication(path.split('/')[3], request, env, ctx,
         (info) => sendApplicationEmail(env, info));
+    }
+    // THE SECURE UPLOAD (C18). WRITE-ONLY through the link: it adds a file and lists names, never a
+    // download. Downloads are admin-only, below.
+    if (/^\/api\/q\/[a-z2-9]{16}\/uploads$/.test(path) && method === 'GET') {
+      return handleListUploads(path.split('/')[3], env);
+    }
+    if (/^\/api\/q\/[a-z2-9]{16}\/uploads$/.test(path) && method === 'POST') {
+      return handleUpload(path.split('/')[3], request, env, ctx, (info) => sendUploadEmail(env, info));
+    }
+    if (path === '/api/admin/uploads' && method === 'GET') {
+      return withAuth(request, env, () => handleAdminListUploads(url, env));
+    }
+    if (path === '/api/admin/upload' && method === 'GET') {
+      return withAuth(request, env, () => handleAdminDownload(url, env));
     }
     if (path === '/admin/application' && method === 'GET') {
       return withAuth(request, env, () => serveApplyPage(request, env));
@@ -2534,6 +2558,8 @@ async function handleCommitmentExport(request, id, env) {
       // F-625. The setup questions the employer answered after signing, keyed for a program and
       // labeled for a person. Null when nobody has started them.
       application: await applicationForExport(env, token),
+      // C18. The files sent through the secure upload, by name, with the admin-only download address.
+      uploads: await uploadsForExport(env, token, new URL(request.url).origin),
     };
 
     const filename = 'Commitment-' + (val(row.quote_number) || 'unknown') + '.json';
@@ -17822,6 +17848,8 @@ const MIGRATIONS = [
   { sql: "ALTER TABLE commitments ADD COLUMN signature_image TEXT", table: "commitments", column: "signature_image" },
   // The employer application (F-625). Defined beside its handlers in lib/application.js.
   ...APPLICATION_MIGRATIONS,
+  // C18: the secure upload's file list (the files themselves are in R2). Also created on first use.
+  ...UPLOAD_MIGRATIONS,
   // F-631: the agency's quote defaults. Defined beside their handlers in lib/agency-defaults.js.
   ...AGENCY_DEFAULT_MIGRATIONS,
   // F-603: the admin assistant's monthly spend (its $20 cap). The handler also creates it on first use.
