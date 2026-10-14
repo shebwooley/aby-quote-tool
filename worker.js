@@ -13951,7 +13951,15 @@ header h1{font-size:1.05rem;font-weight:700;margin:0;flex:0 0 auto;color:#fff}
 header b{font-size:1.05rem;font-weight:700}
 header nav{flex:1;display:flex;flex-wrap:wrap;gap:2px;margin-left:6px}
 header a{color:rgba(255,255,255,.78);text-decoration:none;font-size:.85rem;font-weight:600;
-         padding:5px 10px;border-radius:5px;white-space:nowrap}
+         padding:5px 8px;border-radius:5px;white-space:nowrap}
+header .more{position:relative}
+header .more summary{list-style:none;cursor:pointer;color:rgba(255,255,255,.78);font-size:.85rem;font-weight:600;
+         padding:5px 8px;border-radius:5px;white-space:nowrap}
+header .more summary::-webkit-details-marker{display:none}
+header .more summary:hover,header .more[open] summary{background:rgba(255,255,255,.15);color:white}
+header .more summary.here{background:rgba(255,255,255,.2);color:white}
+header .more-menu{position:absolute;right:0;top:calc(100% + 6px);background:#1a5c3a;border-radius:8px;padding:6px;
+         display:flex;flex-direction:column;gap:2px;min-width:150px;box-shadow:0 6px 18px rgba(0,0,0,.25);z-index:30}
 header a:hover{background:rgba(255,255,255,.15);color:white}
 header a.here{background:rgba(255,255,255,.2);color:white}
 header a.act{background:#2f9e73;color:white;font-weight:700}
@@ -16552,7 +16560,7 @@ const ABY_ADMIN_LINKS = [
   // who we actually serve -- and the whole point of F-377 is that those are not the same list.
   { href: '/admin/clients',    label: 'Clients' },
   // Eric, 10-14-2026: a link an employer uses to send a census or other private file, apart from any quote.
-  { href: '/admin/secure-uploads', label: 'Secure uploads' },
+  { href: '/admin/secure-uploads', label: 'Uploads', title: 'Secure uploads: links for employers to send a census or other private file' },
   { href: '/admin/brokers',    label: 'Brokers &amp; Agencies' },
   // Public entities buying direct: a different CHANNEL from Brokers & Agencies, which is the
   // firms ABY quotes THROUGH. The two lists never merge.
@@ -16560,12 +16568,14 @@ const ABY_ADMIN_LINKS = [
   // retired on 2026-08-26 and the sentence would have gone on explaining a neighbour that no
   // longer exists -- a comment describing a deleted thing reads as a description of the code.
   { href: '/admin/rfp-watch',  label: 'RFP Watch' },
-  { href: '/admin/referrals',  label: 'Referrals' },
-  { href: '/admin/rates',      label: 'Rates' },
+  // ⭐ UNDER "MORE" (Eric, 10-14-2026): with Uploads added the bar ran to a second line at his window width
+  // (~990px); it needed ~1,160px, and ~1,040px even before. The three least-used pages fold into one item.
+  { href: '/admin/referrals',  label: 'Referrals', more: true },
+  { href: '/admin/rates',      label: 'Rates',     more: true },
   // Last on purpose: it is a reference, not a place work happens. ⛔ It is behind withAuth like
   // every other admin page -- the guide names how ABY decides who to chase, which is not
   // something a broker should read about themselves.
-  { href: '/admin/guide',      label: 'Guide' },
+  { href: '/admin/guide',      label: 'Guide',     more: true },
 ];
 
 /** The header bar. `here` is the path of the page being rendered, so it marks itself. */
@@ -16612,14 +16622,21 @@ function adminGuideHTML() {
 }
 
 function abyAdminNav(here) {
-  const links = ABY_ADMIN_LINKS.map((l) => {
+  const link = (l) => {
     // The current page wins over the accent style: on /aby, "Run a quote" is where you ARE, not a
     // call to action, and leaving it green would make the bar look like it linked somewhere else.
     const cls = (l.href === here) ? ((l.cls === 'claude' ? 'claude ' : '') + 'here') : (l.cls || '');
     return '<a href="' + l.href + '"' + (cls ? ' class="' + cls + '"' : '') +
            (l.title ? ' title="' + l.title + '"' : '') + '>' + l.label + '</a>';
-  }).join('');
-  return '<header class="aby-adminbar"><h1>ABY admin</h1><nav>' + links + '</nav>' +
+  };
+  const main = ABY_ADMIN_LINKS.filter((l) => !l.more);
+  const more = ABY_ADMIN_LINKS.filter((l) => l.more);
+  // A details element opens and closes with no script. On one of its own pages, More is marked as where you are.
+  const moreHtml = more.length
+    ? '<details class="more"><summary' + (more.some((l) => l.href === here) ? ' class="here"' : '') + '>More &#9662;</summary>' +
+      '<div class="more-menu">' + more.map(link).join('') + '</div></details>'
+    : '';
+  return '<header class="aby-adminbar"><h1>ABY admin</h1><nav>' + main.map(link).join('') + moreHtml + '</nav>' +
          '<button class="logout" onclick="logout()">Log out</button></header>';
 }
 
@@ -16645,8 +16662,15 @@ async function serveAbyTool(request, env) {
     '.aby-adminbar h1{font-size:1.05rem;font-weight:700;margin:0;flex:0 0 auto;color:#fff}' +
     '.aby-adminbar nav{flex:1;display:flex;flex-wrap:wrap;gap:2px;margin-left:6px}' +
     '.aby-adminbar nav a{color:rgba(255,255,255,.78);text-decoration:none;font-size:.85rem;' +
-      'font-weight:600;padding:5px 10px;border-radius:5px;white-space:nowrap}' +
+      'font-weight:600;padding:5px 8px;border-radius:5px;white-space:nowrap}' +
     '.aby-adminbar nav a:hover{background:rgba(255,255,255,.15);color:#fff}' +
+    '.aby-adminbar .more{position:relative}' +
+    '.aby-adminbar .more summary{list-style:none;cursor:pointer;color:rgba(255,255,255,.78);font-size:.85rem;' +
+      'font-weight:600;padding:5px 8px;border-radius:5px;white-space:nowrap}' +
+    '.aby-adminbar .more summary::-webkit-details-marker{display:none}' +
+    '.aby-adminbar .more summary:hover,.aby-adminbar .more[open] summary{background:rgba(255,255,255,.15);color:#fff}' +
+    '.aby-adminbar .more-menu{position:absolute;right:0;top:calc(100% + 6px);background:#1a5c3a;border-radius:8px;' +
+      'padding:6px;display:flex;flex-direction:column;gap:2px;min-width:150px;box-shadow:0 6px 18px rgba(0,0,0,.25);z-index:30}' +
     '.aby-adminbar nav a.here{background:rgba(255,255,255,.2);color:#fff}' +
     '.aby-adminbar nav a.act{background:#2f9e73;color:#fff;font-weight:700}' +
     '.aby-adminbar nav a.claude{background:#A84E2C;color:#fff;font-weight:700}' +
