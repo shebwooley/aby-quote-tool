@@ -210,6 +210,8 @@ const applyJs = readFileSync(new URL('../public/assets/js/apply.js', import.meta
 const adminPage = (await import('../lib/upload-requests.js')).adminSecureUploadsHTML('', '');
 check('deleted files fold away on both admin pages (Eric, 10-14-2026)',
   applyJs.includes("'<details class=\"gone\"><summary>Deleted files ('") && adminPage.includes('<details class=gone><summary>Deleted files ('), 'no fold');
+check('finished links (every file deleted) fold away on Secure uploads (Eric, 10-14-2026)',
+  adminPage.includes('<details class=gone><summary>Finished links (') && adminPage.includes('r.files.every(function(x){return x.deletedAt})'), 'no fold');
 check('the delete route is behind the admin login', /path === '\/api\/admin\/upload\/delete' && method === 'POST'\) \{\s*return withAuth\(/.test(w), 'route not wrapped');
 check('the admin file list is behind the admin login', /path === '\/api\/admin\/uploads' && method === 'GET'\) \{\s*return withAuth\(/.test(w), 'route not wrapped');
 const wr = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
