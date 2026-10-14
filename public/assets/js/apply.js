@@ -184,6 +184,7 @@
     if (state.step === 0) {
       html += '<p class="lead">' + (adminMode
         ? (state.adminEdit ? 'Go through the sections and fill in what is missing.' : 'What the employer has answered so far.')
+        : state.data.status === 'submitted' ? 'Your answers are with ABY. When your census and any bank details are ready, upload them below. You can come back to this same link to do that any time.'
         : 'A few questions ABY needs to set up the services you authorized. Your answers save as you go, so you can stop and come back to this same link any time. Your broker can open it too and fill in anything they know.') + '</p>';
       html += intro();
     }
@@ -286,6 +287,35 @@
     if (b) b.addEventListener('click', function () { x.clearRect(0, 0, c.width, c.height); state.sigInk = false; });
   }
 
+  // ── the census / bank-details block (C18). On the last step always; and FIRST on page one of a SUBMITTED
+  // application, because the census often comes weeks after the answers (Eric, 10-14-2026) and the employer
+  // coming back opens on page one.
+  function secureBlock(top) {
+    var d = state.data;
+    var out = '';
+    var census = d.census || [];
+    var bank = (d.forms || []).some(function (f) { return A.FORMS[f] && A.FORMS[f].bank; });
+    if (census.length || bank) {
+      out += (top ? '<h2>' : '<h2 style="margin-top:22px">') + (adminMode ? 'Census and bank details' : census.length ? 'Your employee census' + (bank ? ' and bank details' : '') : 'Your bank details') + '</h2>';
+      if (census.length && !adminMode) {
+        out += '<p class="intro">ABY also needs a list of your employees and their covered dependents, in ABY\'s spreadsheet. Download it, fill it in, and upload it here. Please do not email it: it holds Social Security numbers and dates of birth.</p>';
+        out += '<div class="download">' + census.map(function (c) {
+          return '<a href="/assets/forms/' + esc(c.file) + '" download>Download the ' + esc(c.label) + '</a>';
+        }).join('') + '</div>';
+      }
+      if (bank && !adminMode) out += '<p class="intro" style="margin-top:12px">Bank details for reimbursements or contributions go through this secure upload too, never by email.</p>';
+      if (!adminMode && state.uploadsOn) {
+        out += '<div class="upl-row">' + (census.length ? uploadBox('census', 'Upload your census') : '') +
+          (bank ? uploadBox('bank', 'Upload bank details') : '') + '</div>' +
+          '<p class="hint-s">Uploads are private: ABY can open them, and this page cannot, even for you. They are deleted automatically 90 days after ABY receives them.</p>' +
+          '<div id="upMsg">' + (state.upMsg || '') + '</div>';
+      }
+      if (adminMode) out += '<p class="intro">Sent through the secure upload. Click a file to download it. Files are deleted automatically 90 days after they were uploaded.</p>';
+      out += uploadList();
+    }
+    return out;
+  }
+
   function intro() {
     var d = state.data;
     var out = '';
@@ -293,6 +323,10 @@
       out += '<div class="note ok"><strong>Submitted to ABY' + (d.submittedAt ? ' on ' + esc(usDate(d.submittedAt)) : '') + '.</strong>' +
         (d.submittedBy ? ' By ' + esc(d.submittedBy) + '.' : '') +
         (adminMode ? '' : ' To change an answer now, contact ABY Benefits or your broker.') + '</div>';
+    }
+    if (d.status === 'submitted' && !adminMode) {
+      var up = secureBlock(true);
+      if (up) out += '<div class="card secure-first">' + up + '</div>';
     }
     var names = (d.forms || []).map(function (f) { return A.FORMS[f] ? A.FORMS[f].title : f; });
     if (names.length) out += '<div class="note info">Questions for: <strong>' + esc(joinNames(names)) + '</strong>.' +
@@ -407,26 +441,7 @@
       out += '<div class="note ok">Every question is answered.</div>';
     }
 
-    var census = d.census || [];
-    var bank = (d.forms || []).some(function (f) { return A.FORMS[f] && A.FORMS[f].bank; });
-    if (census.length || bank) {
-      out += '<h2 style="margin-top:22px">' + (adminMode ? 'Census and bank details' : census.length ? 'Your employee census' + (bank ? ' and bank details' : '') : 'Your bank details') + '</h2>';
-      if (census.length && !adminMode) {
-        out += '<p class="intro">ABY also needs a list of your employees and their covered dependents, in ABY\'s spreadsheet. Download it, fill it in, and upload it here. Please do not email it: it holds Social Security numbers and dates of birth.</p>';
-        out += '<div class="download">' + census.map(function (c) {
-          return '<a href="/assets/forms/' + esc(c.file) + '" download>Download the ' + esc(c.label) + '</a>';
-        }).join('') + '</div>';
-      }
-      if (bank && !adminMode) out += '<p class="intro" style="margin-top:12px">Bank details for reimbursements or contributions go here too, never by email. A voided check or a letter from your bank showing the routing and account numbers works.</p>';
-      if (!adminMode && state.uploadsOn) {
-        out += '<div class="upl-row">' + (census.length ? uploadBox('census', 'Upload your census') : '') +
-          (bank ? uploadBox('bank', 'Upload bank details') : '') + '</div>' +
-          '<p class="hint-s">Uploads are private: ABY can open them, and this page cannot, even for you. They are deleted automatically 90 days after ABY receives them.</p>' +
-          '<div id="upMsg">' + (state.upMsg || '') + '</div>';
-      }
-      if (adminMode) out += '<p class="intro">Sent through the secure upload. Click a file to download it. Files are deleted automatically 90 days after they were uploaded.</p>';
-      out += uploadList();
-    }
+    out += secureBlock(false);
 
     // ⭐ READ-ONLY, THE SUMMARY IS EVERY ANSWER ON ONE PAGE (10-06-2026) - it used to list only what was blank, so a
     // processor opening Summary to see the application saw nothing but blanks and a signature.
