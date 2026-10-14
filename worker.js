@@ -16551,14 +16551,15 @@ const ABY_ADMIN_LINKS = [
   { href: '/admin',            label: 'Quote log' },
   // Second, and deliberately not last: it is the screen you open to find out what today holds, so
   // burying it behind the reference pages would make it the page nobody starts on.
-  { href: '/admin/today',      label: 'Today' },
+  // Under More for now (Eric, 10-14-2026: "We're not using either of those at the moment.").
+  { href: '/admin/today',      label: 'Today',     more: true },
   // F-603, Eric 10-06-2026: "add an Ask Claude button to the menu ... it would be one place we could click." Orange so
   // it reads as AI at a glance (his ask, same day); third, so it is in reach from every page without hunting.
   { href: '/admin/ask',        label: 'Ask Claude',            cls: 'claude',
     title: 'Ask Claude (AI) about quotes, firms, brokers, clients and sales. It reads and answers; it changes nothing.' },
   // Sits next to the quote log because the two answer adjacent questions -- who we quoted, and
   // who we actually serve -- and the whole point of F-377 is that those are not the same list.
-  { href: '/admin/clients',    label: 'Clients' },
+  { href: '/admin/clients',    label: 'Clients',   more: true },
   // Eric, 10-14-2026: a link an employer uses to send a census or other private file, apart from any quote.
   { href: '/admin/secure-uploads', label: 'Uploads', title: 'Secure uploads: links for employers to send a census or other private file' },
   { href: '/admin/brokers',    label: 'Brokers &amp; Agencies' },
