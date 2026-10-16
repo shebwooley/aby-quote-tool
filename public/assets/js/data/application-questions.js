@@ -218,7 +218,7 @@
         hint: 'How long after the plan year ends employees can still submit claims from that year.' },
       { key: p + '.runoutOther', label: 'Run-out period (days)', type: 'number', forms: F, show: { key: p + '.runout', equals: 'Other' } },
       { key: p + '.fromEmployerAccount', label: 'Should ABY issue reimbursements (checks or direct deposit) from your company account?', type: 'yesno', forms: F,
-        hint: 'If yes, ABY needs your bank details and a signature for printing checks. Those go through the secure upload, never on this page. There is an additional charge of $5 per check printed.' },
+        hint: 'If yes, you will download a one-page bank form at the end of this application and send it back through the secure upload, never on this page. There is an additional charge of $5 per check printed.' },
       { key: p + '.checksTo', label: 'Checks should be', type: 'choice', forms: F, options: ['Sent to the employee', 'Sent to the employer for signature'],
         show: { key: p + '.fromEmployerAccount', equals: true } }
     );
@@ -456,7 +456,7 @@
         { key: 'fsa.abyIssues', label: 'Should ABY issue employee reimbursements?', type: 'yesno', forms: ['fsa'], head: true },
         { key: 'fsa.issueHow', label: 'How?', type: 'multi', forms: ['fsa'], options: ['By check', 'By direct deposit'],
           show: { key: 'fsa.abyIssues', equals: true },
-          hint: 'Checks cost an additional $5 each. ABY will need your bank details and a signature for printing checks, sent through the secure upload.' },
+          hint: 'Checks cost an additional $5 each. You will download a one-page bank form at the end of this application and send it back through the secure upload.' },
         { key: 'fsa.checksTo', label: 'Checks should be', type: 'choice', forms: ['fsa'], options: ['Sent to the employee', 'Sent to the employer for signature'],
           show: { key: 'fsa.issueHow', includes: 'By check' } },
         { key: 'fsa.debitCard', label: 'Do you want to offer employees a debit card for the FSA?', type: 'yesno', forms: ['fsa'] },
@@ -657,8 +657,47 @@
     }
   ];
 
+  // ⭐ THE BANK AND PAYMENT FORMS, ONE PAGE EACH (Eric, 10-16-2026: "Yes to the one pager"). The bank sections used to sit
+  // inside the multi-page applications and employers skipped them; the upload box asked for "bank details" with no form
+  // to fill. Each form now downloads beside its own upload box, and shows ONLY when it applies:
+  //  - reimburse: ABY pays reimbursements (HRA, Medicare HRA, FSA), by check OR direct deposit - Eric: "Any ABY payout".
+  //    The check-signature boxes are on the same page, marked for checks only.
+  //  - hsa:       HSA funding option 2, where ABY draws the contributions from the employer's account.
+  //  - ach:       a product that is only a plan document - paid by ACH pull BEFORE the document goes out (Eric: "if that's
+  //    all they want, then we need the payment before we will provide the document"). Administered services are invoiced.
+  // ⛔ No bank number is ever typed on the page; every one of these goes through the secure upload.
+  var PAY_FORMS = {
+    reimburse: { kind: 'bank', file: 'ABY-reimbursement-bank-form.pdf', label: 'bank form for reimbursements',
+                 why: 'You chose to have ABY pay reimbursements, so ABY needs the account to draw them from.' },
+    hsa:       { kind: 'bank', file: 'ABY-HSA-funding-bank-form.pdf', label: 'HSA funding bank form',
+                 why: 'You chose funding option 2, so ABY draws the HSA contributions from your account.' },
+    ach:       { kind: 'ach', file: 'ABY-ACH-authorization-invoice-payments.pdf', label: 'ACH payment authorization',
+                 why: 'Plan documents are paid by ACH before ABY sends them. This authorizes the payment.' }
+  };
+
+  // Plan documents only: every POP and ERISA wrap package, and the documents-only package of the CHOICE Arrangement
+  // and the Medicare HRA. `label` is the elected line, the package riding after a colon ("Medicare HRA: Documents Only").
+  function docsOnly(productId, label) {
+    if (productId === 'pop' || productId === 'erisa') return true;
+    if (productId === 'ichra' || productId === 'mpra') return /documents only/i.test(String(label || ''));
+    return false;
+  }
+
   var API = {
     STATES: STATES,
+    PAY_FORMS: PAY_FORMS,
+    docsOnly: docsOnly,
+
+    /** The bank and payment forms THIS application needs, given its forms, its answers and whether it pays by ACH. */
+    payForms: function payForms(forms, answers, achPull) {
+      var a = answers || {}, f = forms || [], out = [];
+      var has = function (x) { return f.indexOf(x) >= 0; };
+      if ((has('hra') && a['hra.fromEmployerAccount'] === true) || (has('mhra') && a['mhra.fromEmployerAccount'] === true) ||
+          (has('fsa') && a['fsa.abyIssues'] === true)) out.push(PAY_FORMS.reimburse);
+      if (has('hsa') && /^Option 2/.test(String(a['hsa.funding'] || ''))) out.push(PAY_FORMS.hsa);
+      if (achPull) out.push(PAY_FORMS.ach);
+      return out;
+    },
     FORMS: FORMS,
     FORM_FOR_PRODUCT: FORM_FOR_PRODUCT,
     SHORT_NAME: SHORT_NAME,

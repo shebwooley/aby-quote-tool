@@ -314,25 +314,42 @@
     var d = state.data;
     var out = '';
     var census = d.census || [];
-    var bank = (d.forms || []).some(function (f) { return A.FORMS[f] && A.FORMS[f].bank; });
-    if (census.length || bank) {
-      out += (top ? '<h2>' : '<h2 style="margin-top:22px">') + (adminMode ? 'Census and bank details' : census.length ? 'Your employee census' + (bank ? ' and bank details' : '') : 'Your bank details') + '</h2>';
-      if (census.length && !adminMode) {
-        out += '<p class="intro">ABY also needs a list of your employees and their covered dependents, in ABY\'s spreadsheet. Download it, fill it in, and upload it here. Please do not email it: it holds Social Security numbers and dates of birth.</p>';
-        out += '<div class="download">' + census.map(function (c) {
-          return '<a href="/assets/forms/' + esc(c.file) + '" download>Download the ' + esc(c.label) + '</a>';
-        }).join('') + '</div>';
-      }
-      if (bank && !adminMode) out += '<p class="intro" style="margin-top:12px">Bank details for reimbursements or contributions go through this secure upload too, never by email.</p>';
-      if (!adminMode && state.uploadsOn) {
-        out += '<div class="upl-row">' + (census.length ? uploadBox('census', 'Upload your census') : '') +
-          (bank ? uploadBox('bank', 'Upload bank details') : '') + '</div>' +
-          '<p class="hint-s">Uploads are private: ABY can open them, and this page cannot, even for you. They are deleted automatically 90 days after ABY receives them.</p>' +
-          '<div id="upMsg">' + (state.upMsg || '') + '</div>';
-      }
-      if (adminMode) out += '<p class="intro">Sent through the secure upload. Click a file to download it. Once it is saved in your own system, press Delete beside it; anything left is deleted automatically 90 days after it was uploaded.</p>';
-      out += uploadList();
+    // ⭐ 10-16-2026: each bank or payment form shows only when it applies, beside its own download (A.payForms).
+    var pay = A.payForms(d.forms || [], state.answers, d.achPull);
+    var bank = pay.some(function (p) { return p.kind === 'bank'; });
+    var ach = pay.some(function (p) { return p.kind === 'ach'; });
+    if (!census.length && !pay.length) return out;
+    out += (top ? '<h2>' : '<h2 style="margin-top:22px">') + (adminMode ? 'Census and payment forms'
+      : census.length ? 'Your employee census' + (pay.length ? ' and forms' : '') : 'Forms to send ABY') + '</h2>';
+    if (census.length && !adminMode) {
+      out += '<p class="intro">ABY also needs a list of your employees and their covered dependents, in ABY\'s spreadsheet. Download it, fill it in, and upload it here. Please do not email it: it holds Social Security numbers and dates of birth.</p>';
+      out += '<div class="download">' + census.map(function (c) {
+        return '<a href="/assets/forms/' + esc(c.file) + '" download>Download the ' + esc(c.label) + '</a>';
+      }).join('') + '</div>';
     }
+    if (pay.length && !adminMode) {
+      pay.forEach(function (p) {
+        out += '<p class="intro" style="margin-top:12px">' + esc(p.why) + ' Download the one-page form, fill it in and sign it, then upload it here. Please do not email it: it holds bank account numbers.</p>' +
+          '<div class="download"><a href="/assets/forms/' + esc(p.file) + '" download>Download the ' + esc(p.label) + '</a></div>';
+      });
+    }
+    // What is still to come back: a kind counts as received once a file of that kind is on file.
+    var got = {};
+    (state.uploads || []).forEach(function (f) { if (!f.deletedAt) got[f.kind] = true; });
+    var need = [];
+    if (census.length && !got.census) need.push('your census');
+    if (bank && !got.bank) need.push(pay.filter(function (p) { return p.kind === 'bank'; }).map(function (p) { return 'the ' + p.label; }).join(' and '));
+    if (ach && !got.ach) need.push('the ' + A.PAY_FORMS.ach.label);
+    if (need.length) out += '<div class="note warn" style="margin-top:12px"><strong>Still needed:</strong> ' + esc(need.join('; ')) + '.</div>';
+    if (!adminMode && state.uploadsOn) {
+      out += '<div class="upl-row">' + (census.length ? uploadBox('census', 'Upload your census') : '') +
+        (bank ? uploadBox('bank', 'Upload the bank form') : '') +
+        (ach ? uploadBox('ach', 'Upload the ACH authorization') : '') + '</div>' +
+        '<p class="hint-s">Uploads are private: ABY can open them, and this page cannot, even for you. They are deleted automatically 90 days after ABY receives them.</p>' +
+        '<div id="upMsg">' + (state.upMsg || '') + '</div>';
+    }
+    if (adminMode) out += '<p class="intro">Sent through the secure upload. Click a file to download it. Once it is saved in your own system, press Delete beside it; anything left is deleted automatically 90 days after it was uploaded.</p>';
+    out += uploadList();
     return out;
   }
 
