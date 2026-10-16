@@ -19,6 +19,7 @@
 //
 //   node check_worker_pages.mjs
 //   node check_worker_pages.mjs --self-test    (prove both text rules can go red)
+import { createRequire } from "node:module";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -139,7 +140,9 @@ const PAGES = ["adminHTML", "adminBrokersHTML", "adminRatesHTML",
                // here is the page SHELL -- that the wrapper still emits valid HTML around it.
                "adminGuideHTML",
                // F-603 (10-06-2026): Ask Claude, the menu's one place to ask the assistant.
-               "adminAskHTML"];
+               "adminAskHTML",
+               // 10-16-2026: the Forms page (More menu). Reads the applications' FORMS_LIBRARY, imported as `Questions`.
+               "adminFormsHTML"];
 
 // Template-literal constants served verbatim to a browser (not page functions).
 const RAW_LITERALS = ["ABY_INTERNAL_JS"];
@@ -226,6 +229,16 @@ function runAll(text) {
   } catch (e) {
     console.log('  FAIL prelude: could not read the generated admin guide -- ' + e.message);
     console.log('       Run: node scripts/build_guide.mjs');
+    bad++;
+  }
+  // A SECOND IMPORTED VALUE (10-16-2026): the Forms page lists `Questions.FORMS_LIBRARY`, which worker.js imports from the
+  // applications' question file. ⚠️ READ, NOT STUBBED, for the reason the guide block above gives.
+  try {
+    const qPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'assets', 'js', 'data', 'application-questions.js');
+    globalThis.Questions = createRequire(import.meta.url)(qPath);
+    if (!Array.isArray(globalThis.Questions.FORMS_LIBRARY) || !globalThis.Questions.FORMS_LIBRARY.length) throw new Error('FORMS_LIBRARY is empty');
+  } catch (e) {
+    console.log('  FAIL prelude: could not read the application questions -- ' + e.message);
     bad++;
   }
   const flat = text.replace(/\r\n/g, "\n");

@@ -70,6 +70,7 @@ const BROKER_SELF_SIGNUP = false;
 // versions of the same explanation have diverged every time this project has tried it.
 // The generated file is JSON-escaped, so it contains no backtick and cannot end a page literal.
 import { ADMIN_GUIDE_HTML } from './docs/admin-guide.generated.js';
+import Questions from './public/assets/js/data/application-questions.js';
 // The employer application after the authorization (F-625). Its own file on purpose - see its header.
 import {
   APPLICATION_MIGRATIONS, handleGetApplication, handleSaveApplication, handleSubmitApplication,
@@ -440,6 +441,11 @@ export default {
     if (path === '/admin/referrals') {
       return withAuth(request, env, () => new Response(adminReferralsHTML(), {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
+    }
+    if (path === '/admin/forms') {
+      return withAuth(request, env, () => new Response(adminFormsHTML(), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+      }));
     }
     if (path === '/admin/guide') {
       return withAuth(request, env, () => new Response(adminGuideHTML(), {
@@ -13927,6 +13933,9 @@ async function isAuthed(request, env) {
 // logo directory; keep it that way.
 function isOpenPath(path) {
   if (path.startsWith('/assets/images/')) return true;
+  // ⭐ 10-16-2026: the blank forms on /admin/forms are links ABY emails to people with no login, so they stay reachable
+  // if the lock is ever switched back on. Blank forms only: ABY's own bank account form is never put in this folder.
+  if (path.startsWith('/assets/forms/')) return true;
   return path === '/july-2026' || path === '/july-2026/' || path === '/july-2026.html';
 }
 
@@ -16577,6 +16586,9 @@ const ABY_ADMIN_LINKS = [
   // (~990px); it needed ~1,160px, and ~1,040px even before. The three least-used pages fold into one item.
   { href: '/admin/referrals',  label: 'Referrals', more: true },
   { href: '/admin/rates',      label: 'Rates',     more: true },
+  // ⭐ 10-16-2026 (Eric: "a forms page ... with links for each of those that we could copy and email to someone"). Behind
+  // withAuth like the rest; the FILES it links to are public, so the person who receives a link needs no login.
+  { href: '/admin/forms',      label: 'Forms',     more: true },
   // Last on purpose: it is a reference, not a place work happens. ⛔ It is behind withAuth like
   // every other admin page -- the guide names how ABY decides who to chase, which is not
   // something a broker should read about themselves.
@@ -16623,6 +16635,54 @@ function adminGuideHTML() {
     abyAdminNav('/admin/guide') +
     '<main><div class="doc">' + ADMIN_GUIDE_HTML + '</div></main>' +
     '<script>function logout(){fetch("/api/admin/logout",{method:"POST"}).then(function(){location.href="/admin"})}</script>' +
+    '</body></html>';
+}
+
+/**
+ * The forms page: every blank form ABY hands out, each with a link to copy into an email and a download. The list is
+ * the applications' own (FORMS_LIBRARY in application-questions.js), so the two cannot drift apart. Links are written
+ * on the public domain, so a link copied on workers.dev still reads abyquotes.com in the email.
+ */
+function adminFormsHTML() {
+  const base = 'https://abyquotes.com/assets/forms/';
+  const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const rows = Questions.FORMS_LIBRARY.map((g) =>
+    '<h2>' + esc(g.group) + '</h2><ul class="forms">' + g.items.map((i) =>
+      '<li><div class="what"><strong>' + esc(i.label) + '</strong><span>' + esc(i.about) + '</span></div>' +
+      '<div class="act"><button type="button" class="copy" data-url="' + esc(base + i.file) + '">Copy link</button>' +
+      '<a class="dl" href="/assets/forms/' + esc(i.file) + '" download>Download</a></div></li>').join('') + '</ul>').join('');
+  return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>Forms &mdash; ABY admin</title><style>' +
+    '*{box-sizing:border-box} body{margin:0;font:16px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#12263f}' +
+    ADMIN_HEADER_CSS +
+    'main{max-width:60em;margin:26px auto 80px;padding:0 22px}' +
+    '.doc{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:28px 32px}' +
+    'h1{font-size:26px;margin:0 0 6px} .lead{margin:0 0 8px;color:#3a4a5e}' +
+    'h2{font-size:18px;margin:26px 0 8px;color:#1a5c3a}' +
+    'ul.forms{list-style:none;margin:0;padding:0}' +
+    'ul.forms li{display:flex;gap:16px;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid #eef2f6}' +
+    'ul.forms li:last-child{border-bottom:0}' +
+    '.what strong{display:block;font-size:16px} .what span{color:#3a4a5e;font-size:15px}' +
+    '.act{display:flex;gap:8px;flex-shrink:0}' +
+    '.act button,.act a{font:inherit;font-size:15px;padding:7px 14px;border-radius:7px;cursor:pointer;text-decoration:none}' +
+    '.act button{background:#1a5c3a;color:#fff;border:0} .act a{border:1px solid #1a5c3a;color:#1a5c3a;background:#fff}' +
+    '.act button.done{background:#2e7d4f}' +
+    '.note{margin:22px 0 0;padding:12px 16px;background:#f7f9fc;border-left:4px solid #1a5c3a;border-radius:0 8px 8px 0;color:#3a4a5e;font-size:15px}' +
+    '@media (max-width:640px){ul.forms li{flex-direction:column;align-items:flex-start}}' +
+    '</style></head><body>' +
+    abyAdminNav('/admin/forms') +
+    '<main><div class="doc"><h1>Forms</h1>' +
+    '<p class="lead">Blank forms to send to an employer or broker outside a quote. Copy link puts the address on your clipboard to paste into an email; the person who gets it can download the form without signing in.</p>' +
+    rows +
+    '<p class="note">ABY&rsquo;s own bank account form (for customers who send payment to ABY) is not on this page, because a public link to an account number invites fraud. Send it as an email attachment.</p>' +
+    '</div></main>' +
+    '<script>function logout(){fetch("/api/admin/logout",{method:"POST"}).then(function(){location.href="/admin"})}' +
+    'document.addEventListener("click",function(e){var b=e.target.closest("button.copy");if(!b)return;' +
+    'var u=b.getAttribute("data-url");var done=function(){b.textContent="Copied";b.classList.add("done");' +
+    'setTimeout(function(){b.textContent="Copy link";b.classList.remove("done")},1800)};' +
+    'if(navigator.clipboard){navigator.clipboard.writeText(u).then(done,function(){window.prompt("Copy this link:",u)})}' +
+    'else{window.prompt("Copy this link:",u)}});</script>' +
     '</body></html>';
 }
 

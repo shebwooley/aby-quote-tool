@@ -683,9 +683,29 @@
     return false;
   }
 
+  // ⭐ THE FORMS PAGE (/admin/forms, Eric 10-16-2026: "a forms page ... with links for each of those that we could copy and
+  // email to someone so they could click and download (outside a quote)"). Built from the SAME entries the applications
+  // hand out, so a form replaced here is replaced on both.
+  // ⛔ ABY's own bank account form (the ACH "push" form) is NOT here and never goes in public/assets/forms: a public link
+  // to ABY's routing and account numbers invites payment fraud. It is sent as an email attachment.
+  var FORMS_LIBRARY = [
+    { group: 'Census spreadsheets', items: [
+      { file: CENSUS.cobra.file, label: 'COBRA census', about: 'Active employees plus anyone already on COBRA.' },
+      { file: CENSUS.cdh.file,   label: 'FSA enrollment census', about: 'Annual elections and payroll deductions, with instructions.' },
+      { file: CENSUS.hra.file,   label: 'HRA census', about: 'HRA and Medicare HRA enrollment by coverage level.' },
+      { file: CENSUS.ichra.file, label: 'CHOICE Arrangement / QSEHRA census', about: 'With employer and employee contribution columns.' } ] },
+    { group: 'Bank and payment forms', items: [
+      { file: PAY_FORMS.reimburse.file, label: 'Bank form for reimbursements', about: 'HRA, Medicare HRA or FSA, when ABY pays reimbursements by check or direct deposit.' },
+      { file: PAY_FORMS.hsa.file,       label: 'HSA funding bank form', about: 'HSA funding option 2, when ABY draws the contributions from the employer’s account.' },
+      { file: PAY_FORMS.ach.file,       label: 'ACH payment authorization', about: 'Plan documents only: authorizes ABY to draw the payment before the document is sent.' } ] },
+    { group: 'About ABY', items: [
+      { file: 'ABY-Benefits-W-9.pdf', label: 'ABY Benefits W-9', about: 'ABY’s taxpayer identification form, for a customer’s vendor setup.' } ] }
+  ];
+
   var API = {
     STATES: STATES,
     PAY_FORMS: PAY_FORMS,
+    FORMS_LIBRARY: FORMS_LIBRARY,
     docsOnly: docsOnly,
 
     /** The bank and payment forms THIS application needs, given its forms, its answers and whether it pays by ACH. */
