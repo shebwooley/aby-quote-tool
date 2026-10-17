@@ -51,8 +51,8 @@ r = formsFor(all, ['ERISA Wrap Document: Full SPD']);
 check('any other ERISA package does not', r.forms.join() === 'erisa', JSON.stringify(r.forms));
 r = formsFor(all, ['ICHRA / QSEHRA', 'FSA / DCAP / LFSA', 'POP / Cafeteria Plan', 'HSA', 'Medicare HRA']);
 check('ICHRA, FSA, POP, HSA and Medicare HRA each find their form', r.forms.join() === 'hra,mhra,pop,fsa,hsa', JSON.stringify(r.forms));
-check('an ICHRA gets the contribution census, FSA the FSA census',
-  r.census.map((c) => c.file).join() === 'ABY-ICHRA-census-template.xlsx,ABY-FSA-census-template.xlsx,ABY-HRA-census-template.xlsx', JSON.stringify(r.census));
+check('an ICHRA gets the contribution census, FSA the FSA census, HSA the HSA census',
+  r.census.map((c) => c.file).join() === 'ABY-ICHRA-census-template.xlsx,ABY-FSA-census-template.xlsx,ABY-HSA-census-template.xlsx,ABY-HRA-census-template.xlsx', JSON.stringify(r.census));
 const { existsSync } = await import('node:fs');
 Object.values(Q.CENSUS).forEach((c) => check('census file exists: ' + c.file,
   existsSync(new URL('../public/assets/forms/' + c.file, import.meta.url)), 'missing'));

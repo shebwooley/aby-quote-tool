@@ -99,13 +99,15 @@
   // The census spreadsheet each service needs, by PRODUCT (a CHOICE Arrangement's census carries the
   // contribution columns the plain HRA's does not). Files live in public/assets/forms/.
   var CENSUS_FOR_PRODUCT = {
-    cobra: 'cobra', stateContinuation: 'cobra', hra: 'hra', mpra: 'hra', ichra: 'ichra', fsa: 'cdh'
+    cobra: 'cobra', stateContinuation: 'cobra', hra: 'hra', mpra: 'hra', ichra: 'ichra', fsa: 'cdh', hsa: 'hsa'
   };
   var CENSUS = {
     cobra: { file: 'ABY-COBRA-census-template.xlsx', label: 'COBRA census spreadsheet' },
     hra:   { file: 'ABY-HRA-census-template.xlsx', label: 'HRA census spreadsheet' },
     ichra: { file: 'ABY-ICHRA-census-template.xlsx', label: 'CHOICE Arrangement / QSEHRA census spreadsheet' },
-    cdh:   { file: 'ABY-FSA-census-template.xlsx', label: 'FSA census spreadsheet' }
+    cdh:   { file: 'ABY-FSA-census-template.xlsx', label: 'FSA census spreadsheet' },
+    // 10-17-2026: ABY's HSA import file (Eric: "the HSA census ... the last one we were waiting on").
+    hsa:   { file: 'ABY-HSA-census-template.xlsx', label: 'HSA census spreadsheet' }
   };
 
   var ALL = ['cobra', 'hra', 'mhra', 'pop', 'fsa', 'hsa', 'erisa', 'f5500'];
@@ -693,7 +695,8 @@
       { file: CENSUS.cobra.file, label: 'COBRA census', about: 'Active employees plus anyone already on COBRA.' },
       { file: CENSUS.cdh.file,   label: 'FSA enrollment census', about: 'Annual elections and payroll deductions, with instructions.' },
       { file: CENSUS.hra.file,   label: 'HRA census', about: 'HRA and Medicare HRA enrollment by coverage level.' },
-      { file: CENSUS.ichra.file, label: 'CHOICE Arrangement / QSEHRA census', about: 'With employer and employee contribution columns.' } ] },
+      { file: CENSUS.ichra.file, label: 'CHOICE Arrangement / QSEHRA census', about: 'With employer and employee contribution columns.' },
+      { file: CENSUS.hsa.file,   label: 'HSA census', about: 'Each account holder, with coverage level (employee or family) and effective date.' } ] },
     { group: 'Bank and payment forms', items: [
       { file: PAY_FORMS.reimburse.file, label: 'Bank form for reimbursements', about: 'HRA, Medicare HRA or FSA, when ABY pays reimbursements by check or direct deposit.' },
       { file: PAY_FORMS.hsa.file,       label: 'HSA funding bank form', about: 'HSA funding option 2, when ABY draws the contributions from the employer’s account.' },
