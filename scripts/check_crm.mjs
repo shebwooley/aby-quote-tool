@@ -327,6 +327,12 @@ function seedTest(cfg) {
   for (let i = 0; i < 4; i++) q.push(`('crmtest-q-new-${i}','R${i}','2026-06-0${i + 1}','${MOVER_NEW}','Agency With No Record','','','Test Mover')`);
   d1('INSERT INTO quotes (id, quote_number, created_at, broker_email, broker_agency, source_tag, notes, broker_name) VALUES ' +
      q.join(','), cfg);
+  // F-426: a firm that never did any business, the Jay Jeffries shape - one firm, one person, one address.
+  d1("DELETE FROM agencies WHERE id = 'crmtest-stray'", cfg);
+  d1("INSERT INTO agencies (id, name) VALUES ('crmtest-stray','Stray Firm For Delete')", cfg);
+  d1("INSERT INTO people (id, name, agency_id) VALUES ('crmtest-stray-p','Stray Person','crmtest-stray')", cfg);
+  d1('INSERT INTO broker_directory (email, name, agency, quote_count, agency_id, person_id) VALUES ' +
+     "('crmtest.stray@example.com','Stray Person','Stray Firm For Delete',0,'crmtest-stray','crmtest-stray-p')", cfg);
 }
 
 // ── the suite ─────────────────────────────────────────────────────────────────────────────────
@@ -380,7 +386,8 @@ async function runSuite() {
   r2 = await api('GET', '/api/migrate');
   const bf2 = (r2.json && r2.json.people) || {};
   check('running the migration TWICE creates nothing a second time',
-        [bf2.peopleCreated, bf2.agenciesCreated, bf2.alreadyLinked], [0, 0, 3],
+        // 4 linked: the three seeded addresses, plus the F-426 stray firm's address (seeded already linked).
+        [bf2.peopleCreated, bf2.agenciesCreated, bf2.alreadyLinked], [0, 0, 4],
         'a backfill guarded by "has this run before" instead of "is it already set" doubles people');
 
   // ── 2. shape of a bad request. ⛔ Each must be a 400 with a reason, never a silent 200 that
@@ -494,6 +501,27 @@ async function runSuite() {
   r = await api('POST', '/api/admin/crm/delete', { id: victim.id });
   check('deleting it again is a 404, not a silent ok', r.status, 404,
         'a DELETE that matches nothing resolves happily and the screen keeps showing the row');
+
+  // ── 11b. DELETE A FIRM (F-426). Refused for a firm with quotes; a stray goes with its person.
+  r = await api('POST', '/api/admin/crm/delete-firm', { id: AGENCIES[1].id });
+  check('a firm with quotes is refused, and says so', [r.status, /it has quotes/.test((r.json && r.json.error) || '')], [409, true],
+        'the quote history is real; a delete button must never take a firm that did business');
+  r = await api('POST', '/api/admin/crm', { kind: 'note', body: 'stray note', entities: [{ type: 'agency', id: 'crmtest-stray' }] });
+  check('the stray firm has a note to lose', r.status, 200);
+  r = await api('GET', '/api/admin/crm/agencies?disposition=all');
+  check('the stray firm is on the list before the delete', ((r.json && r.json.agencies) || []).some((a) => a.id === 'crmtest-stray'), true,
+        'without this, "off the list" below passes on a list that failed to load');
+  r = await api('POST', '/api/admin/crm/delete-firm', { id: 'crmtest-stray' });
+  check('a firm with no business deletes', [r.status, r.json && r.json.people], [200, 1]);
+  r = await api('GET', '/api/admin/crm/agencies?disposition=all');
+  check('the deleted firm is off the list', ((r.json && r.json.agencies) || []).some((a) => a.id === 'crmtest-stray'), false);
+  r = await api('GET', '/api/admin/crm?entity_type=agency&entity_id=crmtest-stray');
+  check('its notes went with it', ((r.json && r.json.events) || []).length, 0);
+  r = await api('GET', '/api/admin/crm/person?email=crmtest.stray%40example.com');
+  check('the person only at that firm went with it', r.status === 200, false,
+        'a person left behind points at a firm that no longer exists');
+  r = await api('POST', '/api/admin/crm/delete-firm', { id: 'crmtest-stray' });
+  check('deleting the firm again is a 404', r.status, 404);
 
   // ── 12. AN AGENT WHO MOVES AGENCY. This is Eric's requirement in full, and the property being
   //    proved is the one he stated: the relationship follows the PERSON, the work stays with the
@@ -1247,6 +1275,13 @@ async function runConcurrencySuite() {
 // self-test whose sabotages are artificial proves the harness runs; one that replays the historical
 // bug proves the harness would have CAUGHT it.
 const SABOTAGES = [
+  {
+    // ⛔ F-426: THE DELETE BUTTON FORGETS TO ASK ABOUT QUOTES, and a firm with years of history goes.
+    name: 'the firm delete stops checking for quotes',
+    find: "    why.push('it has quotes');",
+    with: '    void 0;',
+    breaks: 'a firm with quotes is refused, and says so',
+  },
   {
     // ⛔⛔ THE ONE THAT WOULD HAVE DESTROYED THE WHOLE IMPORT, SILENTLY. Before a person could be
     // held by name and firm, "no address points at this person" and "orphan" were the same sentence.

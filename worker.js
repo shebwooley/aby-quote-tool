@@ -179,6 +179,7 @@ export default {
     // How much of this month's cap is used (Eric, 10-06-2026: "it won't keep track and tell us how much we've used will it?").
     if (path === '/api/admin/assistant/usage' && method === 'GET') return withAuth(request, env, () => handleAssistUsage(env));
     if (path === '/api/admin/crm/delete' && method === 'POST') return withAuth(request, env, () => handleCrmDelete(request, env));
+    if (path === '/api/admin/crm/delete-firm' && method === 'POST') return withAuth(request, env, () => handleCrmDeleteFirm(request, env));
     if (path === '/api/admin/crm/person'  && method === 'GET')  return withAuth(request, env, () => handleCrmPerson(request, env));
     if (path === '/api/admin/crm/link'    && method === 'POST') return withAuth(request, env, () => handleCrmLinkPerson(request, env));
     if (path === '/api/admin/crm/person-field' && method === 'POST') return withAuth(request, env, () => handleCrmPersonField(request, env));
@@ -3903,6 +3904,74 @@ async function handleCrmDelete(request, env) {
   // server never removed. Assert the change, the same way handleAdminAssign does.
   if (!r || !r.meta || !r.meta.changes) return jsonResp({ error: 'No such entry.' }, 404);
   return jsonResp({ ok: true });
+}
+
+// ── DELETE A FIRM THAT NEVER DID ANY BUSINESS (F-426) ─────────────────────────────────────────
+//
+// Eric, 10-18-2026: "build the delete button". Until then a stray firm (Jay Jeffries, an electricity
+// broker on a benefits list) could only be removed by somebody running SQL, and the Cloudflare key
+// on Claude's machine had gone read-only - so a decision he made on 09-13 sat undone for a month.
+// ⛔ ONLY A FIRM WITH NOTHING REAL HANGING OFF IT. Every check below is re-run HERE, not trusted from
+// the screen: no quote names it (by id or by name), no sale names it, nobody signs in under it, no
+// other firm is recorded as part of it, no open task is about it, and none of its people has a quote.
+// Any one of those means it is not a stray, and the answer is to say which, not to delete.
+// ⭐ What goes with it: its notes, its address-book rows, and the people who belonged ONLY to it.
+// Somebody who also sits at another firm keeps their record and just loses this firm.
+// ⚠️ ONE BATCH, so a half-finished delete cannot leave people pointing at a firm that is gone.
+async function handleCrmDeleteFirm(request, env) {
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const id = String(body.id || '').trim();
+  if (!id) return jsonResp({ error: 'Which firm?' }, 400);
+  const a = await env.DB.prepare('SELECT id, name FROM agencies WHERE id = ?').bind(id).first();
+  if (!a) return jsonResp({ error: 'That firm is already gone.' }, 404);
+  const key = String(a.name || '').trim().toLowerCase();
+  const count = async (sql, ...b) => {
+    const r = await env.DB.prepare(sql).bind(...b).first();
+    return (r && r.n) || 0;
+  };
+  // The people at this firm: held by name and firm, or reached through an address that points here.
+  const ppl = await env.DB.prepare(
+    'SELECT id FROM people WHERE agency_id = ? ' +
+    'UNION SELECT person_id FROM broker_directory WHERE agency_id = ? AND person_id IS NOT NULL'
+  ).bind(id, id).all();
+  const personIds = (ppl.results || []).map((r) => r.id).filter(Boolean);
+  const why = [];
+  if (await count("SELECT COUNT(*) n FROM quotes WHERE agency_id = ? OR lower(trim(COALESCE(broker_agency,''))) = ?", id, key))
+    why.push('it has quotes');
+  if (await count("SELECT COUNT(*) n FROM aby_sales WHERE agency_id = ? OR lower(trim(COALESCE(agency,''))) = ?", id, key))
+    why.push('it has sales');
+  if (await count('SELECT COUNT(*) n FROM brokers WHERE agency_id = ?', id))
+    why.push('somebody signs in to quote under it');
+  if (await count('SELECT COUNT(*) n FROM agencies WHERE parent_id = ?', id))
+    why.push('another firm is recorded as part of it');
+  if (await count("SELECT COUNT(*) n FROM aby_task WHERE entity_type = 'agency' AND entity_id = ? AND done_at IS NULL", id))
+    why.push('there is an open task about it');
+  if (await count(
+    "SELECT COUNT(*) n FROM quotes WHERE trim(COALESCE(broker_email,'')) <> '' AND lower(trim(broker_email)) IN " +
+    '(SELECT lower(trim(email)) FROM broker_directory WHERE agency_id = ?)', id))
+    why.push('one of its people has quotes');
+  if (why.length) return jsonResp({ error: 'Not deleted, because ' + why.join(' and ') + '.' }, 409);
+
+  const stmts = [];
+  for (const pid of personIds) {
+    // Somebody who also sits at another firm keeps their record; only the link to this one goes.
+    const elsewhere = await count(
+      "SELECT COUNT(*) n FROM broker_directory WHERE person_id = ? AND COALESCE(agency_id, '') <> ?", pid, id);
+    if (elsewhere) {
+      stmts.push(env.DB.prepare('UPDATE people SET agency_id = NULL WHERE id = ? AND agency_id = ?').bind(pid, id));
+    } else {
+      stmts.push(env.DB.prepare("DELETE FROM crm_events WHERE entity_type = 'person' AND entity_id = ?").bind(pid));
+      stmts.push(env.DB.prepare('DELETE FROM people WHERE id = ?').bind(pid));
+    }
+  }
+  stmts.push(env.DB.prepare('DELETE FROM broker_directory WHERE agency_id = ?').bind(id));
+  stmts.push(env.DB.prepare("DELETE FROM crm_events WHERE entity_type = 'agency' AND entity_id = ?").bind(id));
+  stmts.push(env.DB.prepare('DELETE FROM agencies WHERE id = ?').bind(id));
+  const res = await env.DB.batch(stmts);
+  const last = res[res.length - 1];
+  // A DELETE that matches nothing resolves happily: assert the firm itself went.
+  if (!last || !last.meta || !last.meta.changes) return jsonResp({ error: 'That did not delete.' }, 500);
+  return jsonResp({ ok: true, name: a.name, people: personIds.length });
 }
 
 
@@ -10505,6 +10574,16 @@ ${abyAdminNav('/admin/brokers')}
      }
      h += '</tbody></table>';
    }
+   // ⭐ DELETE, ONLY FOR A FIRM THAT NEVER DID ANY BUSINESS (F-426, Eric 10-18-2026). Not offered
+   // at all when the firm has quotes or sales: that history is real. The server re-checks everything.
+   if (!a.quotes && !a.sales){
+     h += '<div style="margin-top:18px;padding-top:12px;border-top:1px solid #e4eaf0">'
+        + '<button onclick="deleteFirm(' + "'" + id + "'" + ')" style="font-size:13px;padding:5px 12px;'
+        + 'background:#fff;color:#a12622;border:1px solid #e3b4b0;border-radius:6px;cursor:pointer">'
+        + 'Delete this firm</button> <span class="muted" style="font-size:12.5px">'
+        + 'Only offered because it has no quotes and no sales. Its notes and the people only at this firm go with it.'
+        + '</span></div>';
+   }
    q('mkt').innerHTML = h + '</div>';
    // ⚠️ AFTER the innerHTML, never before: the container it fills does not exist until this line
    // has run. Same shape as TRAPS #239 -- the first render is not a repaint.
@@ -11458,6 +11537,22 @@ ${abyAdminNav('/admin/brokers')}
      openFirm(id);
    }
  }
+ async function deleteFirm(id){
+   var a = null;
+   for (var i = 0; i < mktRows.length; i++){ if (mktRows[i].id === id) a = mktRows[i]; }
+   var name = a ? a.name : 'this firm';
+   if (!confirm('Delete ' + name + '? Its notes and the people only at this firm go too. This cannot be undone.')) return;
+   var r = await fetch('/api/admin/crm/delete-firm', {
+     method: 'POST', headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ id: id }),
+   });
+   var d = await r.json().catch(function(){ return {}; });
+   if (!r.ok){ q('fMsg').textContent = d.error || 'That did not delete.'; return; }
+   await loadMkt();
+   closeFirm();
+   q('mCount').textContent += ' - ' + name + ' deleted';
+ }
+
  async function delEvent(eventId, firmId){
    var r = await fetch('/api/admin/crm/delete', {
      method: 'POST', headers: { 'Content-Type': 'application/json' },
