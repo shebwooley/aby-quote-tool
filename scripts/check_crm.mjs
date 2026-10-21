@@ -330,6 +330,9 @@ function seedTest(cfg) {
   // F-426: a firm that never did any business, the Jay Jeffries shape - one firm, one person, one address.
   d1("DELETE FROM agencies WHERE id = 'crmtest-stray'", cfg);
   d1("INSERT INTO agencies (id, name) VALUES ('crmtest-stray','Stray Firm For Delete')", cfg);
+  // The firm section 23's administrator is invited into. Accounts come from ABY by invitation since
+  // 09-25-2026, and an invite needs a firm that is already in the CRM.
+  d1("INSERT INTO agencies (id, name) VALUES ('crmtest-signup-firm','Zzz Signup Firm')", cfg);
   d1("INSERT INTO people (id, name, agency_id) VALUES ('crmtest-stray-p','Stray Person','crmtest-stray')", cfg);
   d1('INSERT INTO broker_directory (email, name, agency, quote_count, agency_id, person_id) VALUES ' +
      "('crmtest.stray@example.com','Stray Person','Stray Firm For Delete',0,'crmtest-stray','crmtest-stray-p')", cfg);
@@ -863,16 +866,30 @@ async function runSuite() {
   r = await api('GET', '/api/agency/people');
   check('the agency people list refuses an unauthenticated caller', r.status, 401);
 
+  // ⛔ SELF SIGN-UP IS CLOSED (Eric, 09-25-2026: "I don't want them to sign themselves up"). Until
+  // 10-20-2026 this section signed the administrator up and failed on the refusal, which read as two
+  // CRM bugs; it now proves the door is shut, then makes the administrator the way ABY does.
   r = await api('POST', '/api/broker/signup',
                 { email: BOSS, password: 'a-long-enough-password', name: 'Boss Person', agency: 'Zzz Signup Firm' });
-  check('a broker can sign up', [r.status, (r.json && r.json.error) || null], [200, null]);
+  check('self sign-up is refused, and says to ask ABY', [r.status, /invitation/.test((r.json && r.json.error) || '')], [403, true]);
 
-  // ⭐ SIGNING UP PUTS THEM IN ABY'S LIST. Real brokers register off Eric's webinars unprompted, and
-  // until now the only trace was a row in a table nothing reads.
+  cookie = adminCookie;
+  r = await api('POST', '/api/admin/brokers/invite',
+                { agencyId: 'crmtest-signup-firm', people: [{ email: BOSS, name: 'Boss Person' }] });
+  const bossInvite = ((r.json && r.json.invited) || [])[0] || {};
+  check('ABY can invite a broker into a firm', [r.status, bossInvite.role], [200, 'admin'],
+        'the first person invited into a firm becomes its administrator');
+  cookie = '';
+  r = await api('POST', '/api/broker/set-password',
+                { token: new URL(bossInvite.link || 'http://x/?token=').searchParams.get('token'), password: 'a-long-enough-password' });
+  check('the invited broker sets a password from the link and is signed in', r.status, 200);
+
+  // ⭐ AN INVITED BROKER IS IN ABY'S LIST. Until 09-25 real brokers registered themselves, and the
+  // only trace was a row in a table nothing reads.
   const bossCookie = cookie;
   cookie = adminCookie;
   r = await api('GET', '/api/admin/crm/person?email=' + encodeURIComponent(BOSS));
-  check('a self-registered broker reaches ABY list as a person', (r.json.addresses || []).length, 1);
+  check('an invited broker reaches ABY list as a person', ((r.json && r.json.addresses) || []).length, 1);
   check('and their firm came with them', r.json.addresses[0].agency_name, 'Zzz Signup Firm');
 
   // ── 24. AN INVITE REACHES THE LIST TOO -- the half Eric asked about first.
@@ -1257,7 +1274,9 @@ async function runConcurrencySuite() {
         reports.reduce((n, p) => n + (p.orphansRemoved || 0), 0) >= 1, true,
         'the live cleanup was "run it again" rather than hand-written SQL, and this is why');
   check('four migrations at once still leave one person per address',
-        [last.people, last.addresses], [153, 153],
+        // 154 = 150 bulk + agent + the two movers + crmtest.stray (the delete-a-firm fixture, b0234d7).
+        // It read 153 until 10-20-2026; the gap was invisible because section 23 crashed the suite first.
+        [last.people, last.addresses], [154, 154],
         'both requests read the same snapshot of unlinked addresses and both created a person');
   check('and no migration reports an error', reports.every((p) => (p.errors || []).length === 0), true);
   // ⭐ THE SAME RACE DUPLICATED AGENCIES ON LIVE DATA, AND FIXING ONLY THE PEOPLE HALF WAS NOT
