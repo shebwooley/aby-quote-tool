@@ -90,6 +90,8 @@ import {
 import {
   AGENCY_DEFAULT_MIGRATIONS, agencyDefaultsFor, handleGetAgencyDefaults, handleSaveAgencyDefaults,
 } from './lib/agency-defaults.js';
+// F-609: one click from BenefitLab into the quote tool. Its own file, like the above.
+import { HANDOFF_MIGRATIONS, handleBrokerHandoff, handleHandoffLanding } from './lib/benefitlab-handoff.js';
 
 export default {
   // The daily cron (wrangler.jsonc triggers): files sent through the secure upload are deleted 90 days on.
@@ -131,6 +133,11 @@ export default {
     // A quote REQUEST arriving from BenefitLab (F-609). Same bearer secret as the read above and
     // for the same reason: the caller is the BenefitLab SERVER, not a person with a cookie.
     if (path === '/api/quote-request' && method === 'POST') return handleQuoteRequest(request, env);
+    // One click from BenefitLab (F-609, 10-21-2026): the BenefitLab SERVER vouches for a broker with the same
+    // bearer secret and gets back a one-time sign-in link. lib/benefitlab-handoff.js has the whole design.
+    if (path === '/api/integration/broker-handoff' && method === 'POST') {
+      return handleBrokerHandoff(request, env, { safeEqual, linkBrokerIntoDirectory });
+    }
     // The Monday RFP search (a Claude Code routine) reports here, and reads back what is already
     // open so it can re-check it. Its OWN bearer secret, RFP_WATCH_TOKEN, never the integration
     // token: this caller may add RFP leads and read the open RFP list, and nothing else.
@@ -256,6 +263,10 @@ export default {
     }
     // The broker's own page. Public by design -- it IS the sign-in screen; everything behind it
     // is gated per request by the `aby_broker` cookie, not by hiding this route.
+    // The one-time link from BenefitLab lands here and becomes the normal broker cookie (F-609).
+    if (path === '/broker/handoff' && method === 'GET') {
+      return handleHandoffLanding(request, env, { sessionCookie, makeBrokerToken });
+    }
     if (path === '/broker/set-password') {
       return new Response(setPasswordPageHTML(), {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
@@ -18077,6 +18088,8 @@ const MIGRATIONS = [
   ...AGENCY_DEFAULT_MIGRATIONS,
   // F-603: the admin assistant's monthly spend (its $20 cap). The handler also creates it on first use.
   { sql: ASSIST_USAGE_TABLE, table: 'assist_usage', column: 'dollars' },
+  // F-609: the BenefitLab agency a firm belongs to, and the one-time sign-in link. lib/benefitlab-handoff.js.
+  ...HANDOFF_MIGRATIONS,
 ];
 
 // Does this column resolve? A plain SELECT is used rather than PRAGMA table_info because column

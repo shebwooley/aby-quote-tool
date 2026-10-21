@@ -93,6 +93,16 @@ function localAdminPassword() {
   return '';
 }
 
+/** The local INTEGRATION_TOKEN, for the server-to-server routes. ⛔ Read, never printed. */
+function localIntegrationToken() {
+  for (const line of readFileSync(join(REPO, '.dev.vars'), 'utf8').split(/\r?\n/)) {
+    const m = /^INTEGRATION_TOKEN\s*=\s*(.*)$/.exec(line.trim());
+    if (m) return m[1].replace(/^["']|["']$/g, '');
+  }
+  die('.dev.vars has no INTEGRATION_TOKEN line.');
+  return '';
+}
+
 let cookie = '';
 async function api(method, path, body) {
   const init = { method, headers: {}, redirect: 'manual' };
@@ -223,6 +233,7 @@ function cleanupSabotage() {
   rmSync(join(REPO, SAB_JS), { force: true });
   rmSync(join(REPO, SAB_CFG), { force: true });
   rmSync(join(REPO, SAB_VARS), { force: true });
+  rmSync(join(REPO, 'scripts', '.crm-sabotage-lib.js'), { force: true });
 }
 
 // ── fixtures ──────────────────────────────────────────────────────────────────────────────────
@@ -285,6 +296,8 @@ function seedTest(cfg) {
   // every assertion after that would be answering a different question.
   d1("DELETE FROM brokers WHERE lower(trim(email)) LIKE 'crmtest.%@example.com'", cfg);
   d1("DELETE FROM agencies WHERE name = 'Zzz Signup Firm'", cfg);
+  // F-609: the firm the BenefitLab handoff creates on a first click (section 33).
+  d1("DELETE FROM agencies WHERE name = 'Zzz Handoff Firm'", cfg);
   // ⛔ AND ANY ROW WITH NO EMAIL AT ALL. Only a sabotage can create one -- the email check is
   // what a sabotage removes -- and it does not match the pattern above, so it survived every
   // reseed and permanently broke the people/addresses count in a LATER, legitimate run.
@@ -1212,6 +1225,71 @@ async function runSuite() {
   check('an opportunity takes a dated note through the same table as everything else', rq.status, 200);
   rq = await api('GET', '/api/admin/crm?entity_type=rfp&entity_id=' + encodeURIComponent(nys.id));
   check('and it reads back', ((rq.json && rq.json.events) || []).length >= 1, true);
+
+  // ── 33. ONE CLICK FROM BENEFITLAB (F-609, Eric 10-21-2026: "Yes, build it"). BenefitLab's SERVER vouches
+  //    for a broker with the bearer secret and gets a one-time link; the link becomes the broker cookie ONCE.
+  const HO = '/api/integration/broker-handoff';
+  const hoKey = localIntegrationToken();
+  const ho = async (body, key) => {
+    const r = await fetch(BASE + HO, { method: 'POST', redirect: 'manual',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, key ? { Authorization: 'Bearer ' + key } : {}),
+      body: JSON.stringify(body) });
+    let j = null; try { j = await r.json(); } catch { /* not JSON is a finding */ }
+    return { status: r.status, json: j };
+  };
+  const land = async (u) => {
+    const r = await fetch(u.replace(/^https?:\/\/[^/]+/, BASE), { redirect: 'manual' });
+    const set = r.headers.get('set-cookie') || '';
+    return { status: r.status, location: r.headers.get('location'), cookie: set.split(';')[0] };
+  };
+  const HO_A = 'crmtest.handoff.a@example.com', HO_B = 'crmtest.handoff.b@example.com';
+  const hoBody = (email, extra) => Object.assign({ email, name: 'Handoff Person', phone: '555-0100',
+    benefitlabAgencyId: 'bl-test-agency-handoff', agencyName: 'Zzz Handoff Firm',
+    next: '/broker?next=quote&rerun=%7B%7D' }, extra || {});
+
+  let h = await ho(hoBody(HO_A), null);
+  check('a handoff with no key is refused', h.status, 401, 'it signs somebody in; only the BenefitLab server may ask');
+  h = await ho(hoBody(HO_A), 'not-the-key');
+  check('a handoff with the wrong key is refused', h.status, 401);
+  h = await ho(hoBody('not an email'), hoKey);
+  check('a handoff with no real email is a 400', h.status, 400);
+
+  h = await ho(hoBody(HO_A), hoKey);
+  check('a first click creates the broker AND their firm', [h.status, h.json && h.json.created],
+        [200, { broker: true, agency: true }], 'the "create the ABY account" half, done on the first click');
+  const linkA = (h.json && h.json.url) || '';
+  check('and returns a one-time link to the handoff page', /\/broker\/handoff\?t=[0-9a-f]{64}&next=/.test(linkA), true);
+
+  let L1 = await land(linkA);
+  check('the link signs the broker in and lands on the quote form', [L1.status, L1.location, /^aby_broker=/.test(L1.cookie)],
+        [302, '/broker?next=quote&rerun=%7B%7D', true]);
+  cookie = L1.cookie;
+  let me = await api('GET', '/api/broker/me');
+  check('as that broker', me.json && me.json.broker && String(me.json.broker.email).toLowerCase(), HO_A);
+  cookie = '';
+  const L2 = await land(linkA);
+  check('the same link a second time signs nobody in', [L2.status, L2.cookie], [302, ''],
+        'single use: a link in a browser history or a log must be worth nothing');
+  const L3 = await land(BASE + '/broker/handoff?t=' + 'a'.repeat(64) + '&next=%2Fbroker');
+  check('a made-up token signs nobody in', [L3.status, L3.cookie], [302, '']);
+
+  h = await ho(hoBody(HO_B), hoKey);
+  check('a colleague from the same BenefitLab agency joins the SAME firm', [h.status, h.json && h.json.created],
+        [200, { broker: true, agency: false }]);
+  h = await ho(hoBody(HO_A), hoKey);
+  check('a broker ABY already has is signed in, not created again', [h.status, h.json && h.json.created],
+        [200, { broker: false, agency: false }]);
+  cookie = (await land(h.json.url)).cookie;
+  const firm = await api('GET', '/api/agency/me');
+  const roles = ((firm.json && firm.json.members) || []).map((x) => [String(x.email).toLowerCase(), x.role]).sort();
+  check('the first broker of a new firm is its administrator, the colleague a member', roles,
+        [[HO_A, 'admin'], [HO_B, 'member']]);
+  cookie = '';
+
+  h = await ho(hoBody(HO_A, { next: '//evil.example/x' }), hoKey);
+  check('a next that points at another site is replaced by the quote form',
+        decodeURIComponent(((h.json && h.json.url) || '').split('&next=')[1] || ''), '/broker?next=quote',
+        'browsers read //host as another site');
 }
 
 /**
@@ -1589,6 +1667,23 @@ const SABOTAGES = [
     with: "        \"SELECT 1 WHERE ? IS NOT NULL AND ? IS NOT NULL\"",
     breaks: 'linking the two addresses moves the tag rather than losing it',
   },
+  {
+    // F-609. The link must be spent in the statement that reads it. Without the clear it works for two minutes
+    // to anybody holding it: a browser history, a proxy log.
+    file: 'lib/benefitlab-handoff.js',
+    name: 'the handoff link is not spent when it is used',
+    find: "'UPDATE brokers SET handoff_token = NULL, handoff_expires = NULL ' +",
+    with: "'UPDATE brokers SET handoff_token = handoff_token, handoff_expires = handoff_expires ' +",
+    breaks: 'the same link a second time signs nobody in',
+  },
+  {
+    // F-609. The bearer check is the whole of the trust: without it anybody could sign in as any broker.
+    file: 'lib/benefitlab-handoff.js',
+    name: 'the handoff stops checking the key',
+    find: "  if (!m || !deps.safeEqual(m[1], expected)) return json({ error: 'Unauthorized' }, 401);",
+    with: "  if (false) return json({ error: 'Unauthorized' }, 401);",
+    breaks: 'a handoff with the wrong key is refused',
+  },
 ];
 
 // ── driver ────────────────────────────────────────────────────────────────────────────────────
@@ -1652,7 +1747,7 @@ async function main() {
   let anchorBroken = 0;
 
   for (const s of SABOTAGES) {
-    const n = source.split(s.find).length - 1;
+    const n = (s.file ? readFileSync(join(REPO, s.file), 'utf8').split(String.fromCharCode(13, 10)).join(String.fromCharCode(10)) : source).split(s.find).length - 1;
     if (n !== 1) {
       // ⛔ A sabotage that does not apply is a silent no-op, and the run then PASSES for the wrong
       // reason. Assert the substitution matched before believing anything downstream.
@@ -1666,14 +1761,23 @@ async function main() {
     // scripts/docs/..., which does not exist, so esbuild refuses to build and the dev server
     // exits at startup -- reported as 'never came up', which reads as a port problem and is not.
     // ⚠️ It cost two 15-minute self-test runs before the build error was actually read.
-    const sabotaged = source
-      .replace(s.find, s.with)
-      .replace("from './docs/", "from '../docs/");
+    const sabotaged = (s.file ? source : source.replace(s.find, s.with))
+      .replace("from './docs/", "from '../docs/")
+      // ⚠️ The feature modules in lib/ resolve the same way as docs/ (see above).
+      .split("from './lib/").join("from '../lib/")
+      .split("from './public/").join("from '../public/");
     if (sabotaged.indexOf("from '../docs/") === -1 && source.indexOf("from './docs/") !== -1) {
       console.log('  FAIL: could not rewrite the sabotage copy import path');
       failures++;
     }
-    writeFileSync(join(REPO, SAB_JS), sabotaged);
+    // A sabotage on a lib/ file (s.file): the copy imports a sabotaged copy of that module instead.
+    let toWrite = sabotaged;
+    if (s.file) {
+      const libSrc = readFileSync(join(REPO, s.file), 'utf8').split(String.fromCharCode(13, 10)).join(String.fromCharCode(10));
+      writeFileSync(join(REPO, 'scripts', '.crm-sabotage-lib.js'), libSrc.replace(s.find, s.with));
+      toWrite = sabotaged.split("from '../" + s.file + "'").join("from './.crm-sabotage-lib.js'");
+    }
+    writeFileSync(join(REPO, SAB_JS), toWrite);
     // ⚠️ wrangler resolves "main" RELATIVE TO THE CONFIG FILE, not to the working directory. This
     // config lives in scripts/, so main is the bare filename -- "scripts/.crm-sabotage.js" here
     // would send wrangler looking for scripts/scripts/... and the boot fails with a message that
