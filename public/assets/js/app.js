@@ -1893,6 +1893,20 @@
         var countEl = document.querySelector('[data-product-input="' + p.id + ':count"]');
         if (countEl) { countEl.value = p.inputs.count; countEl.dispatchEvent(new Event('change')); }
       }
+
+      // The ACA extra answers (additional EINs, a late prior year, state filings). 10-25-2026: a quote REQUEST from
+      // BenefitLab carries them, and Run this quote must open with them filled in. 'input' as well as 'change', because
+      // the elected-fee rows recompute on input.
+      if (p.inputs.extras && typeof p.inputs.extras === 'object') {
+        Object.keys(p.inputs.extras).forEach(function (xid) {
+          var xel = document.querySelector('[data-product-input="' + p.id + ':extra:' + xid + '"]');
+          if (!xel) return;
+          if (xel.type === 'checkbox') xel.checked = !!p.inputs.extras[xid];
+          else xel.value = p.inputs.extras[xid];
+          xel.dispatchEvent(new Event('input'));
+          xel.dispatchEvent(new Event('change'));
+        });
+      }
     });
 
     // Clean up URL so the long param doesn't linger in the address bar

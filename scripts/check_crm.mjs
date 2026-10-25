@@ -298,6 +298,9 @@ function seedTest(cfg) {
   d1("DELETE FROM agencies WHERE name = 'Zzz Signup Firm'", cfg);
   // F-609: the firm the BenefitLab handoff creates on a first click (section 33).
   d1("DELETE FROM agencies WHERE name = 'Zzz Handoff Firm'", cfg);
+  // Section 34's request. ⛔ Left behind, INSERT OR IGNORE keeps the PREVIOUS run's row, so a sabotage that stops the
+  // answers being stored still reads them back and is MISSED (it was, 10-25-2026, the first time this ran).
+  d1("DELETE FROM quote_request WHERE id LIKE 'qr_crmtest%'", cfg);
   // ⛔ AND ANY ROW WITH NO EMAIL AT ALL. Only a sabotage can create one -- the email check is
   // what a sabotage removes -- and it does not match the pattern above, so it survived every
   // reseed and permanently broke the people/addresses count in a LATER, legitimate run.
@@ -1290,6 +1293,69 @@ async function runSuite() {
   check('a next that points at another site is replaced by the quote form',
         decodeURIComponent(((h.json && h.json.url) || '').split('&next=')[1] || ''), '/broker?next=quote',
         'browsers read //host as another site');
+
+  // ── 34. A REQUEST CARRIES ITS ANSWERS (Eric, 10-25-2026, on the first one he sent himself: it "didn't pass on the
+  //    number of employees ... we need to know the number enrolled in a COBRA-eligible benefit" and "showed the
+  //    employer's name as the broker"; "When the broker runs the quote ... no link and no way to get back to it").
+  const QR_BROKER = 'crmtest.request@example.com';
+  const bearer = async (method, path, body, key) => {
+    const r = await fetch(BASE + path, { method, redirect: 'manual',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, key ? { Authorization: 'Bearer ' + key } : {}),
+      body: body === undefined ? undefined : JSON.stringify(body) });
+    let j = null; try { j = await r.json(); } catch { /* not JSON is a finding */ }
+    return { status: r.status, json: j };
+  };
+  let qr = await bearer('POST', '/api/quote-request', {
+    id: 'qr_crmtest_answers', clientName: 'Zzz Request Co', effectiveDate: '12-01-2026', employeeCount: 56,
+    brokerName: 'Request Broker', brokerAgency: 'Zzz Request Agency', brokerEmail: QR_BROKER, askedBy: 'broker',
+    origin: 'crm check',
+    products: ['COBRA Administration', 'ACA Forms 1094/1095 Reporting', 'Plain words from the employer door'],
+    services: [
+      { id: 'cobra', name: 'COBRA Administration', inputs: { count: 40 }, lines: ['40 enrolled in a COBRA-eligible benefit'] },
+      { id: 'aca', name: 'ACA Forms 1094/1095 Reporting',
+        inputs: { packageIds: 'fullLt100,selfLt100', extras: { einSmall: 2, priorYears: true, bogus: 9 } },
+        lines: ['ALE: up to 100 forms', '2 additional EINs with fewer than 10 W-2s'] },
+      'Plain words from the employer door',
+    ],
+  }, hoKey);
+  check('a request with answers is stored', [qr.status, qr.json && qr.json.ok], [200, true]);
+  await login();
+  const adm = await api('GET', '/api/admin/quote-requests');
+  const row = ((adm.json && adm.json.requests) || []).find((x) => x.id === 'qr_crmtest_answers') || {};
+  let stored = []; try { stored = JSON.parse(row.products || '[]'); } catch { stored = []; }
+  check('each service keeps its answers, and a plain name is still a plain name',
+        [stored[0] && stored[0].inputs, stored[0] && stored[0].lines, stored[1] && stored[1].inputs && stored[1].inputs.extras, stored[2]],
+        [{ count: 40 }, ['40 enrolled in a COBRA-eligible benefit'], { einSmall: 2, priorYears: true }, 'Plain words from the employer door'],
+        'an answer that is not stored cannot be quoted from; an unknown extra must not ride along');
+  let st = {}; try { st = JSON.parse(decodeURIComponent(String(row.run_url || '').split('?rerun=')[1] || '')); } catch { st = {}; }
+  let stProducts = []; try { stProducts = JSON.parse(st.products || '[]'); } catch { stProducts = []; }
+  check('Run this quote opens ABY\'s own form with the answers filled in',
+        [String(row.run_url || '').startsWith('/aby?rerun='), st.clientName, st.effectiveDate, st.brokerEmail,
+         stProducts.map((p) => p.id), stProducts[0] && stProducts[0].inputs],
+        [true, 'Zzz Request Co', '2026-12-01', QR_BROKER, ['cobra', 'aca'], { count: 40 }],
+        'the form reads yyyy-mm-01; a plain-words service is not a product the form knows');
+
+  const br = await bearer('GET', '/api/broker-requests?email=' + encodeURIComponent(QR_BROKER), undefined, hoKey);
+  const myReqs = ((br.json && br.json.requests) || []).map((x) => [x.client_name, x.declined]);
+  check('the broker\'s open request comes back for their ABY Quotes page', myReqs, [['Zzz Request Co', false]]);
+  const brNo = await bearer('GET', '/api/broker-requests?email=' + encodeURIComponent(QR_BROKER), undefined, null);
+  check('and not without the key', brNo.status, 401);
+  const brOther = await bearer('GET', '/api/broker-requests?email=someone.else%40example.com', undefined, hoKey);
+  check('and not to another broker', ((brOther.json && brOther.json.requests) || []).length, 0);
+
+  const ln = await bearer('POST', '/api/integration/quote-link', { quoteId: 'crmtest-q-am-1', emails: ['amb.one@example.com'] }, hoKey);
+  check('a broker\'s own quote gets its share link', [ln.status, /\/q\/[a-z2-9]{16}$/.test((ln.json && ln.json.url) || '')], [200, true]);
+  const lnOther = await bearer('POST', '/api/integration/quote-link', { quoteId: 'crmtest-q-am-1', emails: ['amb.two@example.com'] }, hoKey);
+  check('another broker\'s quote is not found', lnOther.status, 404, 'otherwise any address could walk the book');
+  const lnNoKey = await bearer('POST', '/api/integration/quote-link', { quoteId: 'crmtest-q-am-1', emails: ['amb.one@example.com'] }, null);
+  check('and no link without the key', lnNoKey.status, 401);
+
+  const page = await api('GET', '/admin');
+  const pageText = page.text || '';
+  check('the email\'s Open the requests opens the tab only after the tabs can be clicked',
+        pageText.indexOf('(function openRequestedView()') > pageText.indexOf("document.querySelectorAll('.tab').forEach(function(btn) {"),
+        true, 'it ran first, clicked a tab with no handler, and Eric landed on Pending');
+  cookie = '';
 }
 
 /**
@@ -1372,6 +1438,22 @@ async function runConcurrencySuite() {
 // self-test whose sabotages are artificial proves the harness runs; one that replays the historical
 // bug proves the harness would have CAUGHT it.
 const SABOTAGES = [
+  {
+    // ⛔ 10-25-2026: the request kept only the service NAMES, which is how Eric's first one reached ABY with no counts.
+    name: 'a request keeps only the service names',
+    file: 'lib/quote-request-details.js',
+    find: "  if (Object.keys(inputs).length) out.inputs = inputs;",
+    with: "  void inputs;",
+    breaks: 'each service keeps its answers, and a plain name is still a plain name',
+  },
+  {
+    // ⛔ the quote link forgets whose quote it is, and any address walks the book.
+    name: 'the quote link stops checking the broker',
+    file: 'lib/quote-request-details.js',
+    find: "if (!q || emails.indexOf(String(q.broker_email || '').trim().toLowerCase()) === -1) {",
+    with: "if (!q) {",
+    breaks: 'another broker\'s quote is not found',
+  },
   {
     // ⛔ F-426: THE DELETE BUTTON FORGETS TO ASK ABOUT QUOTES, and a firm with years of history goes.
     name: 'the firm delete stops checking for quotes',
@@ -1746,7 +1828,11 @@ async function main() {
   let caught = 0;
   let anchorBroken = 0;
 
+  // CRM_SABOTAGE=<words> runs only the sabotages whose name contains them (10-25-2026: the whole list takes about two
+  // hours, which is too long to prove one new assertion). The full run is still the self-test; this is a shortcut.
+  const only = String(process.env.CRM_SABOTAGE || '');
   for (const s of SABOTAGES) {
+    if (only && !s.name.includes(only)) continue;
     const n = (s.file ? readFileSync(join(REPO, s.file), 'utf8').split(String.fromCharCode(13, 10)).join(String.fromCharCode(10)) : source).split(s.find).length - 1;
     if (n !== 1) {
       // ⛔ A sabotage that does not apply is a silent no-op, and the run then PASSES for the wrong
@@ -1826,9 +1912,10 @@ async function main() {
   cleanupSabotage();
 
   console.log('');
-  console.log(`  ${caught}/${SABOTAGES.length} sabotages caught${anchorBroken ? `, ${anchorBroken} anchor(s) stale` : ''}.`);
+  const ran = only ? SABOTAGES.filter((x) => x.name.includes(only)).length : SABOTAGES.length;
+  console.log(`  ${caught}/${ran} sabotages caught${anchorBroken ? `, ${anchorBroken} anchor(s) stale` : ''}.`);
   releaseLock();
-  if (caught !== SABOTAGES.length) {
+  if (caught !== ran) {
     console.log('An assertion that cannot fail is not an assertion.');
     process.exit(1);
   }

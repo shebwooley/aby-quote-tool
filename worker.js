@@ -92,6 +92,8 @@ import {
 } from './lib/agency-defaults.js';
 // F-609: one click from BenefitLab into the quote tool. Its own file, like the above.
 import { HANDOFF_MIGRATIONS, handleBrokerHandoff, handleHandoffLanding } from './lib/benefitlab-handoff.js';
+import { cleanRequestProducts, parseRequestProducts, productName, productLines, effectiveForDisplay,
+         requestRunUrl, handleBrokerRequests, handleQuoteLink } from './lib/quote-request-details.js';
 
 export default {
   // The daily cron (wrangler.jsonc triggers): files sent through the secure upload are deleted 90 days on.
@@ -133,6 +135,12 @@ export default {
     // A quote REQUEST arriving from BenefitLab (F-609). Same bearer secret as the read above and
     // for the same reason: the caller is the BenefitLab SERVER, not a person with a cookie.
     if (path === '/api/quote-request' && method === 'POST') return handleQuoteRequest(request, env);
+    // BenefitLab's ABY Quotes page (10-25-2026): a broker's open requests, and the link to one of their quotes.
+    // Same bearer secret; lib/quote-request-details.js has both.
+    if (path === '/api/broker-requests' && method === 'GET') return handleBrokerRequests(request, env, { safeEqual });
+    if (path === '/api/integration/quote-link' && method === 'POST') {
+      return handleQuoteLink(request, env, { safeEqual, handleShareQuote });
+    }
     // One click from BenefitLab (F-609, 10-21-2026): the BenefitLab SERVER vouches for a broker with the same
     // bearer secret and gets back a one-time sign-in link. lib/benefitlab-handoff.js has the whole design.
     if (path === '/api/integration/broker-handoff' && method === 'POST') {
@@ -1266,10 +1274,13 @@ async function handleQuoteRequest(request, env) {
     return jsonResp({ error: 'A brokerEmail is required.' }, 400);
   }
 
+  // ⭐ 10-25-2026: A SERVICE CAN ARRIVE WITH ITS ANSWERS ({ id, name, inputs, lines }) as well as a plain name. Eric:
+  // "we need to know the number enrolled in a COBRA-eligible benefit, the number [who] would likely enroll in an FSA,
+  // HRA, HSA". lib/quote-request-details.js cleans both shapes.
   let productsJson = '[]';
   try {
-    const list = Array.isArray(body.products) ? body.products : [];
-    productsJson = JSON.stringify(list.map(function (p) { return str(p, 80); }).filter(Boolean));
+    // `services` (the answers) when the caller sends them; `products` (names only) from a caller that does not.
+    productsJson = cleanRequestProducts(Array.isArray(body.services) && body.services.length ? body.services : body.products);
   } catch (err) {
     productsJson = '[]';
   }
@@ -1317,6 +1328,8 @@ async function handleQuoteRequest(request, env) {
     products: productsJson, brokerName: str(body.brokerName), brokerAgency: str(body.brokerAgency),
     brokerEmail: brokerEmail, brokerPhone: str(body.brokerPhone, 40), askedBy: askedBy,
     origin: str(body.origin, 60), note: str(body.note, 1000),
+    employeeCount: Number.isFinite(heads) && heads > 0 ? Math.round(heads) : null,
+    clientId: str(body.clientId, 64),
   }, new URL(request.url).origin);
   try {
     await env.DB.prepare('UPDATE quote_request SET notified_at = ?, notify_error = ? WHERE id = ?')
@@ -1348,27 +1361,46 @@ async function sendQuoteRequestEmail(env, r, origin) {
     return { ok: false, error: 'NOTIFY_EMAILS is set but empty, so there was nobody to send to.' };
   }
 
-  let products = [];
-  try { products = JSON.parse(r.products || '[]'); } catch (err) { products = []; }
-  const items = products.map(function (p) { return '<li>' + esc(String(p)) + '</li>'; }).join('');
-  const who = (r.askedBy === 'broker') ? 'The broker' : 'The employer';
+  // ⭐ 10-25-2026, Eric, on the first one he sent himself: it "showed the employer's name as the broker" ("The broker
+  // ABC Company has asked ABY for a quote") and "didn't pass on the number of employees". The sentence now names who
+  // asked and for whom, and every service carries the broker's answers under it.
+  const products = parseRequestProducts(r.products);
+  const items = products.map(function (p) {
+    const lines = productLines(p);
+    return '<li><strong>' + esc(productName(p)) + '</strong>' +
+      (lines.length ? '<br><span style="color:#41526a">' + lines.map(esc).join('<br>') + '</span>' : '') + '</li>';
+  }).join('');
   const brokerLine = [r.brokerName, r.brokerAgency].filter(Boolean).map(esc).join(' &middot; ');
+  const who = r.askedBy === 'broker'
+    ? '<strong>' + esc(r.brokerName || r.brokerEmail) + '</strong>' +
+      (r.brokerAgency ? ' at ' + esc(r.brokerAgency) : '') + ' asked ABY to quote <strong>' + esc(r.clientName) + '</strong>.'
+    : '<strong>' + esc(r.clientName) + '</strong> asked ABY for a quote' +
+      (brokerLine ? ' (their broker is ' + esc(r.brokerName || r.brokerAgency) + ')' : '') + '.';
+  const eff = effectiveForDisplay(r.effectiveDate);
+  const runUrl = requestRunUrl({
+    client_name: r.clientName, client_id: r.clientId, effective_date: r.effectiveDate, products: r.products,
+    broker_name: r.brokerName, broker_agency: r.brokerAgency, broker_phone: r.brokerPhone, broker_email: r.brokerEmail,
+  });
+  const btn = 'color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;display:inline-block;margin:0 8px 8px 0';
 
   const html =
     '<div style="font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;color:#12263f">' +
-    '<p>' + who + ' <strong>' + esc(r.clientName) + '</strong> has asked ABY for a quote.</p>' +
-    (r.effectiveDate ? '<p><strong>Effective:</strong> ' + esc(r.effectiveDate) + '</p>' : '') +
+    '<p>' + who + '</p>' +
+    (eff ? '<p><strong>Effective:</strong> ' + esc(eff) + '</p>' : '') +
+    (r.employeeCount ? '<p><strong>Employees:</strong> ' + esc(String(r.employeeCount)) + '</p>' : '') +
     (items ? '<p>What they asked about:</p><ul>' + items + '</ul>' : '') +
+    (r.note ? '<p><strong>They said:</strong> ' + esc(r.note) + '</p>' : '') +
     '<p><strong>Broker:</strong> ' + (brokerLine || esc(r.brokerEmail)) +
     (brokerLine ? '<br><a href="mailto:' + esc(r.brokerEmail) + '">' + esc(r.brokerEmail) + '</a>' : '') +
     (r.brokerPhone ? ' &middot; ' + esc(r.brokerPhone) : '') + '</p>' +
-    (r.note ? '<p><strong>They said:</strong> ' + esc(r.note) + '</p>' : '') +
+    '<p>' +
+    (runUrl ? '<a href="' + esc((origin || '') + runUrl) + '" style="background:#1a5e43;' + btn + '">Run this quote</a>' : '') +
+    '<a href="' + esc(origin || '') + '/admin?view=requests" style="background:#143c73;' + btn + '">Open the requests</a></p>' +
     '<p style="color:#5b6b7f;font-size:13px">This came in from BenefitLab' +
     (r.origin ? ' (' + esc(r.origin) + ')' : '') +
     '. It is waiting on the Requests tab of the quote log, and it clears itself as soon as a quote ' +
-    'is saved for this employer.</p>' +
-    '<p><a href="' + esc(origin || '') + '/admin?view=requests" style="background:#143c73;color:#fff;' +
-    'padding:10px 18px;border-radius:6px;text-decoration:none">Open the requests</a></p></div>';
+    'is saved for this employer.' + (runUrl ? ' Run this quote opens the quote form with these answers filled in.' : '') +
+    '</p></div>';
 
   try {
     const res = await fetch('https://api.resend.com/emails', {
@@ -1409,7 +1441,9 @@ async function handleAdminQuoteRequests(request, env) {
       '       answered_at, answered_quote, declined_at, declined_note, notified_at, notify_error ' +
       'FROM quote_request ORDER BY created_at DESC LIMIT 300'
     ).all();
-    return jsonResp({ requests: r.results || [] });
+    // ⭐ 10-25-2026: each row carries its "Run this quote" link, built here by the same function the email uses.
+    const rows = (r.results || []).map(function (x) { return Object.assign({}, x, { run_url: requestRunUrl(x) }); });
+    return jsonResp({ requests: rows });
   } catch (err) {
     console.error('handleAdminQuoteRequests failed:', err);
     return jsonResp({
@@ -20358,8 +20392,18 @@ function rqRow(r, settled) {
       sub([r.broker_agency, r.broker_phone].filter(Boolean).map(rqEsc).join(' &middot; '))
     : '';
 
-  var what = (r.effective_date ? '<strong>' + rqEsc(r.effective_date) + '</strong>' : '') +
-             sub(products.map(rqEsc).join(', ')) +
+  // 10-25-2026: a service can carry the broker's answers (counts, options); each prints under its name.
+  var effShown = String(r.effective_date || '');
+  var isoEff = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(effShown);
+  if (isoEff) effShown = isoEff[2] + '-' + isoEff[3] + '-' + isoEff[1];
+  var svc = products.map(function (p) {
+    if (typeof p === 'string') return rqEsc(p);
+    var ls = (p && p.lines) || [];
+    return '<strong>' + rqEsc(p && (p.name || p.id)) + '</strong>' +
+      (ls.length ? '<br>' + ls.map(rqEsc).join('<br>') : '');
+  }).join('<br>');
+  var what = (effShown ? '<strong>' + rqEsc(effShown) + '</strong>' : '') +
+             sub(svc) +
              sub(r.note ? rqEsc(r.note) : '');
 
   // ── THE LAST COLUMN: WHAT HAPPENED, OR THE ONE BUTTON ─────────────────────────────────────
@@ -20382,7 +20426,11 @@ function rqRow(r, settled) {
           '<br><a href="#" class="rq-undo" data-rqid="' + rqEsc(r.id) +
           '" style="font-size:12px;color:#0b5fff">Undo</a>';
   } else {
-    act = '<button class="rq-no" data-rqid="' + rqEsc(r.id) + '" ' +
+    act = (r.run_url
+      ? '<a href="' + rqEsc(r.run_url) + '" style="display:inline-block;font-size:12px;padding:5px 9px;margin-bottom:6px;' +
+        'background:#1a5e43;color:#fff;border-radius:5px;text-decoration:none;font-weight:600">Run this quote</a><br>'
+      : '') +
+      '<button class="rq-no" data-rqid="' + rqEsc(r.id) + '" ' +
           'style="font-size:12px;padding:5px 9px;border:1px solid #d6dde5;background:#fff;' +
           'border-radius:5px;cursor:pointer;color:#5b6b7f">Not quoting this</button>';
   }
@@ -20474,14 +20522,6 @@ function setRequestsBadge(n) {
   } catch (e) { /* see the note above: a badge that cannot load says nothing. */ }
 })();
 
-// ⭐ THE EMAIL LINKS STRAIGHT HERE. /admin?view=requests opens the tab, so the notification is one
-// click from the thing it is about rather than one click from a page and a hunt.
-(function openRequestedView() {
-  var q = new URLSearchParams(location.search || '');
-  if ((q.get('view') || '') !== 'requests') return;
-  var t = document.getElementById('requestsTab');
-  if (t) t.click();
-})();
 
 // ── LOG A QUOTE ────────────────────────────────────────────────────────────────────────────
 // Moved here from /admin/pipeline, 2026-08-26, and the page it came from no longer exists.
@@ -20629,6 +20669,17 @@ document.querySelectorAll('.tab').forEach(function(btn) {
     }
   });
 });
+
+// ⭐ THE EMAIL LINKS STRAIGHT HERE. /admin?view=requests opens the tab, so the notification is one
+// click from the thing it is about rather than one click from a page and a hunt.
+// 🔴 10-25-2026: IT MUST RUN AFTER THE LOOP ABOVE. It used to sit earlier in the page, and clicking a tab that had no
+// click handler yet did nothing: Eric pressed "Open the requests" in the email and landed on Pending.
+(function openRequestedView() {
+  var q = new URLSearchParams(location.search || '');
+  if ((q.get('view') || '') !== 'requests') return;
+  var t = document.getElementById('requestsTab');
+  if (t) t.click();
+})();
 
 var commitmentData = {};
 let commitmentsLoaded = false;
