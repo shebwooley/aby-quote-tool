@@ -13289,6 +13289,11 @@ function brokerPageHTML() {
  $('tabMine').onclick=function(){$('tabMine').className='on';$('tabAgency').className='';$('quotesSub').textContent='Every quote run under your email address.';loadQuotes('/api/broker/quotes')};
  $('tabAgency').onclick=function(){$('tabAgency').className='on';$('tabMine').className='';$('quotesSub').textContent='Every quote run by anyone in your agency.';loadQuotes('/api/agency/quotes')};
  function enter(b){
+   // 10-25-2026: ?next=quote (the gate on the quote form, and BenefitLab's one-click Start an ABY quote) goes ON to the
+   // form, carrying ?rerun= (the client, date and broker BenefitLab filled in). Nothing read it, so a broker signed in
+   // and stopped here, and the prefilled details were lost. The form's own gate lets a signed-in broker through.
+   var nq=new URLSearchParams(location.search);
+   if(nq.get('next')==='quote'){var rr=nq.get('rerun');location.replace('/'+(rr?'?rerun='+encodeURIComponent(rr):''));return}
    meEmail=b.email||'';
    $('authCard').style.display='none';$('appArea').style.display='block';$('out').style.display='inline-block';
    $('pName').value=b.name||'';$('pAgency').value=b.agency||'';$('pPhone').value=b.phone||'';
