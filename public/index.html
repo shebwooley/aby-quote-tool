@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ABY Quote Tool — Texas</title>
-<link rel="stylesheet" href="assets/css/app.css">
+<title>ABY Quote Tool - Texas</title>
+<link rel="stylesheet" href="assets/css/app.css?v=20261025c">
 <link rel="stylesheet" href="assets/css/quote.css">
 <link rel="stylesheet" href="assets/css/print.css" media="print">
 </head>
@@ -33,11 +33,11 @@
       <h2>Client</h2>
       <div class="field-grid">
         <label class="field">
-          Client name <span class="required-mark">*</span>
+          <span>Client name <span class="required-mark">*</span></span>
           <input type="text" name="clientName" required placeholder="ACME Corporation">
         </label>
         <label class="field">
-          Effective date <span class="required-mark">*</span>
+          <span>Effective date <span class="required-mark">*</span></span>
           <select name="effectiveDate" id="effectiveDateSelect" required>
             <!-- populated by app.js with the next 18 first-of-month dates -->
           </select>
@@ -62,7 +62,7 @@
           <input type="tel" name="brokerPhone" placeholder="(555) 123-4567">
         </label>
         <label class="field">
-          Email
+          <span class="field-label">Email</span>
           <input type="email" name="brokerEmail" placeholder="jane@brokerage.com">
         </label>
         <!-- ⭐⭐ IT NOW SAYS WHAT IT DOES *AND WHAT IT DOES NOT*. Eric, 2026-08-27, after a logo
@@ -75,7 +75,7 @@
         <label class="field">
           Broker logo (optional)
           <input type="file" name="brokerLogo" accept="image/*">
-          <span class="helper-text">Brands <strong>this</strong> quote only &mdash; it is not
+          <span class="helper-text">Brands <strong>this</strong> quote only; it is not
             saved. To brand every quote a firm runs, including shared links, set their logo on the
             firm in Brokers &amp; Agencies.</span>
         </label>
@@ -155,7 +155,7 @@
 <script src="assets/js/lib/renderer.js?v=20261001"></script>
 
 <!-- Controller -->
-<script src="assets/js/app.js?v=20261025b"></script>
+<script src="assets/js/app.js?v=20261025c"></script>
 
 <!-- Backend integration: saves each quote to the database -->
 <script src="assets/js/account-link.js"></script>

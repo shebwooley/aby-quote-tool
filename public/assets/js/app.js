@@ -759,7 +759,7 @@
 
     var placeholder = document.createElement('option');
     placeholder.value = '';
-    placeholder.textContent = '— Select effective date —';
+    placeholder.textContent = 'Select an effective date';
     placeholder.disabled = true;
     placeholder.selected = true;
     dateSelectEl.appendChild(placeholder);
@@ -1293,7 +1293,7 @@
 
   function downloadQuoteAsPdf(form, quoteNumber) {
     if (typeof html2pdf === 'undefined') {
-      alert('PDF library is loading — please try again in a moment.');
+      alert('The PDF maker is still loading. Please try again in a moment.');
       return;
     }
     var liveQuote = outputEl.querySelector('.quote');
@@ -1948,7 +1948,8 @@
       mark.setAttribute('aria-hidden', 'true');
       mark.style.cssText = 'color:#c0392b;margin-left:3px;';
       mark.textContent = '*';
-      var lbl = host.querySelector('label') || host;
+      // 10-25-2026: into the label's own words (.field-label) so the star sits beside them, not on a line of its own.
+      var lbl = host.querySelector('.field-label') || host.querySelector('label') || host;
       (lbl.firstElementChild === el ? host : lbl).appendChild(mark);
     }
   }
