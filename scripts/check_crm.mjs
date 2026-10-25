@@ -311,6 +311,8 @@ function seedTest(cfg) {
   // the previous run's record and reads 1 where it should have created it.
   d1("DELETE FROM agencies WHERE name IN ('A Firm Nobody Has Quoted','Shared Firm From A List')", cfg);
   d1("DELETE FROM quotes WHERE id LIKE 'crmtest-q-%'", cfg);
+  // Section 35 saves these through the real save path, so they get random ids; their numbers are the key.
+  d1("DELETE FROM quotes WHERE quote_number LIKE 'TX99CRM-%'", cfg);
   // RFP WATCH fixtures. Left behind, they make the NEXT run read every row as already known,
   // which is a green-looking pass over an import that never imported anything.
   d1("DELETE FROM rfp_decision WHERE opportunity_id IN (SELECT id FROM rfp_opportunity WHERE entity_name LIKE 'RFPTEST%')", cfg);
@@ -341,6 +343,9 @@ function seedTest(cfg) {
     q.push(`('crmtest-q-grow-${i}','G${i}','2026-07-0${i + 1}','grow${i}@example.com','Test Agency 7','','','Grower Person')`);
   }
   for (let i = 0; i < 4; i++) q.push(`('crmtest-q-new-${i}','R${i}','2026-06-0${i + 1}','${MOVER_NEW}','Agency With No Record','','','Test Mover')`);
+  // Section 36: one quote each for the two brokers section 33's handoff puts in one firm (A its administrator).
+  q.push("('crmtest-q-ho-a','HA1','2026-10-01','crmtest.handoff.a@example.com','Zzz Handoff Firm','','','Handoff Person')");
+  q.push("('crmtest-q-ho-b','HB1','2026-10-02','crmtest.handoff.b@example.com','Zzz Handoff Firm','','','Handoff Person')");
   d1('INSERT INTO quotes (id, quote_number, created_at, broker_email, broker_agency, source_tag, notes, broker_name) VALUES ' +
      q.join(','), cfg);
   // F-426: a firm that never did any business, the Jay Jeffries shape - one firm, one person, one address.
@@ -1355,6 +1360,50 @@ async function runSuite() {
   check('the email\'s Open the requests opens the tab only after the tabs can be clicked',
         pageText.indexOf('(function openRequestedView()') > pageText.indexOf("document.querySelectorAll('.tab').forEach(function(btn) {"),
         true, 'it ran first, clicked a tab with no handler, and Eric landed on Pending');
+
+  // ── 35. A SAVED QUOTE CLOSES THE REQUEST FOR ITS CLIENT, NOT EVERY REQUEST OF THE SAME NAME (10-25-2026). The save
+  //    path's comment had always said "and, when we have one, client_id"; the query read only the name, so two
+  //    agencies' "ABC Company" requests closed together. Name stays the fallback when either side has no id.
+  const mkReq = (id, name, clientId) => bearer('POST', '/api/quote-request', {
+    id, clientName: name, clientId, effectiveDate: '12-01-2026', brokerName: 'Request Broker',
+    brokerAgency: 'Zzz Request Agency', brokerEmail: QR_BROKER, askedBy: 'broker', origin: 'crm check',
+    products: ['COBRA Administration'] }, hoKey);
+  await mkReq('qr_crmtest_same_a', 'Zzz Same Name Co', 'bl-crm-client-a');
+  await mkReq('qr_crmtest_same_b', 'Zzz Same Name Co', 'bl-crm-client-b');
+  await mkReq('qr_crmtest_same_none', 'Zzz Same Name Co', '');
+  await mkReq('qr_crmtest_typed', 'Zzz Typed Only Co', 'bl-crm-client-c');
+  await login();
+  const save1 = await api('POST', '/api/quotes', { quoteNumber: 'TX99CRM-0001-C', clientId: 'bl-crm-client-a',
+    clientName: 'Zzz Same Name Co', effectiveDate: '2026-12-01', brokerEmail: QR_BROKER, products: [] });
+  const save2 = await api('POST', '/api/quotes', { quoteNumber: 'TX99CRM-0002-C',
+    clientName: 'Zzz Typed Only Co', effectiveDate: '2026-12-01', brokerEmail: QR_BROKER, products: [] });
+  check('the two test quotes save', [save1.status, save2.status], [200, 200]);
+  const afterSave = await api('GET', '/api/admin/quote-requests');
+  const answered = {};
+  ((afterSave.json && afterSave.json.requests) || []).forEach((x) => { answered[x.id] = x.answered_quote || null; });
+  check('a quote for one client closes ITS request and a no-id request of that name, never another client\'s',
+        [answered.qr_crmtest_same_a, answered.qr_crmtest_same_b, answered.qr_crmtest_same_none],
+        ['TX99CRM-0001-C', null, 'TX99CRM-0001-C'], 'two agencies can each have an ABC Company');
+  check('a quote typed with no client still closes a request by name', answered.qr_crmtest_typed, 'TX99CRM-0002-C',
+        'ABY quoting an employer on its own form answers the request, whoever keys it in');
+  cookie = '';
+
+  // ── 36. OPEN ON /broker (10-25-2026): the page listed quotes with no way to open one. Who may open = who may list.
+  const linkAs = async (who, quoteId) => {
+    cookie = who ? (await land((await ho(hoBody(who), hoKey)).json.url)).cookie : '';
+    return api('POST', '/api/broker/quote-link', { quoteId });
+  };
+  let ol = await linkAs(HO_B, 'crmtest-q-ho-b');
+  check('a broker opens their own quote from /broker', [ol.status, /\/q\/[a-z2-9]{16}$/.test((ol.json && ol.json.url) || '')], [200, true]);
+  ol = await linkAs(HO_A, 'crmtest-q-ho-b');
+  check('their firm\'s administrator may open it too', ol.status, 200, 'the agency list shows an administrator every quote');
+  ol = await linkAs(HO_B, 'crmtest-q-ho-a');
+  check('a member may not open a colleague\'s quote when the firm does not share quotes', ol.status, 404,
+        'the same rule as the Agency quotes tab');
+  ol = await linkAs(HO_A, 'crmtest-q-am-1');
+  check('nobody opens a quote from outside their firm', ol.status, 404);
+  ol = await linkAs(null, 'crmtest-q-ho-b');
+  check('and nobody signed out', ol.status, 401);
   cookie = '';
 }
 
@@ -1438,6 +1487,20 @@ async function runConcurrencySuite() {
 // self-test whose sabotages are artificial proves the harness runs; one that replays the historical
 // bug proves the harness would have CAUGHT it.
 const SABOTAGES = [
+  {
+    // ⛔ 10-25-2026: the request closer read the NAME only, so one agency's quote closed another agency's request.
+    name: 'a saved quote closes requests by name only',
+    find: "          \"  (? <> '' AND client_match_key = ? AND (COALESCE(client_id, '') = '' OR ? = '')))\"",
+    with: "          \"  (? <> '' AND client_match_key = ? AND (1=1 OR ? = '')))\"",
+    breaks: 'a quote for one client closes ITS request and a no-id request of that name, never another client\'s',
+  },
+  {
+    // ⛔ 10-25-2026: the /broker Open button stops checking whose quote it is.
+    name: 'the broker page link opens any quote',
+    find: "  let allowed = !!owner && owner === String(me.email || '').trim().toLowerCase();",
+    with: "  let allowed = !!q;",
+    breaks: 'nobody opens a quote from outside their firm',
+  },
   {
     // ⛔ 10-25-2026: the request kept only the service NAMES, which is how Eric's first one reached ABY with no counts.
     name: 'a request keeps only the service names',

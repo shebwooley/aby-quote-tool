@@ -159,6 +159,7 @@ export default {
     if (path === '/api/broker/me'      && method === 'GET')  return handleBrokerMe(request, env);
     if (path === '/api/broker/profile' && method === 'POST') return handleBrokerProfile(request, env);
     if (path === '/api/broker/quotes'  && method === 'GET')  return handleBrokerOwnQuotes(request, env);
+    if (path === '/api/broker/quote-link' && method === 'POST') return handleBrokerQuoteLink(request, env);
     if (path === '/api/broker/forgot'   && method === 'POST') return handleForgotPassword(request, env);
     if (path === '/api/broker/set-password' && method === 'POST') return handleSetPassword(request, env);
     if (path === '/api/agency/invite'   && method === 'POST') return handleAgencyInvite(request, env);
@@ -805,13 +806,20 @@ async function handleSaveQuote(request, env, ctx) {
     //
     // ⚠️ BEST-EFFORT, like the two writes above it and for the same reason: the quote is already
     // saved, and a missing table before /api/migrate must not turn a saved quote into a 500.
+    // 🔴 10-25-2026: THE SENTENCE ABOVE SAID "AND, WHEN WE HAVE ONE, client_id" AND THE QUERY NEVER READ IT, so a quote
+    // for one agency's "ABC Company" closed every open request named ABC Company, any agency's. Now: a request that
+    // names a BenefitLab client closes only on a quote for THAT client (Run this quote carries it), and the name is
+    // the fallback only when the request or the quote has no id. check_crm section 35 pins both directions.
     try {
       const askKey = normName(clientName);
-      if (askKey) {
+      const askClient = String(clientId || '').trim();
+      if (askKey || askClient) {
         await env.DB.prepare(
-          'UPDATE quote_request SET answered_at = ?, answered_quote = ? ' +
-          'WHERE answered_at IS NULL AND declined_at IS NULL AND client_match_key = ?'
-        ).bind(now, saveNumber, askKey).run();
+          "UPDATE quote_request SET answered_at = ?, answered_quote = ? " +
+          "WHERE answered_at IS NULL AND declined_at IS NULL AND (" +
+          "  (? <> '' AND client_id = ?) OR " +
+          "  (? <> '' AND client_match_key = ? AND (COALESCE(client_id, '') = '' OR ? = '')))"
+        ).bind(now, saveNumber, askClient, askClient, askKey, askKey, askClient).run();
       }
     } catch (err) {
       console.warn('no request closed (table missing?):', String(err && err.message || err));
@@ -13078,6 +13086,11 @@ function brokerPageHTML() {
  .tabs{display:flex;gap:8px;margin-bottom:16px} .tabs button{background:#fff;border:1px solid #c8d2de;border-radius:6px;padding:8px 14px;cursor:pointer;font-size:14px}
  .tabs button.on{background:#143c73;color:#fff;border-color:#143c73}
  .logo-prev{max-height:60px;max-width:220px;margin-top:10px;display:none;border:1px solid #dfe5ec;border-radius:6px;padding:6px;background:#fff}
+ .qwrap{overflow-x:auto} .q-open{white-space:nowrap;text-align:right}
+ #quotes td:first-child{white-space:nowrap} @media (min-width:601px){ #quotes td.q-num{white-space:nowrap} }
+ @media (max-width:600px){ .q-sm-hide{display:none} }
+ .open-btn{background:#fff;color:#143c73;border:1px solid #143c73;border-radius:6px;padding:5px 12px;font-size:13px;font-weight:600;cursor:pointer}
+ .open-btn:disabled{opacity:.6;cursor:default} .open-err{display:block;color:#a12622;font-size:12px;white-space:normal;max-width:220px}
 </style></head><body>
 <header><h1>ABY Quote Tool</h1><span class="sp"></span>
   <a href="/">New quote</a><button id="out" style="display:none">Sign out</button></header>
@@ -13295,10 +13308,27 @@ function brokerPageHTML() {
        :'No quotes yet. Ones you run while signed in will appear here.';
      $('quotes').innerHTML='<p class="muted">'+why+'</p>';return}
    var rows=q.map(function(x){
-     return '<tr><td>'+esc((x.created_at||'').slice(0,10))+'</td><td>'+esc(x.client_name||'—')+'</td><td>'+esc(x.broker_name||x.broker_email||'—')+'</td><td>'+esc(x.quote_number||'')+'</td><td>'+esc(x.state||'')+'</td></tr>';
+     return '<tr><td>'+esc(usDay(x.created_at))+'</td><td>'+esc(x.client_name||'-')+'</td><td class="q-sm-hide">'+esc(x.broker_name||x.broker_email||'-')+'</td><td class="q-num">'+esc(x.quote_number||'')+'</td><td class="q-sm-hide">'+esc(x.state||'')+'</td>'
+       +'<td class="q-open"><button type="button" class="open-btn" data-open="'+esc(x.id)+'">Open</button><span class="open-err" role="alert"></span></td></tr>';
    }).join('');
-   $('quotes').innerHTML='<table><thead><tr><th>Date</th><th>Client</th><th>Run by</th><th>Quote number</th><th>State</th></tr></thead><tbody>'+rows+'</tbody></table>';
+   $('quotes').innerHTML='<div class="qwrap"><table><thead><tr><th>Date</th><th>Client</th><th class="q-sm-hide">Run by</th><th>Quote number</th><th class="q-sm-hide">State</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
  }
+ // 10-25-2026: dates a person reads are mm-dd-yyyy (Eric). created_at is ISO.
+ function usDay(iso){var p=String(iso||'').slice(0,10).split('-');return p.length===3&&p[0].length===4?p[1]+'-'+p[2]+'-'+p[0]:''}
+ // OPEN (10-25-2026): the quote's share page, the one ABY sends an employer. The tab opens INSIDE the click, before
+ // the fetch: a window opened after an await is a pop-up to the browser. /api/broker/quote-link checks it is theirs.
+ $('quotes').onclick=async function(e){
+   var b=e.target.closest('[data-open]'); if(!b) return;
+   var err=b.parentNode.querySelector('.open-err'); err.textContent='';
+   var win=window.open('','_blank'); b.disabled=true; b.textContent='Opening...';
+   try{
+     var r=await fetch('/api/broker/quote-link',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quoteId:b.getAttribute('data-open')})});
+     var d=await r.json().catch(function(){return{}});
+     if(!r.ok||!d.url) throw new Error(d.message||d.error||'That quote could not be opened just now.');
+     if(win) win.location.href=d.url; else location.assign(d.url);
+   }catch(x){ if(win) win.close(); err.textContent=x.message; }
+   b.disabled=false; b.textContent='Open';
+ };
  (async function(){
    var r=await fetch('/api/broker/me'); var d=await r.json().catch(function(){return{}});
    if(d && d.broker) enter(d.broker);
@@ -13547,6 +13577,36 @@ async function handleBrokerOwnQuotes(request, env) {
     `SELECT ${cols} FROM quotes WHERE lower(trim(broker_email)) = ? ORDER BY created_at DESC LIMIT 300`
   ).bind(String(b.email).trim().toLowerCase()).all();
   return jsonResp({ quotes: r.results || [] });
+}
+
+/**
+ * OPEN ONE QUOTE FROM /broker (10-25-2026). The page listed a broker's quotes with no way to open any of them, the same
+ * complaint Eric made about the BenefitLab dashboard ("no link and no way to get back to it"). This hands back the
+ * quote's share page (/q/), the one ABY sends an employer, through handleShareQuote, so its refusals (an adjusted or
+ * out-of-state quote) apply here too.
+ * ⛔ WHO MAY OPEN IT IS EXACTLY WHO MAY LIST IT: the broker's own quote (their email, from the signed cookie), or a
+ * quote by someone in their agency when handleAgencyQuotes would list it (an administrator, or the agency shares
+ * quotes). Anything else is the same 404 as a quote that does not exist.
+ */
+async function handleBrokerQuoteLink(request, env) {
+  const me = await currentBroker(request, env);
+  if (!me) return jsonResp({ error: 'Please sign in.' }, 401);
+  let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
+  const id = String((body && body.quoteId) || '').trim().slice(0, 80);
+  if (!id) return jsonResp({ error: 'Which quote?' }, 400);
+  const q = await env.DB.prepare('SELECT id, broker_email FROM quotes WHERE id = ?').bind(id).first();
+  const owner = q ? String(q.broker_email || '').trim().toLowerCase() : '';
+  let allowed = !!owner && owner === String(me.email || '').trim().toLowerCase();
+  if (!allowed && owner && me.agency_id) {
+    const agency = await env.DB.prepare('SELECT share_quotes FROM agencies WHERE id = ?').bind(me.agency_id).first();
+    if (me.role === 'admin' || (agency && agency.share_quotes)) {
+      const colleague = await env.DB.prepare('SELECT 1 AS ok FROM brokers WHERE lower(trim(email)) = ? AND agency_id = ?')
+        .bind(owner, me.agency_id).first();
+      allowed = !!colleague;
+    }
+  }
+  if (!allowed) return jsonResp({ error: 'Not found' }, 404);
+  return handleShareQuote(id, env, new URL(request.url));
 }
 
 // ─── Agencies, invitations and resets (F-53) ───────────────────────────────────
