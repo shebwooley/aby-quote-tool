@@ -247,7 +247,9 @@
     wrap.className = 'product-row-options';
     wrap.dataset.productOptions = product.id;
 
-    if (product.inputType === 'count') {
+    // 'tiered' (Direct Billing) is priced per participant like a count product. Until 10-25-2026 no
+    // branch drew it, so Direct Billing opened an EMPTY panel and could only be priced at the minimum.
+    if (product.inputType === 'count' || product.inputType === 'tiered') {
       wrap.appendChild(buildCountInput(product));
     } else if (product.inputType === 'multi-package' || product.id === 'erisa' || product.id === 'pop') {
       // ERISA and POP use checkboxes so brokers can quote several packages at once.
@@ -806,7 +808,7 @@
       var product = ABYQuote.products.find(function (p) { return p.id === productId; });
       var selection = { productId: productId };
 
-      if (product.inputType === 'count') {
+      if (product.inputType === 'count' || product.inputType === 'tiered') {
         var ci = formEl.querySelector('[data-product-input="' + productId + ':count"]');
         selection.count = ci && ci.value !== '' ? Number(ci.value) : null;
       } else if (product.inputType === 'multi-package' || product.id === 'erisa' || product.id === 'pop') {
