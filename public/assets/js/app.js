@@ -1490,6 +1490,8 @@
    * the form must never wait on a network call to become usable.
    */
   function prefillFromBrokerAccount() {
+    // ABY staff running a quote are not that broker, even if a broker is signed in on this browser (10-26-2026).
+    if (window.ABY_INTERNAL) return;
     fetch('/api/broker/me').then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
       var b = d && d.broker;
       if (!b) return;

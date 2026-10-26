@@ -16966,7 +16966,9 @@ async function serveAbyTool(request, env) {
   // ⛔ HIDDEN WHEN PRINTING. The output of this page gets handed to an employer; an internal
   // navigation bar must not turn up on a proposal.
   const logoutFn = '<script>function logout(){fetch("/api/admin/logout").then(function(){location.href="/admin";});}</script>';
-  if (html.includes('</head>')) html = html.replace('</head>', navCss + '</head>');
+  // The staff flag goes in the HEAD (10-26-2026): set only before </body>, the page's own scripts had already run
+  // without it, so a broker signed in on the same browser had their name and agency filled into a staff quote.
+  if (html.includes('</head>')) html = html.replace('</head>', navCss + '<script>window.ABY_INTERNAL=true;</script></head>');
   html = html.includes('<body>')
     ? html.replace('<body>', '<body>' + abyAdminNav('/aby'))
     : (abyAdminNav('/aby') + html);
