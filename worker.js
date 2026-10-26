@@ -7998,9 +7998,9 @@ function adminBrokersHTML() {
 ${ADMIN_HEADER_CSS}
  main{max-width:1180px;margin:22px auto;padding:0 18px}
  .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
- h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
+ h2{font-size:16px;margin:0 0 4px} .sub{color:#44546a;font-size:13px;margin:0 0 14px}
  table{width:100%;border-collapse:collapse;font-size:14px}
- th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
+ th{text-align:left;font-size:12px;text-transform:uppercase;color:#44546a;border-bottom:1px solid #dfe5ec;padding:8px 6px}
  th.srt{cursor:pointer;user-select:none}
  th.srt:hover{color:#1a5c3a;background:#eef2f7}
  td{padding:8px 6px;border-bottom:1px solid #eef2f6}
@@ -8018,10 +8018,10 @@ ${ADMIN_HEADER_CSS}
     for. ⭐ The state is REMEMBERED, because a section you collapse every visit is one
     you are telling us you do not want. */
  .card h2{cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px}
- .card h2 .tw{font-size:11px;color:#8a97a8;transition:transform .12s}
+ .card h2 .tw{font-size:11px;color:#4b5563;transition:transform .12s}
  .card.shut h2 .tw{transform:rotate(-90deg)}
  .card.shut .sub,.card.shut>div,.card.shut>table,.card.shut>p:not(.sub){display:none}
- .card h2 .cnt{margin-left:auto;font-size:12px;font-weight:400;color:#8a97a8} .muted{color:#8a97a8}
+ .card h2 .cnt{margin-left:auto;font-size:12px;font-weight:400;color:#4b5563} .muted{color:#4b5563}
  .n{text-align:right;font-variant-numeric:tabular-nums}
  /* Eric, 2026-08-22: "the agency name has way too much space and all the other info is crammed
     into tiny columns... for the number counts maybe center them in their column under a centered
@@ -8060,11 +8060,11 @@ ${ADMIN_HEADER_CSS}
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#1a5c3a;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
  .views{display:flex;gap:0;align-items:center;margin:0 0 14px}
- .views button{background:#fff;border:1px solid #c8d2de;padding:8px 20px;cursor:pointer;font-size:14px;font-weight:600;color:#5b6b7f}
+ .views button{background:#fff;border:1px solid #c8d2de;padding:8px 20px;cursor:pointer;font-size:14px;font-weight:600;color:#44546a}
  .views button:first-of-type{border-radius:7px 0 0 7px}
  .views button:nth-of-type(2){border-radius:0 7px 7px 0;border-left:0}
  .views button.on{background:#1a5c3a;color:#fff;border-color:#1a5c3a}
- .vhint{margin-left:14px;color:#8a97a8;font-size:13px}
+ .vhint{margin-left:14px;color:#4b5563;font-size:13px}
  .mfilters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 14px}
  /* THE A-Z BAR. Eric, 2026-08-26: "with so many letters, it takes a long time to scroll."
     It FILTERS rather than scrolling to an anchor, and that is the better answer to what he asked
@@ -8097,8 +8097,8 @@ ${ADMIN_HEADER_CSS}
  .bulk button{background:#fff;border:1px solid #c8d2de;border-radius:6px;padding:6px 13px;cursor:pointer;font-size:13px}
  .bulk button.go{background:#1a5c3a;color:#fff;border-color:#1a5c3a;font-weight:600}
  .tag{display:inline-block;background:#eef2f7;border-radius:11px;padding:1px 9px;margin:1px 3px 1px 0;font-size:12px;color:#3d5166}
- .pri{font-weight:700} .pri.A{color:#1a5c3a} .pri.B{color:#8a6d1f} .pri.C{color:#8a97a8}
- .never{color:#8a97a8;font-style:italic}
+ .pri{font-weight:700} .pri.A{color:#1a5c3a} .pri.B{color:#8a6d1f} .pri.C{color:#4b5563}
+ .never{color:#4b5563;font-style:italic}
  .rev{background:#fdf1e0;color:#7a5410;border-radius:4px;padding:0 5px;font-size:11px;margin-left:5px}
 </style></head><body>
 ${abyAdminNav('/admin/brokers')}
@@ -9857,7 +9857,7 @@ ${abyAdminNav('/admin/brokers')}
       + '<button style="font-size:12px;padding:3px 9px" onclick="noteGroup(' + "'" + kind + "'" + ',' + g + ')">Tell me</button>'
       + '<span class="muted" id="ntm_' + kind + '_' + g + '" style="font-size:12px"></span></div>';
    h += '<div style="margin-top:5px"><a href="#" onclick="notDupes(' + "'" + kind + "'" + ',' + g + ');return false" '
-      + 'style="font-size:12px;color:#5b6b7f">These are different firms &mdash; leave them alone</a> '
+      + 'style="font-size:12px;color:#44546a">These are different firms &mdash; leave them alone</a> '
       + '<button class="aa-claude aa-sm" data-assist="tidy-firms" data-ids="' + esc(grp.map(function(a){ return a.id; }).join(',')) + '" data-label="' + esc(grp[0] ? grp[0].name : '') + '">Ask Claude about these</button></div></div>';
    return h;
  }
@@ -10593,7 +10593,7 @@ ${abyAdminNav('/admin/brokers')}
          // they are already looking at, rather than a research project nobody starts.
          // 🔴 THE TWO CHOICES BEHAVE IN OPPOSITE WAYS and the wording says so on screen: an
          // acquired name leaves this list for good, a branch stays on it.
-         + '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:#5b6b7f">'
+         + '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:#44546a">'
          + 'What happened to this firm?</summary><div class="mfilters" style="margin-top:10px">'
          + '<select id="fRel"><option value="">Nothing / clear it</option>'
          + '<option value="succeeded"' + (a.relationship === 'succeeded' ? ' selected' : '') + '>Acquired &mdash; the name is dead, drop it from this list</option>'
@@ -11028,7 +11028,7 @@ ${abyAdminNav('/admin/brokers')}
      var firm = x.agency_id
        ? '<a href="?firm=' + encodeURIComponent(x.agency_id) + '">' + esc(x.agency_name || '(unnamed)') + '</a>'
          + ' <button onclick="firmPickOpen(' + "'" + pid + "'" + ')" title="Move them to a different firm" '
-         + 'style="border:0;background:none;color:#8a97a8;cursor:pointer;font-size:12px;padding:0 2px">change</button>'
+         + 'style="border:0;background:none;color:#4b5563;cursor:pointer;font-size:12px;padding:0 2px">change</button>'
        : firmPickBox(pid);
      h += '<tr><td>' + (esc(x.name || '') || '&mdash;') + '</td>'
         + '<td class="firmcell" id="fp' + pid + '">' + firm + '</td>'
@@ -11309,7 +11309,7 @@ ${abyAdminNav('/admin/brokers')}
    if (!cell) return;
    cell.innerHTML = firmPickBox(pid)
      + '<button onclick="firmPickChoose(' + "'" + pid + "','')" + '" '
-     + 'style="border:0;background:none;color:#8a97a8;cursor:pointer;font-size:11.5px;padding:2px 0">'
+     + 'style="border:0;background:none;color:#4b5563;cursor:pointer;font-size:11.5px;padding:2px 0">'
      + 'no firm</button>';
    var el = document.getElementById('fq' + pid);
    if (el) el.focus();
@@ -11350,7 +11350,7 @@ ${abyAdminNav('/admin/brokers')}
    fpCursor[pid] = -1;
    if (!fs.length){
      drop.style.display = 'block';
-     drop.innerHTML = '<div style="padding:8px 10px;color:#5b6b7f;font-size:13px">'
+     drop.innerHTML = '<div style="padding:8px 10px;color:#44546a;font-size:13px">'
        + 'No firm of ours matches that. <strong>Check a shorter piece of the name</strong> before '
        + 'concluding we do not have them &mdash; a new firm is added on the firm list, not here.</div>';
      return;
@@ -11730,25 +11730,25 @@ ${ADMIN_HEADER_CSS}
  main{max-width:1180px;margin:0 auto;padding:20px}
  .card{background:#fff;border:1px solid #e3e9f0;border-radius:9px;padding:16px 18px;margin-bottom:16px}
  .card h2{cursor:pointer;user-select:none}
- .card h2 .tw{font-size:11px;color:#8a97a8;margin-right:6px;display:inline-block;transition:transform .12s}
+ .card h2 .tw{font-size:11px;color:#4b5563;margin-right:6px;display:inline-block;transition:transform .12s}
  .card.shut h2 .tw{transform:rotate(-90deg)}
  .card.shut .sub,.card.shut>div,.card.shut>table,.card.shut>p:not(.sub){display:none}
- h2{margin:0 0 4px;font-size:15px} .sub{margin:0 0 12px;color:#5b6b7f;font-size:13px}
+ h2{margin:0 0 4px;font-size:15px} .sub{margin:0 0 12px;color:#44546a;font-size:13px}
  table{width:100%;border-collapse:collapse;font-size:14px}
- th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
+ th{text-align:left;font-size:12px;text-transform:uppercase;color:#44546a;border-bottom:1px solid #dfe5ec;padding:8px 6px}
  td{padding:8px 6px;border-bottom:1px solid #eef2f6}
  td.date,th.date{white-space:nowrap;width:1%}
- .n{text-align:right} .muted{color:#8a97a8}
+ .n{text-align:right} .muted{color:#4b5563}
  input,select{padding:6px 8px;border:1px solid #c8d2de;border-radius:6px;font-size:13px}
  .tiles{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px}
  .tile{flex:1 1 150px;border:1px solid #e3e9f0;border-radius:8px;padding:10px 12px;background:#fff}
  .tile b{display:block;font-size:22px;line-height:1.2}
- .tile span{font-size:12px;color:#5b6b7f}
+ .tile span{font-size:12px;color:#44546a}
  .tile.flag{border-color:#f0d9ae;background:#fdf7ec}
  .pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600}
  .pill.term{background:#fde8e8;color:#8a1c1c;border-color:#f5c2c2}
     .pill.act{background:#e4f4ec;color:#1a5c3a}
- .pill.unk{background:#eef2f6;color:#5b6b7f}
+ .pill.unk{background:#eef2f6;color:#44546a}
  .warn{margin:0 0 14px;padding:10px 14px;border-radius:7px;background:#fdf1e0;border:1px solid #f0d9ae;color:#7a5410;font-size:13px}
  .note{margin:0 0 14px;padding:10px 14px;border-radius:7px;background:#eef4fb;border:1px solid #cddff2;color:#234a77;font-size:13px}
 </style></head><body>
@@ -12007,22 +12007,22 @@ function adminReferralsHTML() {
 ${ADMIN_HEADER_CSS}
  main{max-width:1100px;margin:0 auto;padding:20px}
  .card{background:#fff;border:1px solid #e3e9f0;border-radius:9px;padding:16px 18px;margin-bottom:16px}
- h2{margin:0 0 4px;font-size:15px} .sub{margin:0 0 12px;color:#5b6b7f;font-size:13px}
+ h2{margin:0 0 4px;font-size:15px} .sub{margin:0 0 12px;color:#44546a;font-size:13px}
  table{width:100%;border-collapse:collapse;font-size:14px}
- th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
+ th{text-align:left;font-size:12px;text-transform:uppercase;color:#44546a;border-bottom:1px solid #dfe5ec;padding:8px 6px}
  td{padding:8px 6px;border-bottom:1px solid #eef2f6}
  /* Eric, 2026-08-19: "The date looks stupid - not enough room." An ISO date wrapping
     after the month reads as broken data rather than as a narrow column. It is a fixed
     width string, so it should simply never wrap. */
  td.date,th.date{white-space:nowrap;width:1%}
- .n{text-align:right} .muted{color:#8a97a8}
+ .n{text-align:right} .muted{color:#4b5563}
  input,select{padding:6px 8px;border:1px solid #c8d2de;border-radius:6px;font-size:13px}
  button{padding:6px 12px;border:1px solid #1a5c3a;background:#1a5c3a;color:#fff;border-radius:6px;font-size:13px;cursor:pointer}
  button.ghost{background:#fff;color:#1a5c3a}
  .partner{border:1px solid #e3e9f0;border-radius:9px;margin-bottom:14px;background:#fff}
  .phead{display:flex;align-items:center;gap:14px;padding:12px 16px;border-bottom:1px solid #eef2f6;flex-wrap:wrap}
  .pname{font-weight:600;font-size:15px}
- .score{display:flex;gap:14px;margin-left:auto;flex-wrap:wrap;font-size:13px;color:#5b6b7f}
+ .score{display:flex;gap:14px;margin-left:auto;flex-wrap:wrap;font-size:13px;color:#44546a}
  .score b{color:#12263f}
  .pbody{padding:12px 16px}
  .warn{margin:0 0 14px;padding:10px 14px;border-radius:7px;background:#fdf1e0;border:1px solid #f0d9ae;color:#7a5410;font-size:13px}
@@ -12301,18 +12301,18 @@ function adminRatesHTML() {
 ${ADMIN_HEADER_CSS}
  main{max-width:1180px;margin:22px auto;padding:0 18px}
  .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
- h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
+ h2{font-size:16px;margin:0 0 4px} .sub{color:#44546a;font-size:13px;margin:0 0 14px}
  table{width:100%;border-collapse:collapse;font-size:14px;border:1px solid #dfe5ec}
  /* Eric, 2026-08-19: "can we add grid lines - will be easier to read." Ten columns of numbers
     with only horizontal rules makes the eye lose its place between Amount, Min, Max, Setup,
     Renewal and Annual -- the six that matter and all look alike. Vertical rules plus a zebra
     stripe give both axes something to track. */
- th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:2px solid #cfd8e3;border-right:1px solid #dfe5ec;padding:8px 6px;background:#f4f7fa;position:sticky;top:0}
+ th{text-align:left;font-size:12px;text-transform:uppercase;color:#44546a;border-bottom:2px solid #cfd8e3;border-right:1px solid #dfe5ec;padding:8px 6px;background:#f4f7fa;position:sticky;top:0}
  th:last-child,td:last-child{border-right:none}
  td{padding:8px 6px;border-bottom:1px solid #eef2f6;border-right:1px solid #eef2f6}
  tbody tr:nth-child(even){background:#fafcfe}
  tbody tr:hover{background:#eef4fa}
- .muted{color:#8a97a8}
+ .muted{color:#4b5563}
  .n{text-align:right;font-variant-numeric:tabular-nums}
  .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
  .filters button{background:#fff;border:1px solid #c8d2de;border-radius:6px;padding:7px 13px;cursor:pointer;font-size:14px}
@@ -14168,18 +14168,18 @@ const ADMIN_HEADER_CSS = `header{background:#1a5c3a;color:white;padding:14px 24p
 header h1{font-size:1.05rem;font-weight:700;margin:0;flex:0 0 auto;color:#fff}
 header b{font-size:1.05rem;font-weight:700}
 header nav{flex:1;display:flex;flex-wrap:wrap;gap:2px;margin-left:6px}
-header a{color:rgba(255,255,255,.78);text-decoration:none;font-size:.85rem;font-weight:600;
+header a{color:#fff;text-decoration:none;font-size:.85rem;font-weight:600;
          padding:5px 8px;border-radius:5px;white-space:nowrap}
 header .more{position:relative}
-header .more summary{list-style:none;cursor:pointer;color:rgba(255,255,255,.78);font-size:.85rem;font-weight:600;
+header .more summary{list-style:none;cursor:pointer;color:#fff;font-size:.85rem;font-weight:600;
          padding:5px 8px;border-radius:5px;white-space:nowrap}
 header .more summary::-webkit-details-marker{display:none}
 header .more summary:hover,header .more[open] summary{background:rgba(255,255,255,.15);color:white}
-header .more summary.here{background:rgba(255,255,255,.2);color:white}
+header .more summary.here{background:transparent;color:#fff;box-shadow:inset 0 -3px 0 #fff;border-radius:0}
 header .more-menu{position:absolute;right:0;top:calc(100% + 6px);background:#1a5c3a;border-radius:8px;padding:6px;
          display:flex;flex-direction:column;gap:2px;min-width:150px;box-shadow:0 6px 18px rgba(0,0,0,.25);z-index:30}
 header a:hover{background:rgba(255,255,255,.15);color:white}
-header a.here{background:rgba(255,255,255,.2);color:white}
+header a.here{background:transparent;color:#fff;box-shadow:inset 0 -3px 0 #fff;border-radius:0}
 header a.act{background:#2f9e73;color:white;font-weight:700}
 header a.act:hover{background:#37b284}
 header a.claude{background:#A84E2C;color:white;font-weight:700}
@@ -14873,12 +14873,12 @@ function adminRfpHTML() {
 ${ADMIN_HEADER_CSS}
  main{max-width:1180px;margin:0 auto;padding:20px}
  .card{background:#fff;border:1px solid #e3e9f0;border-radius:9px;padding:16px 18px;margin-bottom:16px}
- h2{margin:0 0 4px;font-size:15px} .sub{margin:0 0 12px;color:#5b6b7f;font-size:13px}
+ h2{margin:0 0 4px;font-size:15px} .sub{margin:0 0 12px;color:#44546a;font-size:13px}
  table{width:100%;border-collapse:collapse;font-size:14px}
- th{text-align:left;font-size:12px;text-transform:uppercase;color:#5b6b7f;border-bottom:1px solid #dfe5ec;padding:8px 6px}
+ th{text-align:left;font-size:12px;text-transform:uppercase;color:#44546a;border-bottom:1px solid #dfe5ec;padding:8px 6px}
  td{padding:9px 6px;border-bottom:1px solid #eef2f6;vertical-align:top}
  td.date,th.date{white-space:nowrap;width:1%}
- .muted{color:#8a97a8} .n{text-align:right}
+ .muted{color:#4b5563} .n{text-align:right}
  input,select,textarea{padding:6px 8px;border:1px solid #c8d2de;border-radius:6px;font-size:13px;font-family:inherit}
  textarea{width:100%;min-height:120px}
  button{padding:6px 12px;border:1px solid #1a5c3a;background:#1a5c3a;color:#fff;border-radius:6px;font-size:13px;cursor:pointer}
@@ -14887,11 +14887,11 @@ ${ADMIN_HEADER_CSS}
  .badge{display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;margin:1px 4px 1px 0;text-transform:uppercase;letter-spacing:.02em}
  .b-red{background:#fdecea;color:#a1160a;border:1px solid #f5c6c0}
  .b-amber{background:#fff6e5;color:#8a5a00;border:1px solid #f2dcb3}
- .b-grey{background:#eef2f6;color:#5b6b7f;border:1px solid #dfe5ec}
+ .b-grey{background:#eef2f6;color:#44546a;border:1px solid #dfe5ec}
  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
  .sec{margin:18px 0 6px;font-size:13px;font-weight:700;color:#1a5c3a;text-transform:uppercase;letter-spacing:.04em}
- details summary{cursor:pointer;color:#5b6b7f;font-size:13px}
- .note{font-size:12.5px;color:#5b6b7f;margin-top:3px}
+ details summary{cursor:pointer;color:#44546a;font-size:13px}
+ .note{font-size:12.5px;color:#44546a;margin-top:3px}
  /* ── THE ANSWER LIBRARY (F-385) ──────────────────────────────────────────────────────────
     A SECOND VIEW, NOT A TENTH NAV ENTRY. Eric asked to "build that RFP answer library into the
     page somewhere", and F-408 had just taken the nav from ten entries to nine for being too
@@ -14902,7 +14902,7 @@ ${ADMIN_HEADER_CSS}
  .vsw button{border:1px solid #c8d2de;background:#fff;color:#12263f;border-radius:7px;
              padding:7px 15px;cursor:pointer;font:600 13.5px inherit}
  .vsw button.on{background:#1a5c3a;border-color:#1a5c3a;color:#fff}
- .prog{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:#5b6b7f;margin:0 0 12px}
+ .prog{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:#44546a;margin:0 0 12px}
  .prog b{color:#12263f;font-variant-numeric:tabular-nums}
  .bar{height:7px;background:#e9eef4;border-radius:4px;overflow:hidden;margin:0 0 14px}
  .bar i{display:block;height:100%;background:#1a5c3a}
@@ -14914,7 +14914,7 @@ ${ADMIN_HEADER_CSS}
  .qc .qhead{display:flex;gap:9px;align-items:baseline;flex-wrap:wrap;margin:0 0 7px}
  .qc .qt{font-weight:600;font-size:14.5px;flex:1;min-width:240px}
  .pchip{font:600 11px ui-monospace,Consolas,monospace;padding:2px 7px;border-radius:10px;
-        background:#eef2f7;color:#5b6b7f;white-space:nowrap}
+        background:#eef2f7;color:#44546a;white-space:nowrap}
  .pchip.p1{background:#1a5c3a;color:#fff} .pchip.p2{background:#e8f5ee;color:#1a5c3a}
  .qc textarea{width:100%;min-height:74px;padding:9px 11px;border:1px solid #c8d2de;
               border-radius:7px;font:14px inherit;resize:vertical}
@@ -14930,10 +14930,10 @@ ${ADMIN_HEADER_CSS}
               padding:3px 9px;font-size:12px;cursor:pointer;margin-top:6px}
  .qacts{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:9px;font-size:13px}
  .qacts label{display:flex;gap:5px;align-items:center;cursor:pointer}
- .qsave{font-size:12px;color:#8a97a8;margin-left:auto}
+ .qsave{font-size:12px;color:#4b5563;margin-left:auto}
  .qsave.ok{color:#1a5c3a} .qsave.bad{color:#a12622}
- details.also summary{cursor:pointer;font-size:12.5px;color:#5b6b7f;margin:0 0 6px}
- details.also div{font-size:12.5px;color:#5b6b7f;white-space:pre-wrap;
+ details.also summary{cursor:pointer;font-size:12.5px;color:#44546a;margin:0 0 6px}
+ details.also div{font-size:12.5px;color:#44546a;white-space:pre-wrap;
                   border-left:2px solid #e3e9f0;padding-left:10px;margin:0 0 8px}
 </style></head><body>
 ${abyAdminNav('/admin/rfp-watch')}
@@ -16104,8 +16104,8 @@ function adminTodayHTML() {
 ${ADMIN_HEADER_CSS}
  main{max-width:1120px;margin:22px auto;padding:0 18px}
  .card{background:#fff;border:1px solid #dfe5ec;border-radius:10px;padding:20px;margin-bottom:18px}
- h2{font-size:16px;margin:0 0 4px} .sub{color:#5b6b7f;font-size:13px;margin:0 0 14px}
- .muted{color:#8a97a8}
+ h2{font-size:16px;margin:0 0 4px} .sub{color:#44546a;font-size:13px;margin:0 0 14px}
+ .muted{color:#4b5563}
  .addrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
  .addrow input[type=text]{flex:3;min-width:230px;padding:8px 10px;border:1px solid #c8d2de;border-radius:6px;font-size:14px}
  .addrow input[type=date]{padding:7px 9px;border:1px solid #c8d2de;border-radius:6px;font-size:14px}
@@ -16117,8 +16117,8 @@ ${ADMIN_HEADER_CSS}
     Stated because the dashboard shipped these inverted and the selected lens read as switched off
     -- on a control whose whole job is to say which view you are in. */
  .chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 16px}
- .chips .lbl{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#5b6b7f;margin-right:2px}
- .chip{border:1px solid #c8d2de;background:#fff;color:#5b6b7f;border-radius:16px;padding:6px 14px;
+ .chips .lbl{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#44546a;margin-right:2px}
+ .chip{border:1px solid #c8d2de;background:#fff;color:#44546a;border-radius:16px;padding:6px 14px;
        font-size:13px;font-weight:600;cursor:pointer}
  .chip:hover{border-color:#1a5c3a;color:#1a5c3a}
  .chip.on{background:#1a5c3a;border-color:#1a5c3a;color:#fff}
@@ -16127,7 +16127,7 @@ ${ADMIN_HEADER_CSS}
  .chip.empty{opacity:.55}
 
  .sect{margin:0 0 14px}
- .sect h3{font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin:0 0 6px;color:#5b6b7f}
+ .sect h3{font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin:0 0 6px;color:#44546a}
  .sect.late h3{color:#a12622}
  .rows{border:1px solid #dfe5ec;border-radius:10px;background:#fff;overflow:hidden}
  .sect.late .rows{background:#fdf4f4;border-color:#f3c2c2}
@@ -16136,13 +16136,13 @@ ${ADMIN_HEADER_CSS}
  .row .when{flex:0 0 84px;font-weight:700;font-size:13.5px;color:#8a5a12}
  .row.od .when{color:#a12622}
  .row .what{flex:1;min-width:0}
- .row .who{flex:0 0 auto;color:#5b6b7f;font-size:13px;text-align:right;max-width:34%}
+ .row .who{flex:0 0 auto;color:#44546a;font-size:13px;text-align:right;max-width:34%}
  .row .act{flex:0 0 auto;display:flex;gap:8px;align-items:center}
  /* ADDED 2026-08-26 with edit, times, kinds, ordering and the completed record. */
  /* The time sits under the day and is quieter than it, because the day is what you scan. */
  .when .attime{font-size:12px;color:#1a5c3a;font-weight:600;margin-top:2px}
  .t-mk{background:#efe9dd;color:#6b5a2a}
- .row .act .mv{text-decoration:none;color:#8a97a8;font-size:11px;line-height:1}
+ .row .act .mv{text-decoration:none;color:#4b5563;font-size:11px;line-height:1}
  .row .act .mv:hover{color:#1a5c3a}
  .row .act .ed{font-size:12.5px;color:#1a5c3a;text-decoration:none}
  .row .act .ed:hover{text-decoration:underline}
@@ -16152,7 +16152,7 @@ ${ADMIN_HEADER_CSS}
  .edit input[type=text]{flex:1;min-width:180px}
  .edit input,.edit select{padding:6px 9px;border:1px solid #c8d2de;border-radius:6px;font-size:13px}
  .done-row{background:#fbfcfd}
- .done-row .what{color:#5b6b7f}
+ .done-row .what{color:#44546a}
  .outcome{display:flex;gap:7px;margin-top:6px}
  .outcome input{flex:1;padding:5px 9px;border:1px solid #dde4ec;border-radius:6px;font-size:12.5px}
  /* Names what a new to-do will be filed against. A hidden attachment is how a to-do lands on a
@@ -16164,7 +16164,7 @@ ${ADMIN_HEADER_CSS}
  .t-todo{background:#e6eefb;color:#1c4587} .t-quote{background:#e8f4ec;color:#1a5c3a}
  .t-followup{background:#fdf1e0;color:#8a5a12} .t-rfp{background:#f0e8fb;color:#4b2d80}
  .t-commitment{background:#e8f4ec;color:#1a5c3a}
- .own{font-size:11.5px;color:#5b6b7f}
+ .own{font-size:11.5px;color:#44546a}
  a.del{color:#a12622;font-size:12.5px;text-decoration:none} a.del:hover{text-decoration:underline}
  .tick{width:16px;height:16px;cursor:pointer;margin-top:3px}
 
@@ -16174,7 +16174,7 @@ ${ADMIN_HEADER_CSS}
               border-bottom:1px solid #eef2f6;cursor:pointer;user-select:none}
  .mon > .head .nm{font-size:12px;letter-spacing:.06em;text-transform:uppercase;font-weight:700}
  .mon > .head .cnt{background:#e6eefb;color:#1c4587;border-radius:10px;padding:1px 8px;font-size:11.5px;font-weight:700}
- .mon > .head .inside{color:#5b6b7f;font-size:12.5px}
+ .mon > .head .inside{color:#44546a;font-size:12.5px}
  .mon.haslate > .head{background:#fdf4f4} .mon.haslate > .head .nm{color:#a12622}
  .mon.haslate > .head .why{color:#a12622;font-size:12px;font-weight:600}
  .warn{background:#fdecec;color:#a12622;border:1px solid #f3c2c2;border-radius:8px;padding:10px 13px;margin:0 0 16px;font-size:13.5px}
@@ -16832,10 +16832,10 @@ function adminGuideHTML() {
     'blockquote h2,blockquote h3{border:0;padding-top:0;margin-top:14px}' +
     '.tw{max-width:none;overflow-x:auto;margin:0 0 20px}' +
     'table{border-collapse:collapse;font-size:14.5px;width:100%}' +
-    'th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:#5b6b7f;border-bottom:2px solid #dfe5ec;padding:9px 12px 7px}' +
+    'th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:#44546a;border-bottom:2px solid #dfe5ec;padding:9px 12px 7px}' +
     'td{padding:9px 12px;border-bottom:1px solid #eef2f6;vertical-align:top}' +
     'tr:last-child td{border-bottom:0}' +
-    'del{color:#8a97a8}' +
+    'del{color:#4b5563}' +
     '</style></head><body>' +
     abyAdminNav('/admin/guide') +
     '<main><div class="doc">' + ADMIN_GUIDE_HTML + '</div></main>' +
@@ -16931,7 +16931,7 @@ async function serveAbyTool(request, env) {
       'gap:12px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}' +
     '.aby-adminbar h1{font-size:1.05rem;font-weight:700;margin:0;flex:0 0 auto;color:#fff}' +
     '.aby-adminbar nav{flex:1;display:flex;flex-wrap:wrap;gap:2px;margin-left:6px}' +
-    '.aby-adminbar nav a{color:rgba(255,255,255,.78);text-decoration:none;font-size:.85rem;' +
+    '.aby-adminbar nav a{color:#fff;text-decoration:none;font-size:.85rem;' +
       'font-weight:600;padding:5px 8px;border-radius:5px;white-space:nowrap}' +
     '.aby-adminbar nav a:hover{background:rgba(255,255,255,.15);color:#fff}' +
     '.aby-adminbar .more{position:relative}' +
@@ -16941,7 +16941,7 @@ async function serveAbyTool(request, env) {
     '.aby-adminbar .more summary:hover,.aby-adminbar .more[open] summary{background:rgba(255,255,255,.15);color:#fff}' +
     '.aby-adminbar .more-menu{position:absolute;right:0;top:calc(100% + 6px);background:#1a5c3a;border-radius:8px;' +
       'padding:6px;display:flex;flex-direction:column;gap:2px;min-width:150px;box-shadow:0 6px 18px rgba(0,0,0,.25);z-index:30}' +
-    '.aby-adminbar nav a.here{background:rgba(255,255,255,.2);color:#fff}' +
+    '.aby-adminbar nav a.here{background:transparent;color:#fff;box-shadow:inset 0 -3px 0 #fff;border-radius:0}' +
     '.aby-adminbar nav a.act{background:#2f9e73;color:#fff;font-weight:700}' +
     '.aby-adminbar nav a.claude{background:#A84E2C;color:#fff;font-weight:700}' +
     '.aby-adminbar .logout{color:rgba(255,255,255,.75);font-size:.875rem;cursor:pointer;' +
@@ -18663,10 +18663,10 @@ ${ADMIN_HEADER_CSS}
 .logq>summary::-webkit-details-marker{display:none}
 .logq>summary .tw{font-size:.7rem;transition:transform .12s;display:inline-block}
 .logq[open]>summary .tw{transform:rotate(90deg)}
-.logq>summary .hint{font-weight:400;color:#8a97a8;font-size:.8rem}
+.logq>summary .hint{font-weight:400;color:#4b5563;font-size:.8rem}
 .logq .body{padding:4px 24px 18px}
 .logq .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
-.logq label.f{display:flex;flex-direction:column;gap:3px;font-size:.72rem;color:#5b6b7f;
+.logq label.f{display:flex;flex-direction:column;gap:3px;font-size:.72rem;color:#44546a;
               text-transform:uppercase;letter-spacing:.03em}
 .logq input,.logq select{padding:.45rem .6rem;border:1px solid #ddd;border-radius:6px;font-size:.9rem}
 .logq input:focus,.logq select:focus{outline:none;border-color:#1a5c3a}
@@ -18691,7 +18691,7 @@ ${ADMIN_HEADER_CSS}
    could not shrink, and had nowhere to go, so it shoved its neighbours out of the window.
    ⭐ Shorter wording alone would not have fixed this -- it would only have postponed it
    until the next long string. The row wraps now, and the count may wrap within itself. */
-.count{color:#888;font-size:.85rem;margin-left:auto;min-width:0}
+.count{color:#4b5563;font-size:.85rem;margin-left:auto;min-width:0}
 main{padding:20px 24px}
 /* 🔴 overflow-x IS auto, NOT hidden, AND THAT IS THE BUG ERIC REPORTED: "Ran By is off the page -
    you just see the first letter." With hidden, a table wider than its box is CLIPPED -- silently,
@@ -18740,8 +18740,8 @@ tbody tr.data-row.expanded td{background:#f0f8f2;border-top-color:#d4ead9}
 .badge-c{background:#e8f5ee;color:#1a6640}
 .badge-nc{background:#fdf3e8;color:#a85400}
 .date-main{font-size:.875rem}
-.date-time{font-size:.78rem;color:#999}
-.muted{color:#aaa;font-style:italic}
+.date-time{font-size:.78rem;color:#4b5563}
+.muted{color:#4b5563;font-style:italic}
 .nowrap{white-space:nowrap}
 /* An estimated date. One glyph and a tooltip -- Eric: "just need effective or estimated effective
    date." No annotation beside the value, because that is what overflowed the column. */
@@ -18792,23 +18792,23 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
 /* The placeholder cell that keeps the grid four wide when there is no link source: it holds the
    shape without drawing a divider against empty space. */
 .detail-item:empty{border-left-color:transparent}
-.detail-item label{display:block;font-size:.68rem;font-weight:700;color:#8a9a90;
+.detail-item label{display:block;font-size:.68rem;font-weight:700;color:#4b5563;
                     text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px}
 .detail-item span{font-size:.875rem;color:#1a1a1a;word-break:break-word}
 .detail-notes{padding:10px 16px}
-.detail-notes label{display:block;font-size:.68rem;font-weight:700;color:#8a9a90;
+.detail-notes label{display:block;font-size:.68rem;font-weight:700;color:#4b5563;
                     text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
 /* ⚠️ Chips WRAP now. They were nowrap, which is what let one of them set a floor the whole table
    had to obey. A product label with its count is long enough that no sensible column width fits it
    on one line, so the choice was "wrap" or "push a column off the screen". */
 .chip{background:#e8f5ee;color:#1a6640;border-radius:4px;padding:2px 8px;font-size:.8rem;
       font-weight:600;white-space:normal;overflow-wrap:anywhere}
-.empty-row td{text-align:center;padding:60px;color:#aaa;font-style:italic}
+.empty-row td{text-align:center;padding:60px;color:#4b5563;font-style:italic}
 .c-row:hover td{background:#f9fafb}
-.loading{text-align:center;padding:60px;color:#aaa}
+.loading{text-align:center;padding:60px;color:#4b5563}
 .error-msg{text-align:center;padding:40px;color:#c0392b}
 .tabs{background:white;border-bottom:1px solid #e5e5e5;padding:0 24px;display:flex;gap:0}
-.tab{width:auto !important;background:transparent !important;color:#666;border:none;
+.tab{width:auto !important;background:transparent !important;color:#4b5563;border:none;
      border-bottom:3px solid transparent;border-radius:0 !important;padding:.75rem 1.25rem;
      font-size:.875rem;font-weight:600;cursor:pointer;white-space:nowrap;transition:color .15s}
 .tab:hover{background:rgba(0,0,0,.04) !important;color:#333}
@@ -18832,7 +18832,7 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
    early and the parse error would land on an innocent line further down. The page checker caught
    exactly that here on the first attempt, which is what it was rebuilt for. */
 .detail-manual-note{margin:0;padding:10px 16px 0;border-top:1px solid #e4eee8;
-                    font-size:.82rem;color:#5b6b7f;max-width:52rem}
+                    font-size:.82rem;color:#44546a;max-width:52rem}
 .detail-manual-note + .detail-actions{border-top:none;padding-top:8px}
 /* 🔴 RAISED FROM 680px TO 900px, 2026-08-18. Between the old breakpoint and roughly 950px the
    seven-column table could not fit and was being CLIPPED -- that is where "Ran By is off the page"
@@ -18863,10 +18863,10 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
   tr.data-row.expanded{border-radius:8px 8px 0 0;border-bottom-color:transparent}
   tr.data-row td{display:block;border:none;padding:0;background:transparent !important}
   tr.data-row td:nth-child(1){grid-column:1;grid-row:4;font-size:.78rem}                 /* Quote # */
-  tr.data-row td:nth-child(2){grid-column:1;grid-row:1;font-size:.72rem;color:#999}      /* Effective */
+  tr.data-row td:nth-child(2){grid-column:1;grid-row:1;font-size:.72rem;color:#4b5563}      /* Effective */
   tr.data-row td:nth-child(3){grid-column:1;grid-row:2;font-weight:600;font-size:.95rem} /* Client */
-  tr.data-row td:nth-child(4){grid-column:1;grid-row:3;font-size:.8rem;color:#666}       /* Broker */
-  tr.data-row td:nth-child(5){grid-column:1;grid-row:5;font-size:.78rem;color:#666}      /* Rep */
+  tr.data-row td:nth-child(4){grid-column:1;grid-row:3;font-size:.8rem;color:#4b5563}       /* Broker */
+  tr.data-row td:nth-child(5){grid-column:1;grid-row:5;font-size:.78rem;color:#4b5563}      /* Rep */
   tr.data-row td:nth-child(6){grid-column:1/-1;grid-row:6;margin-top:6px}                /* Products */
   tr.data-row td:nth-child(7){grid-column:2;grid-row:1;display:flex;align-items:center;justify-content:flex-end}
   tr.detail-row{display:block;margin-bottom:12px}
@@ -19094,7 +19094,7 @@ ${abyAdminNav('/admin')}
         <th style="padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0"></th>
       </tr>
     </thead>
-    <tbody id="ctbody"><tr><td colspan="6" style="padding:20px;color:#888;text-align:center">Loading…</td></tr></tbody>
+    <tbody id="ctbody"><tr><td colspan="6" style="padding:20px;color:#4b5563;text-align:center">Loading…</td></tr></tbody>
   </table>
 </div>
 <div id="requests-wrap" style="display:none;overflow-x:auto">
@@ -19111,7 +19111,7 @@ ${abyAdminNav('/admin')}
         <th style="padding:10px 12px;background:#f7f9f7;border-bottom:2px solid #e0e0e0"></th>
       </tr>
     </thead>
-    <tbody id="rqtbody"><tr><td colspan="5" style="padding:20px;color:#888;text-align:center">Loading...</td></tr></tbody>
+    <tbody id="rqtbody"><tr><td colspan="5" style="padding:20px;color:#4b5563;text-align:center">Loading...</td></tr></tbody>
   </table>
 </div>
 </main>
@@ -19486,7 +19486,7 @@ function effectiveOptions(current) {
   var thisYear = new Date().getFullYear();
   var out = '<option value="">' + (isIso ? 'Change to...' : 'Set a date...') + '</option>';
   for (var y = 2024; y <= thisYear + 1; y++) {
-    out += '<option disabled style="color:#9aa5b1">' + y + '</option>';
+    out += '<option disabled style="color:#4b5563">' + y + '</option>';
     for (var m = 0; m < 12; m++) {
       var val = y + '-' + (m < 9 ? '0' : '') + (m + 1) + '-01';
       out += '<option value="' + val + '"' + (val === cur ? ' selected' : '') + '>' +
@@ -19752,7 +19752,7 @@ function render() {
     const brokerCell = Number(q.direct)
       ? '<span class="direct-tag" title="ABY worked directly with the employer on this quote. It does not mean the employer has no broker.">Direct</span>'
       : inplace('broker_name', q.broker_name, '—') +
-      '<br><span style="font-size:.8rem;color:#888">' +
+      '<br><span style="font-size:.8rem;color:#4b5563">' +
       inplace('broker_agency', q.broker_agency, '—') + '</span>';
 
     // ⭐ TWO chips, not three. Measured 2026-08-18: Products had a 223px floor -- by far the widest
@@ -20007,7 +20007,7 @@ function detailHTML(q, products) {
       // note, and loses the name.
       '<div style="margin-top:6px;display:flex;align-items:center;gap:10px">' +
         '<button type="button" onclick="event.stopPropagation();saveQuoteEdits(this.dataset.id)" data-id="' + esc(q.id) + '" style="padding:.3rem .9rem;border:1px solid #b8d9c4;background:#e8f4ec;color:#1a5c3a;font-weight:600;border-radius:6px;cursor:pointer;font-size:.82rem">Save changes</button>' +
-        '<span data-note-msg="' + esc(q.id) + '" style="font-size:.8rem;color:#5b6b7f"></span>' +
+        '<span data-note-msg="' + esc(q.id) + '" style="font-size:.8rem;color:#44546a"></span>' +
       '</div>' +
     '</div>' +
     // ⭐ ERIC, 2026-08-21: the manual-quote sentence is RIGHT but was too long, and it sat INSIDE the
@@ -20406,7 +20406,7 @@ async function loadRequests() {
     open.length + ' waiting' + (shut.length ? ' / ' + shut.length + ' settled' : '');
 
   if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="5" style="padding:20px;color:#888;text-align:center">' +
+    tb.innerHTML = '<tr><td colspan="5" style="padding:20px;color:#4b5563;text-align:center">' +
       'Nobody has asked for a quote through BenefitLab yet.</td></tr>';
     return;
   }
@@ -20421,20 +20421,27 @@ async function loadRequests() {
   tb.innerHTML = html;
 }
 
+// 10-25-2026 (Eric: more contrast on the requests; "Let's do all of this"): WAITING requests are white rows with an amber
+// left edge; SETTLED ones fold under one line (closed) instead of sitting faded under the waiting ones.
 function rqSection(title, list, settled) {
-  var head = '<tr><td colspan="5" style="padding:14px 12px 6px;font-size:11px;text-transform:uppercase;' +
-    'letter-spacing:.04em;color:#5b6b7f;background:#fbfcfd;border-bottom:1px solid #e9eef3">' +
-    rqEsc(title) + ' &middot; ' + list.length + '</td></tr>';
+  var label = rqEsc(title) + ' &middot; ' + list.length;
+  var head = '<tr><td colspan="5" style="padding:14px 12px 6px;font-size:12px;text-transform:uppercase;' +
+    'letter-spacing:.04em;color:#44546a;background:#f4f6f8;border-bottom:1px solid #e3e8ee;font-weight:700">' +
+    (settled
+      ? '<button type="button" class="rq-fold" aria-expanded="false" style="all:unset;cursor:pointer;color:#1a5c3a;font-weight:700">' +
+        '<span class="rq-arr">▸</span> ' + label + ' <span style="text-transform:none;font-weight:400;color:#44546a">(quoted or turned down; click to <span class="rq-hint">show</span>)</span></button>'
+      : label) +
+    '</td></tr>';
   return head + list.map(function (r) { return rqRow(r, settled); }).join('');
 }
 
 function rqRow(r, settled) {
   var td = function (v, extra) {
-    return '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top' +
+    return '<td style="padding:10px 12px;border-bottom:1px solid #e3e8ee;vertical-align:top;background:#fff' +
            (extra || '') + '">' + (v || rqDash()) + '</td>';
   };
   var sub = function (v) {
-    return v ? '<br><span style="color:#777;font-size:12px">' + v + '</span>' : '';
+    return v ? '<br><span style="color:#4b5563;font-size:12px">' + v + '</span>' : '';
   };
 
   var products = [];
@@ -20452,7 +20459,7 @@ function rqRow(r, settled) {
   var bname = r.broker_name || r.broker_email || '';
   var broker = bname
     ? (r.broker_email
-        ? '<a href="mailto:' + rqEsc(r.broker_email) + '">' + rqEsc(bname) + '</a>'
+        ? '<a href="mailto:' + rqEsc(r.broker_email) + '" style="color:#1a5c3a;font-weight:600">' + rqEsc(bname) + '</a>'
         : rqEsc(bname)) +
       sub([r.broker_agency, r.broker_phone].filter(Boolean).map(rqEsc).join(' &middot; '))
     : '';
@@ -20486,10 +20493,10 @@ function rqRow(r, settled) {
     act = '<span style="color:#2f7d5a;font-weight:600">Quoted</span>' +
           sub(r.answered_quote ? rqEsc(r.answered_quote) : rqEsc(rqDate(r.answered_at)));
   } else if (r.declined_at) {
-    act = '<span style="color:#8a97a8">Not quoting</span>' +
+    act = '<span style="color:#4b5563">Not quoting</span>' +
           sub(r.declined_note ? rqEsc(r.declined_note) : rqEsc(rqDate(r.declined_at))) +
           '<br><a href="#" class="rq-undo" data-rqid="' + rqEsc(r.id) +
-          '" style="font-size:12px;color:#0b5fff">Undo</a>';
+          '" style="font-size:12px;color:#1a5c3a;font-weight:600">Undo</a>';
   } else {
     act = (r.run_url
       ? '<a href="' + rqEsc(r.run_url) + '" style="display:inline-block;font-size:12px;padding:5px 9px;margin-bottom:6px;' +
@@ -20497,21 +20504,30 @@ function rqRow(r, settled) {
       : '') +
       '<button class="rq-no" data-rqid="' + rqEsc(r.id) + '" ' +
           'style="font-size:12px;padding:5px 9px;border:1px solid #d6dde5;background:#fff;' +
-          'border-radius:5px;cursor:pointer;color:#5b6b7f">Not quoting this</button>';
+          'border-radius:5px;cursor:pointer;color:#44546a">Not quoting this</button>';
   }
   if (r.notify_error) {
     act += '<br><span style="color:#b26a00;font-size:12px" title="' + rqEsc(r.notify_error) +
            '">No email went out</span>';
   }
 
-  return '<tr' + (settled ? ' style="opacity:.62"' : '') + '>' +
-    td(asked) + td(employer) + td(broker) + td(what) + td(act) + '</tr>';
+  return '<tr' + (settled ? ' class="rq-settled" style="display:none"' : '') + '>' +
+    td(asked, settled ? '' : ';border-left:4px solid #d97706') + td(employer) + td(broker) + td(what) + td(act) + '</tr>';
 }
 
 // ⭐ DELEGATED ONCE ON THE STATIC TBODY, not re-bound per render and not with { once: true }. The
 // commitments table above has the comment explaining what that cost: one click anywhere killed every
 // button on the table until a reload.
 document.getElementById('rqtbody').addEventListener('click', function (e) {
+  var fold = e.target.closest ? e.target.closest('.rq-fold') : null;
+  if (fold) {
+    var openNow = fold.getAttribute('aria-expanded') !== 'true';
+    fold.setAttribute('aria-expanded', openNow ? 'true' : 'false');
+    fold.querySelector('.rq-arr').textContent = openNow ? '▾' : '▸';
+    fold.querySelector('.rq-hint').textContent = openNow ? 'hide' : 'show';
+    document.querySelectorAll('#rqtbody tr.rq-settled').forEach(function (tr) { tr.style.display = openNow ? '' : 'none'; });
+    return;
+  }
   var no = e.target.closest ? e.target.closest('.rq-no') : null;
   if (no) { declineRequest(no.dataset.rqid, false); return; }
   var un = e.target.closest ? e.target.closest('.rq-undo') : null;
@@ -20784,7 +20800,7 @@ async function loadCommitments() {
     const data = await res.json();
     const rows = data.commitments || [];
     document.getElementById('count').textContent = rows.length + ' commitment' + (rows.length !== 1 ? 's' : '');
-    if (!rows.length) { ctbody.innerHTML = '<tr><td colspan="6" style="padding:20px;color:#888;text-align:center">No commitments yet.</td></tr>'; return; }
+    if (!rows.length) { ctbody.innerHTML = '<tr><td colspan="6" style="padding:20px;color:#4b5563;text-align:center">No commitments yet.</td></tr>'; return; }
     ctbody.innerHTML = rows.map(function(c) {
       var dt = new Date(c.submitted_at);
       var dateStr = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -20804,14 +20820,14 @@ async function loadCommitments() {
         var out = (name && email)
           ? '<a href="mailto:' + email + '">' + name + '</a>'
           : (email ? '<a href="mailto:' + email + '">' + email + '</a>' : name);
-        if (agency) out += '<br><span style="color:#777;font-size:12px">' + agency + '</span>';
+        if (agency) out += '<br><span style="color:#4b5563;font-size:12px">' + agency + '</span>';
         return out;
       };
       var productNames = products.map(function(p){ return p.name || String(p); }).join('<br>');
       // ⭐ SUB-LINE: the quote log's own pattern - the detail sits UNDER the thing it belongs to,
       // muted and smaller, instead of claiming a column of its own.
       var sub = function(v) {
-        return v ? '<br><span style="color:#777;font-size:12px">' + v + '</span>' : '';
+        return v ? '<br><span style="color:#4b5563;font-size:12px">' + v + '</span>' : '';
       };
       // ⭐⭐ WAS ABY ACTUALLY TOLD? (09-25-2026). Two marks and a deliberate SILENCE.
       //
@@ -20974,13 +20990,13 @@ async function downloadCommitment(id) {
             return '<tr><td colspan="3" style="padding:5px 8px 1px 8px;font-size:13px;color:#555">' + f.label + ' — ' + f.countNote + '</td></tr>' +
               '<tr><td style="padding:1px 8px 2px 24px"></td>' +
               '<td style="padding:1px 8px 2px;text-align:right;font-weight:700;white-space:nowrap;border-bottom:1px solid #f0f0f0">' + (f.value || '') + '</td>' +
-              '<td style="padding:1px 8px 2px;color:#888;white-space:nowrap;border-bottom:1px solid #f0f0f0">' + (f.cadence || '') + '</td></tr>' +
-              (displayRate ? '<tr><td colspan="3" style="padding:0 8px 6px 24px;font-size:11px;color:#888;font-style:italic">' + displayRate + '</td></tr>' : '');
+              '<td style="padding:1px 8px 2px;color:#4b5563;white-space:nowrap;border-bottom:1px solid #f0f0f0">' + (f.cadence || '') + '</td></tr>' +
+              (displayRate ? '<tr><td colspan="3" style="padding:0 8px 6px 24px;font-size:11px;color:#4b5563;font-style:italic">' + displayRate + '</td></tr>' : '');
           }
           return '<tr>' +
             '<td style="padding:4px 8px;color:#555;border-bottom:1px solid #f0f0f0">' + (f.label || '') + '</td>' +
             '<td style="padding:4px 8px;text-align:right;font-weight:700;border-bottom:1px solid #f0f0f0;white-space:nowrap">' + (f.value || '') + '</td>' +
-            '<td style="padding:4px 8px;color:#888;border-bottom:1px solid #f0f0f0;white-space:nowrap">' + (f.cadence || '') + '</td>' +
+            '<td style="padding:4px 8px;color:#4b5563;border-bottom:1px solid #f0f0f0;white-space:nowrap">' + (f.cadence || '') + '</td>' +
             '</tr>';
         }).join('') + '</table>';
     }
@@ -21011,10 +21027,10 @@ async function downloadCommitment(id) {
     '.header{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:18px;border-bottom:2px solid #1a5c3a;margin-bottom:28px}' +
     '.header-right{text-align:right;font-size:13px;color:#555;line-height:1.8}' +
     '.section{margin-bottom:24px}' +
-    '.section-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#888;margin:0 0 10px;padding-bottom:4px;border-bottom:1px solid #eee}' +
+    '.section-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#4b5563;margin:0 0 10px;padding-bottom:4px;border-bottom:1px solid #eee}' +
     '.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 28px}' +
     '.field{margin-bottom:10px}' +
-    '.field .lbl{font-size:11px;color:#999;margin-bottom:2px}' +
+    '.field .lbl{font-size:11px;color:#4b5563;margin-bottom:2px}' +
     '.field .val{font-size:14px;color:#222}' +
     '.sig-name{font-family:"Dancing Script",cursive;font-size:26px;color:#1a5c3a;border-bottom:2px solid #1a5c3a;padding-bottom:4px;display:inline-block;min-width:220px}' +
     '.print-btn{margin-top:28px;padding:10px 26px;background:#1a5c3a;color:white;border:none;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600}' +
@@ -21023,7 +21039,7 @@ async function downloadCommitment(id) {
     '<div class="header">' +
       '<div>' +
         '<h1>ABY Benefits LLC</h1>' +
-        '<div style="color:#666;font-size:13px;margin-top:4px">Commitment to Proceed</div>' +
+        '<div style="color:#4b5563;font-size:13px;margin-top:4px">Commitment to Proceed</div>' +
       '</div>' +
       '<div class="header-right">' +
         '<div><strong>Quote #:</strong> ' + (c.quote_number || '') + '</div>' +
@@ -21060,7 +21076,7 @@ async function downloadCommitment(id) {
             '<div class="field"><div class="lbl">Email</div><div class="val">' + (c.hr_email || '&mdash;') + '</div></div>' +
             '<div class="field"><div class="lbl">Phone</div><div class="val">' + (c.hr_phone || '&mdash;') + '</div></div>' +
           '</div>'
-        : '<div style="padding:10px 14px;border:1px solid #eee;border-radius:6px;color:#888;' +
+        : '<div style="padding:10px 14px;border:1px solid #eee;border-radius:6px;color:#4b5563;' +
           'font-size:13px">Not provided. The signer did not name a separate HR or benefits ' +
           'contact, so the authorized signer above is the only contact on this authorization.</div>') +
     '</div>' +
