@@ -8973,8 +8973,8 @@ ${abyAdminNav('/admin/brokers')}
      ? '<table class="grid"><colgroup>'
        + '<col style="width:23%"><col style="width:6%"><col style="width:6%">'
        + '<col style="width:6%"><col style="width:11%"><col style="width:9%">'
-       + '<col style="width:8%"><col style="width:5%"><col style="width:11%">'
-       + '<col style="width:15%">'
+       + '<col style="width:8%"><col style="width:7%"><col style="width:11%">'
+       + '<col style="width:13%">'
        + '</colgroup><thead><tr>'+hc('byAgency','agency','Agency')+hc('byAgency','n','Quotes','c')
        +hc('byAgency','share','Share','c')
        +hc('byAgency','sales','Sales','c')
