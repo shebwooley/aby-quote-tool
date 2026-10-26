@@ -126,7 +126,7 @@ ABYQuote.renderer = (function () {
     var a = L.aboutABY;
     return [
       '<section>',
-      '  <div class="section-card">',
+      '  <div class="section-card keep-together">',
       '    <div class="section-head hero-head"><h2>' + esc(a.heading) + '</h2><p>A Dallas–Fort Worth–based third-party administrator, founded in 1986 and headquartered in Plano, Texas.</p></div>',
       '    <div class="section-body">',
       a.paragraphs.map(function (p) { return '      <p>' + esc(p) + '</p>'; }).join('\n'),
@@ -150,7 +150,7 @@ ABYQuote.renderer = (function () {
     }).join('\n');
     return [
       '<section>',
-      '  <div class="section-card">',
+      '  <div class="section-card keep-together">',
       '    <div class="section-head hero-head"><h2>' + esc(s.heading) + '</h2><p>' + esc(s.intro) + '</p></div>',
       '    <div class="section-body">',
       '      <div class="service-list">' + items + '</div>',
@@ -696,7 +696,7 @@ ABYQuote.renderer = (function () {
     cards += '<div class="contact-card"><strong>ABY Contact:</strong> ' + rep.join(' &nbsp;|&nbsp; ') + '</div>';
     return [
       '<section>',
-      '  <div class="section-card">',
+      '  <div class="section-card keep-together">',
       '    <div class="section-head hero-head"><h2>Recommended Next Steps</h2><p>A few simple steps to move forward.</p></div>',
       '    <div class="section-body">',
       '      <ol class="steps">',
@@ -1158,7 +1158,7 @@ ABYQuote.renderer = (function () {
 
     return [
       '<section>',
-      '  <div class="section-card">',
+      '  <div class="section-card keep-together">',
       '    <div class="section-head hero-head"><h2>Estimated Annual Cost</h2><p>A summary estimate based on the services and counts entered. Final cost may vary with actual enrollment and elections.</p></div>',
       '    <div class="section-body">',
       '      <div class="pricing-grid cols-1">' + big + '</div>',

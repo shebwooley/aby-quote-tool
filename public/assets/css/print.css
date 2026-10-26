@@ -9,6 +9,8 @@
     margin: 0.5in 0.5in 0.5in 0.5in;
   }
 
+  /* html too (10-25-2026): the page's light gray showed below the content on the last printed page. */
+  html { background: #fff; }
   body {
     background: #fff;
     font-size: 11.5pt;

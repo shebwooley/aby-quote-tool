@@ -8052,6 +8052,15 @@ ${ADMIN_HEADER_CSS}
     content fits, and a table whose widths come from broker-typed firm names can never prove it. */
  .gridscroll{overflow-x:auto}
  .gridscroll table.grid{min-width:940px}
+ /* 10-25-2026, the phone walk: Quotes by agency (12 columns) and Quotes by agent squeezed into a
+    390px screen showed one digit per cell and a firm name one letter per line. Below 700px both
+    scroll inside their card at a width where every column reads, the same rule as .gridscroll. */
+ @media(max-width:700px){
+   #byAgency,#byAgent{overflow-x:auto}
+   #byAgency table.grid{min-width:860px}
+   #byAgent table.grid{min-width:680px}
+   .card{padding:14px}
+ }
  .c{text-align:center;font-variant-numeric:tabular-nums}
  th.c{text-align:center}
  .filters{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
@@ -8430,7 +8439,9 @@ ${abyAdminNav('/admin/brokers')}
 <script>
  var rep='';
  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
- function day(s){return s?String(s).slice(0,10):'\u2014'}
+ // mm-dd-yyyy, Eric's rule for any date a person reads (10-25-2026; it printed 2026-06-04). Display only.
+ // No backslashes: this sits inside a template literal.
+ function day(s){if(!s)return '\u2014';var d=String(s).slice(0,10);var m=/^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(d);return m?m[2]+'-'+m[3]+'-'+m[1]:d}
 
  // \u2500\u2500 ABY INVITES A BROKER (F-6) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
  // The firm is CHOSEN from the CRM's own suggester rather than typed, because the whole point is
@@ -12319,6 +12330,9 @@ ${ADMIN_HEADER_CSS}
  .filters button.on{background:#1a5c3a;color:#fff;border-color:#1a5c3a}
  select{padding:5px 7px;border:1px solid #c8d2de;border-radius:5px;font-size:13px}
  a.dl{display:inline-block;background:#1a5c3a;color:#fff;padding:8px 15px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600}
+ /* 10-25-2026: on a phone the rates table pushed the whole page sideways. It scrolls inside its
+    card instead. Only below 700px, so the sticky header still works on a computer. */
+ @media(max-width:700px){ #out{overflow-x:auto} .card{padding:14px} }
 </style></head><body>
 ${abyAdminNav('/admin/rates')}
 <main>
@@ -18843,8 +18857,12 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
 @media(max-width:900px){
   header{padding:12px 16px}
   .toolbar{padding:10px 12px}
-  .tabs{padding:0 12px}
-  .tab{padding:.6rem .8rem;font-size:.8rem}
+  /* flex-wrap, 10-25-2026: at phone width the nine tabs ran 728px wide, so Requests and Commitments
+     sat off the right edge and the whole page scrolled sideways. They wrap onto a second line now. */
+  .tabs{padding:0 12px;flex-wrap:wrap}
+  .tab{padding:.6rem .8rem;font-size:.88rem}
+  /* the inline margin-left:auto pushed Requests to the far right of its own line on a phone */
+  #requestsTab{margin-left:0 !important}
   main{padding:12px}
   .table-wrap{background:transparent;box-shadow:none;overflow:visible}
   table,tbody{display:block;width:100%}
@@ -18862,11 +18880,11 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
   tr.data-row:hover td{background:transparent}
   tr.data-row.expanded{border-radius:8px 8px 0 0;border-bottom-color:transparent}
   tr.data-row td{display:block;border:none;padding:0;background:transparent !important}
-  tr.data-row td:nth-child(1){grid-column:1;grid-row:4;font-size:.78rem}                 /* Quote # */
-  tr.data-row td:nth-child(2){grid-column:1;grid-row:1;font-size:.72rem;color:#4b5563}      /* Effective */
-  tr.data-row td:nth-child(3){grid-column:1;grid-row:2;font-weight:600;font-size:.95rem} /* Client */
-  tr.data-row td:nth-child(4){grid-column:1;grid-row:3;font-size:.8rem;color:#4b5563}       /* Broker */
-  tr.data-row td:nth-child(5){grid-column:1;grid-row:5;font-size:.78rem;color:#4b5563}      /* Rep */
+  tr.data-row td:nth-child(1){grid-column:1;grid-row:4;font-size:.9rem}                 /* Quote # */
+  tr.data-row td:nth-child(2){grid-column:1;grid-row:1;font-size:.88rem;color:#4b5563}      /* Effective */
+  tr.data-row td:nth-child(3){grid-column:1;grid-row:2;font-weight:600;font-size:1.05rem} /* Client */
+  tr.data-row td:nth-child(4){grid-column:1;grid-row:3;font-size:.92rem;color:#4b5563}       /* Broker */
+  tr.data-row td:nth-child(5){grid-column:1;grid-row:5;font-size:.9rem;color:#4b5563}      /* Rep */
   tr.data-row td:nth-child(6){grid-column:1/-1;grid-row:6;margin-top:6px}                /* Products */
   tr.data-row td:nth-child(7){grid-column:2;grid-row:1;display:flex;align-items:center;justify-content:flex-end}
   tr.detail-row{display:block;margin-bottom:12px}

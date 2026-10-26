@@ -254,6 +254,16 @@
      reader can see which option the total was built on; the radio itself is .no-print. */
   .aby-proposal .option-card { cursor: auto; }
   .aby-proposal a { color: inherit; text-decoration: none; }
+  /* 10-25-2026, the printed-quote check: print.css's "details > * { display: revert !important }"
+     (there so a closed fee explanation still prints) also turned these rows back into plain list
+     items, so the price ran into the words ("Mobile appIncluded"). Keep the row layout on paper. */
+  .aby-proposal .fee-item > summary, .aby-proposal .learn-more > summary { display: flex !important; }
+  /* "Tap any line with an arrow" and the arrows themselves mean nothing on paper. */
+  .aby-proposal .fee-hint, .aby-proposal .fee-chevron, .aby-proposal .lm-chevron { display: none !important; }
+  .aby-proposal .fee-static { padding-left: 16px; }
+  .aby-proposal .fee-explain { padding-left: 16px; }
+  /* A short section prints whole, so its heading band never sits alone at the foot of a page. */
+  .aby-proposal .section-card.keep-together { break-inside: avoid; }
 }
 
 /* ===== Employer Acceptance & Authorization page (interactive; posts to /api/commitments) ===== */
