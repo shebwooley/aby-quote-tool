@@ -50,6 +50,9 @@
 
   // The secure census / bank-details upload (C18). Eric switched R2 on and made this bucket 10-14-2026.
   // Files are written through the employer's link and read only by a signed-in ABY admin (lib/uploads.js).
+  // Proposal PDFs are printed by a real browser (lib/pdf.js).
+  "browser": { "binding": "BROWSER" },
+
   "r2_buckets": [
     {
       "binding": "UPLOADS",

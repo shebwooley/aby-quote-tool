@@ -92,6 +92,7 @@ import {
 } from './lib/agency-defaults.js';
 // F-609: one click from BenefitLab into the quote tool. Its own file, like the above.
 import { HANDOFF_MIGRATIONS, handleBrokerHandoff, handleHandoffLanding } from './lib/benefitlab-handoff.js';
+import { handleQuotePdf } from './lib/pdf.js';
 import { cleanRequestProducts, parseRequestProducts, productName, productLines, effectiveForDisplay,
          requestRunUrl, handleBrokerRequests, handleQuoteLink } from './lib/quote-request-details.js';
 
@@ -127,6 +128,8 @@ export default {
     }
 
     // ── API routes ──────────────────────────────────────────────────────────────
+    // The proposal's Download PDF, printed for real (lib/pdf.js, 10-29-2026).
+    if (path === '/api/pdf' && method === 'POST') return handleQuotePdf(request, env);
     if (path === '/api/quotes' && method === 'POST')  return handleSaveQuote(request, env, ctx);
     if (path === '/api/quotes' && method === 'GET')   return withAuth(request, env, () => handleListQuotes(request, env));
     // The BenefitLab dashboard's read endpoint (F-268). NOT cookie-authed -- it is a

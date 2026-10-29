@@ -28,3 +28,6 @@ scripts/.crm-check.lock
 .apikey
 .token
 *.secret
+
+# npm packages bundled into the worker by wrangler (the PDF printer).
+node_modules/

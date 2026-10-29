@@ -1291,11 +1291,35 @@
   // Download PDF
   // -------------------------------------------------------------
 
+  // 10-29-2026: the PDF is PRINTED, not photographed. The document goes to /api/pdf (lib/pdf.js),
+  // which prints it in a real browser the way "Save as PDF" does: real text, small files, and the
+  // page breaks follow the print rules below. If that fails (Cloudflare's daily allowance is used
+  // up, or the network), it falls back to the in-browser picture method, so the button always works.
+  var PRINT_CSS = [
+    'body{margin:0;background:#fff !important;}',
+    '.wrap{max-width:none;margin:0;padding:0;}',
+    '.aby-proposal .proposal-card{border:0 !important;box-shadow:none !important;border-radius:0 !important;}',
+    '.aby-proposal section{break-before:auto !important;page-break-before:auto !important;}',
+    // A fee list is kept whole: if it does not fit under its section, it starts the next page.
+    '.aby-proposal .fees-wrap{break-inside:avoid;page-break-inside:avoid;}',
+    '.aby-proposal .fee-item,.aby-proposal .fee-static,.aby-proposal .price-box,.aby-proposal .pricing-grid,' +
+      '.aby-proposal table,.aby-proposal tr,.aby-proposal .callout,.aby-proposal .contact-card,' +
+      '.aby-proposal .cross-sell-card,.aby-proposal .service-item,.aby-proposal p,.aby-proposal li{break-inside:avoid;page-break-inside:avoid;}',
+    '.aby-proposal .section-head,.aby-proposal h1,.aby-proposal h2,.aby-proposal h3,.aby-proposal .fees-title{break-after:avoid;page-break-after:avoid;}',
+    // A long section may continue onto the next page between paragraphs, rather than leaving a
+    // mostly empty page behind it. Fee lists, tables and boxes above still never split.
+    '.aby-proposal .section-card.keep-together{break-inside:auto !important;page-break-inside:auto !important;}',
+    '.aby-proposal .lm-title{padding-left:16px;}',
+    // ...except the cost summary and the next steps with their contacts, which are short and read as one piece.
+    '.aby-proposal .section-card.keep-together:has(.price-box),.aby-proposal .section-card.keep-together:has(.steps){break-inside:avoid !important;page-break-inside:avoid !important;}',
+    // The signature page fits on one sheet.
+    '.aby-proposal .ack-page{zoom:0.72;}',
+    // !important because the section rule above would otherwise cancel it (the sign page is a section).
+    '.aby-proposal section.ack-page{break-before:page !important;page-break-before:always !important;padding-top:0 !important;}',
+    '.aby-proposal .ack-card{break-inside:avoid;page-break-inside:avoid;}'
+  ].join('\n');
+
   function downloadQuoteAsPdf(form, quoteNumber) {
-    if (typeof html2pdf === 'undefined') {
-      alert('The PDF maker is still loading. Please try again in a moment.');
-      return;
-    }
     var liveQuote = outputEl.querySelector('.quote');
     if (!liveQuote) return;
 
@@ -1305,12 +1329,47 @@
       ABYQuote.engine.calculateAll(expandSelections(form.selections), form.commissioned)
     );
 
-    var element = preparePdfClone(liveQuote.cloneNode(true));
-
     var clientPart = (form.clientName || 'Quote').replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, ' ');
     var filename = clientPart + ' - ' + quoteNumber + '.pdf';
+    var pdfBtn = document.getElementById('pdfBtn');
+    var label = pdfBtn && pdfBtn.textContent;
+    if (pdfBtn && pdfBtn.tagName === 'BUTTON') { pdfBtn.disabled = true; pdfBtn.textContent = 'Making PDF...'; }
+    function done() { if (pdfBtn && pdfBtn.tagName === 'BUTTON') { pdfBtn.disabled = false; pdfBtn.textContent = label; } }
 
-    html2pdf().set(pdfOptions(filename)).from(element).save();
+    var printed = preparePdfClone(liveQuote.cloneNode(true), { shrink: false });
+    printed.innerHTML = printed.innerHTML.replace('assets/images/aby-logo.png', 'https://abyquotes.com/assets/images/aby-logo.png');
+    fetch('assets/css/quote.css')
+      .then(function (r) { return r.ok ? r.text() : ''; })
+      .catch(function () { return ''; })
+      .then(function (css) {
+        var html = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>' +
+          ABYQuote.utils.escapeHtml(filename) + '</title><style>' + css + '\n' + PRINT_CSS + '</style></head><body>' +
+          '<div class="wrap">' + printed.outerHTML + '</div></body></html>';
+        return fetch('/api/pdf', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ html: html, filename: filename })
+        });
+      })
+      .then(function (res) {
+        if (!res.ok) throw new Error('pdf ' + res.status);
+        return res.blob();
+      })
+      .then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+        done();
+      })
+      .catch(function () {
+        done();
+        if (typeof html2pdf === 'undefined') {
+          alert('The PDF could not be made just now. Please try again in a moment.');
+          return;
+        }
+        html2pdf().set(pdfOptions(filename)).from(preparePdfClone(liveQuote.cloneNode(true))).save();
+      });
   }
 
   // 10-29-2026 (ABY, via Eric, on the Ten Hagen PDF): lines were cut in half between pages, the fee
@@ -1350,7 +1409,7 @@
     return element;
   }
 
-  function preparePdfClone(element) {
+  function preparePdfClone(element, opts) {
     function drop(sel) {
       element.querySelectorAll(sel).forEach(function (el) { el.parentNode && el.parentNode.removeChild(el); });
     }
@@ -1388,7 +1447,13 @@
     element.style.padding = '0';
     element.style.margin = '0';
     element.style.background = '#fff';
-    return shrinkPdfText(element);
+    // The 'select a different option' line is about the clickable page; on paper it is noise.
+    element.querySelectorAll('p, div, span').forEach(function (n) {
+      if (n.children.length === 0 && /Select a different one and it will re-figure\./.test(n.textContent)) {
+        n.textContent = n.textContent.replace(/\s*Where several options are offered, this total follows the option selected above\. Select a different one and it will re-figure\./, '');
+      }
+    });
+    return (opts && opts.shrink === false) ? element : shrinkPdfText(element);
   }
 
   function pdfOptions(filename) {
