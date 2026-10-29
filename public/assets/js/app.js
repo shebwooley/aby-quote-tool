@@ -1196,7 +1196,7 @@
       '<div class="output-toolbar no-print">' +
       '  <button type="button" class="primary" id="pdfBtn">Download PDF</button>' +
       '  <button type="button" class="secondary" id="htmlBtn">Download HTML</button>' +
-      '  <button type="button" class="secondary" id="printBtn">Print</button>' +
+      // No Print button since 10-29-2026 (Eric): the PDF prints well, so Print was a weaker second way.
       // ⭐ THE SHARE LINK, WHICH IS THE ONLY DOOR TO THE EMPLOYER-EDITABLE HEADCOUNT.
       // Hidden until the quote has been saved and we know its id; a button that cannot work is
       // worse than no button. Absent on a shared page, where the reader IS the employer.
@@ -1218,9 +1218,6 @@
 
     // The employer's count control only exists on a shared page, and only after this render.
     if (forEmployer) wireEmployerCounts(outputEl);
-
-    var printBtn = document.getElementById('printBtn');
-    if (printBtn) printBtn.addEventListener('click', function () { window.print(); });
 
     var pdfBtn = document.getElementById('pdfBtn');
     if (pdfBtn) pdfBtn.addEventListener('click', function () { downloadQuoteAsPdf(form, quoteNumber); });
