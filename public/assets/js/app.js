@@ -1305,10 +1305,82 @@
       ABYQuote.engine.calculateAll(expandSelections(form.selections), form.commissioned)
     );
 
-    var element = liveQuote.cloneNode(true);
+    var element = preparePdfClone(liveQuote.cloneNode(true));
 
-    var hiddenEls = element.querySelectorAll('.no-print');
-    hiddenEls.forEach(function (el) { el.parentNode && el.parentNode.removeChild(el); });
+    var clientPart = (form.clientName || 'Quote').replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, ' ');
+    var filename = clientPart + ' - ' + quoteNumber + '.pdf';
+
+    html2pdf().set(pdfOptions(filename)).from(element).save();
+  }
+
+  // 10-29-2026 (ABY, via Eric, on the Ten Hagen PDF): lines were cut in half between pages, the fee
+  // lines printed on top of each other, and the signature pad and Submit button were in the PDF.
+  // ⭐ html2pdf PHOTOGRAPHS the page and slices the picture into pages, so a break lands wherever a
+  // page height happens to fall unless an element is listed in `avoid`. The old list named classes
+  // from before the 2026 redesign (.product-block, .boxed ...) that no longer exist, so nothing was
+  // protected. And the picture is taken of <details> drop-downs, which it draws badly (summary and
+  // explanation overlap), so they are turned into plain blocks first.
+  // ABY asked for whole sections per page, unbroken tables, narrow margins and a smaller font:
+  // every section card, table and fee line is kept whole (a section that does not fit starts a new
+  // page; one taller than a page still splits, between its rows), margins are 0.35in, and every
+  // font size is cut to 85%, so body text prints near 10.5pt.
+  // ⛔ NOT by laying the page out wider and letting it shrink: html2pdf works out where the pages
+  // break from the width it expects, and a wider layout put every break in the wrong place and cut
+  // off the left edge (tried 10-29-2026).
+  var PDF_TEXT_SCALE = 0.85;
+
+  // Every element gets its own font size (and line height, where one is set in pixels), scaled.
+  // Read all of them first, then write, so a parent's new size cannot change what a child reads.
+  function shrinkPdfText(element) {
+    var holder = document.createElement('div');
+    holder.style.cssText = 'position:absolute;left:-10000px;top:0;width:750px';
+    holder.appendChild(element);
+    document.body.appendChild(holder);
+    var nodes = [element].concat(Array.prototype.slice.call(element.querySelectorAll('*')));
+    var sizes = nodes.map(function (n) {
+      var cs = getComputedStyle(n);
+      return { fs: parseFloat(cs.fontSize), lh: /px$/.test(cs.lineHeight) ? parseFloat(cs.lineHeight) : null };
+    });
+    nodes.forEach(function (n, i) {
+      if (sizes[i].fs) n.style.fontSize = (sizes[i].fs * PDF_TEXT_SCALE).toFixed(2) + 'px';
+      if (sizes[i].lh) n.style.lineHeight = (sizes[i].lh * PDF_TEXT_SCALE).toFixed(2) + 'px';
+    });
+    document.body.removeChild(holder);
+    holder.removeChild(element);
+    return element;
+  }
+
+  function preparePdfClone(element) {
+    function drop(sel) {
+      element.querySelectorAll(sel).forEach(function (el) { el.parentNode && el.parentNode.removeChild(el); });
+    }
+    drop('.no-print');
+    // Clickable-only bits: the "tap a line" hints, the drop-down arrows, the signature pad and its
+    // Clear button, and Submit. The printed name and signature lines above the pad stay to be signed.
+    drop('.fee-hint');
+    drop('.fee-chevron');
+    drop('.lm-chevron');
+    element.querySelectorAll('#sigPad').forEach(function (c) { c.parentNode && c.parentNode.parentNode && c.parentNode.parentNode.removeChild(c.parentNode); });
+    drop('#commitBtn');
+    drop('#commitMsg');
+
+    // Every drop-down printed open, as plain blocks.
+    element.querySelectorAll('details').forEach(function (d) {
+      var box = document.createElement('div');
+      box.className = d.className;
+      Array.prototype.slice.call(d.childNodes).forEach(function (n) {
+        if (n.nodeName === 'SUMMARY') {
+          var head = document.createElement('div');
+          head.className = d.classList.contains('fee-item') ? 'fee-static' : 'lm-title';
+          if (!d.classList.contains('fee-item')) head.style.cssText = 'font-weight:700;color:#143c73;margin:0 0 8px';
+          while (n.firstChild) head.appendChild(n.firstChild);
+          box.appendChild(head);
+        } else {
+          box.appendChild(n);
+        }
+      });
+      d.parentNode.replaceChild(box, d);
+    });
 
     element.style.boxShadow = 'none';
     element.style.border = 'none';
@@ -1316,20 +1388,24 @@
     element.style.padding = '0';
     element.style.margin = '0';
     element.style.background = '#fff';
+    return shrinkPdfText(element);
+  }
 
-    var clientPart = (form.clientName || 'Quote').replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, ' ');
-    var filename = clientPart + ' - ' + quoteNumber + '.pdf';
-
-    var opt = {
-      margin:       [0.5, 0.5, 0.5, 0.5],
+  function pdfOptions(filename) {
+    return {
+      margin:       [0.35, 0.35, 0.35, 0.35],
       filename:     filename,
       image:        { type: 'jpeg', quality: 0.98 },
       html2canvas:  { scale: 2, useCORS: true, logging: false, scrollY: 0 },
       jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' },
-      pagebreak:    { mode: ['css', 'legacy'], before: '.page-break-before', avoid: ['.product-block', '.pricing-table-wrap', '.boxed', '.standard-services', '.disclaimer', '.cross-sell-card', 'table', 'tr'] }
+      pagebreak:    {
+        mode: ['css', 'legacy'],
+        before: ['.page-break-before', 'section'],
+        avoid: ['.section-card', '.hero', '.hero-tile', 'table', 'tr', '.fee-item', '.price-box', '.pricing-grid',
+                '.callout', '.service-item', '.cross-sell-card', '.contact-card', '.guarantee', '.steps li',
+                '.ack-group', '.opt-row', '.ack-sign-grid', '.ack-submit', '.ack-group-label', '.ack-field', 'p', 'li', 'h1', 'h2', 'h3']
+      }
     };
-
-    html2pdf().set(opt).from(element).save();
   }
 
 

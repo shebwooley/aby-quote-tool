@@ -40,6 +40,38 @@ function acaAdditionalFees() {
   ];
 }
 
+// ERISA wrap extra fees, the same in both rate sets (no commission on extra fees, as for ACA above).
+// 10-29-2026, NIELS VIA ERIC: match ABY's "ERISA Proposal - 2026 fees" Word document. That raised the
+// FSA/DCAP document ($125 year 1 -> $150 per year), FSA/DCAP testing ($175 -> $225) and additional
+// current-year NDT ($125 -> $150), and added the Form 5500 lines and the rush fee, which the tool did
+// not carry. The document's "$150.00.00" is read as $150. Its "2025" / "2026+" are written here as
+// previous / current plan year, so the wording does not go stale.
+function erisaAdditionalFees() {
+  return [
+    { label: 'Form 5500 filing, previous plan year (not late)', amount: 250, unit: 'per filing',
+      description: "Filing a Form 5500 for a previous plan year that is not yet late. The current plan year's filing is included with White Glove." },
+    { label: 'Form 5500 filing, late', amount: 450, unit: 'per return',
+      description: 'Filing a Form 5500 return that is past its due date.' },
+    { label: 'Form 5500 review, previous filing', amount: 99, unit: 'per filing reviewed',
+      description: 'A review of a Form 5500 already filed for a previous year.' },
+    { label: 'Form 5500 extension', amount: 50, unit: 'per extension filed',
+      description: 'Filing an extension of a Form 5500 due date.' },
+    { label: 'Annual Notice Packet', amount: 125, unit: 'per year', description: 'Includes GINA, CHIP, Medicare Creditable Coverage, HIPAA Special Enrollment, and Notice of Exchange.' },
+    { label: 'FSA/DCAP document', amount: 150, unit: 'per year',
+      description: 'Adds Flexible Spending Account and/or Dependent Care Assistance Plan documents to your wrap document.' },
+    { label: 'FSA/DCAP testing', amount: 225, unit: 'per test',
+      description: 'Nondiscrimination testing for FSA/DCAP plans, with corrective action reports, confirming benefits do not disproportionately favor highly compensated or key employees.' },
+    { label: 'Additional current-year NDT (one POP/HSA testing package included)', amount: 150, unit: 'per additional year tested',
+      description: 'One POP/HSA nondiscrimination testing package is included each year with testing options; each additional current-year test is charged.' },
+    { label: 'Prior year NDT', amount: 300, unit: 'per prior year', description: 'Nondiscrimination testing for a prior plan year, typically requested to catch up or correct a year that was not tested.' },
+    { label: 'Annual hard copy', amount: 99, unit: 'each', description: 'A professionally printed copy of your wrap document and SPD. Documents are delivered electronically by default.' },
+    { label: 'Additional USB (one included annually)', amount: 25, unit: 'each', description: 'Your documents come on one USB drive each year at no charge; additional copies are charged each.' },
+    { label: 'Audit services', amount: 175, unit: 'per hour', description: 'Hands-on help responding to a Department of Labor or IRS audit or document request: gathering records, preparing responses, and supporting your team.' },
+    { label: 'Rush / move to the front', amount: 175, unit: 'one-time fee',
+      description: 'Moves your documents to the front of the line.' }
+  ];
+}
+
 // Helper to build the seven ACA packages — same shape both rate sets
 function buildAcaPackages(rates) {
   return {
@@ -211,16 +243,7 @@ ABYQuote.pricing = {
         fullSpdTesting: { annualFee: 875,  description: 'Full SPD and Section 125 plan with POP/HSA testing' },
         whiteGlove:     { annualFee: 1100, description: 'Full SPD, Section 125 plan with POP/HSA testing, and Form 5500 filing' }
       },
-      additionalFees: [
-        { label: 'Annual Notice Packet', amount: 125, unit: 'per year', description: 'Includes GINA, CHIP, Medicare Creditable Coverage, HIPAA Special Enrollment, and Notice of Exchange.' },
-        { label: 'FSA/DCAP language addition', amount: 125, unit: 'year 1', description: 'Adds Flexible Spending Account and/or Dependent Care Assistance Plan language to your wrap document. A one-time charge in the first year it is added.' },
-        { label: 'FSA/DCAP NDT testing', amount: 175, unit: 'per year per test set', description: 'Annual nondiscrimination testing for FSA/DCAP plans, confirming benefits do not disproportionately favor highly compensated or key employees.' },
-        { label: 'Additional current-year NDT (after one included)', amount: 125, unit: 'per additional test', description: 'One nondiscrimination test set is included with testing packages; any additional test for the current plan year is charged per test.' },
-        { label: 'Prior year NDT', amount: 300, unit: 'per prior year', description: 'Nondiscrimination testing for a prior plan year, typically requested to catch up or correct a year that was not tested.' },
-        { label: 'Annual hard copy', amount: 99, unit: 'each', description: 'A professionally printed copy of your wrap document and SPD. Documents are delivered electronically by default.' },
-        { label: 'Additional USB (one included annually)', amount: 25, unit: 'each', description: 'Your documents come on one USB drive each year at no charge; additional copies are charged each.' },
-        { label: 'Audit services', amount: 175, unit: 'per hour', description: 'Hands-on help responding to a Department of Labor or IRS audit or document request: gathering records, preparing responses, and supporting your team.' }
-      ]
+      additionalFees: erisaAdditionalFees()
     },
 
     aca: {
@@ -511,16 +534,7 @@ ABYQuote.pricing = {
         fullSpdTesting: { annualFee: 825,  description: 'Full SPD and Section 125 plan with POP/HSA testing' },
         whiteGlove:     { annualFee: 1050, description: 'Full SPD, Section 125 plan with POP/HSA testing, and Form 5500 filing' }
       },
-      additionalFees: [
-        { label: 'Annual Notice Packet', amount: 125, unit: 'per year', description: 'Includes GINA, CHIP, Medicare Creditable Coverage, HIPAA Special Enrollment, and Notice of Exchange.' },
-        { label: 'FSA/DCAP language addition', amount: 125, unit: 'year 1', description: 'Adds Flexible Spending Account and/or Dependent Care Assistance Plan language to your wrap document. A one-time charge in the first year it is added.' },
-        { label: 'FSA/DCAP NDT testing', amount: 175, unit: 'per year per test set', description: 'Annual nondiscrimination testing for FSA/DCAP plans, confirming benefits do not disproportionately favor highly compensated or key employees.' },
-        { label: 'Additional current-year NDT (after one included)', amount: 125, unit: 'per additional test', description: 'One nondiscrimination test set is included with testing packages; any additional test for the current plan year is charged per test.' },
-        { label: 'Prior year NDT', amount: 300, unit: 'per prior year', description: 'Nondiscrimination testing for a prior plan year, typically requested to catch up or correct a year that was not tested.' },
-        { label: 'Annual hard copy', amount: 99, unit: 'each', description: 'A professionally printed copy of your wrap document and SPD. Documents are delivered electronically by default.' },
-        { label: 'Additional USB (one included annually)', amount: 25, unit: 'each', description: 'Your documents come on one USB drive each year at no charge; additional copies are charged each.' },
-        { label: 'Audit services', amount: 175, unit: 'per hour', description: 'Hands-on help responding to a Department of Labor or IRS audit or document request: gathering records, preparing responses, and supporting your team.' }
-      ]
+      additionalFees: erisaAdditionalFees()
     },
 
     aca: {
