@@ -2525,6 +2525,14 @@ async function handleListCommitments(request, env) {
         c.app_updated_at = r ? (r.submitted_at || r.updated_at) : null;
       });
     } catch (e) { /* no applications table yet */ }
+    // Eric, 11-05-2026: "I wish it was clear in the commitments area" - the employer's uploaded files were only
+    // reachable through Setup answers. Names and ids only; the download is /api/admin/upload, signed-in.
+    try {
+      const u = await env.DB.prepare('SELECT id, share_token, file_name, deleted_at FROM app_uploads ORDER BY uploaded_at').all();
+      const files = {};
+      (u.results || []).forEach(function (r) { (files[r.share_token] = files[r.share_token] || []).push({ id: r.id, name: r.file_name, deleted: !!r.deleted_at }); });
+      rows.forEach(function (c) { c.uploads = c.share_token ? (files[c.share_token] || []) : []; });
+    } catch (e) { /* no uploads table yet */ }
     return rows;
   }
 
@@ -20880,6 +20888,22 @@ async function loadCommitments() {
           + (done ? 'color:#1a5c3a;border:1px solid #1a5c3a;font-weight:600' : 'color:#8a4b00;border:1px solid #d9a441') + '">'
           + (done ? 'Setup answers (submitted)' : 'Setup answers (in progress)') + '</a>';
       };
+      // Eric, 11-05-2026: the employer's uploaded files, each name a download. Inside a div so the column's
+      // full-width button rule (direct children only) leaves them as plain links; a long name is cut with an
+      // ellipsis and the full name is in the tooltip, so the column keeps its width.
+      var uploadsList = function(row) {
+        var f = row.uploads || [];
+        if (!f.length) return '';
+        return '<div style="margin:0 0 8px;font-size:12px;line-height:1.5">'
+          + '<div style="font-weight:600;color:#1f2937">' + f.length + ' file' + (f.length === 1 ? '' : 's') + ' uploaded</div>'
+          + f.map(function(x) {
+              var cut = 'display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+              return x.deleted
+                ? '<span title="' + esc(x.name) + ' (removed)" style="' + cut + ';color:#4b5563">' + esc(x.name) + ' (removed)</span>'
+                : '<a href="/api/admin/upload?id=' + encodeURIComponent(x.id) + '" title="Download ' + esc(x.name) + '" style="' + cut + ';color:#0b5fff">&#11015; ' + esc(x.name) + '</a>';
+            }).join('')
+          + '</div>';
+      };
       var notifyCell = function(row) {
         if (row.notified_at) {
           return '<br><span style="color:#1a5c3a;font-size:12px" title="ABY was emailed at '
@@ -20941,6 +20965,7 @@ async function loadCommitments() {
               + 'margin-right:6px">Open the signed proposal</a>'
             : '') +
           appButton(c) +
+          uploadsList(c) +
           // F-416 (iii). The signed record, machine-readable, for whoever processes the sale.
           // A plain link rather than a button: it is a GET, and a link can be opened in a tab,
           // copied, or handed to a script, which is the whole point of the format.
