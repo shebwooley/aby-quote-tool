@@ -126,7 +126,7 @@ ABYQuote.language = {
       heading: 'Section 125 Cafeteria Plan with Flexible Spending Accounts (FSA) Overview',
       paragraphs: [
         'Flexible Spending Accounts (FSAs) are offered through a Section 125 Cafeteria Plan and allow employees to set aside pre-tax income to pay for qualified healthcare expenses. Dependent Care Assistance Plans (DCAPs) allow employees to use pre-tax dollars to pay for eligible dependent care expenses, such as daycare and after-school care. By using pre-tax dollars, employees reduce taxable income and increase take-home pay, while employers benefit from payroll tax savings.',
-        'For 2026, contribution limits are $3,400 for medical FSAs and $7,500 for Dependent Care Assistance Plans (DCAPs).',
+        'For 2026, contribution limits are $3,400 for medical FSAs and $7,500 for Dependent Care Assistance Plans (DCAPs). For plan years beginning in 2027, the medical FSA limit is $3,500; the DCAP limit stays $7,500.',
         'FSAs and DCAPs also generate employer payroll tax savings, as employee contributions are not subject to Social Security or Medicare taxes. When properly administered, these plans enhance the overall benefits package in a cost-effective way, helping employers attract and retain employees while supporting employee financial wellness by reducing out-of-pocket healthcare and dependent care costs.',
         'ABY administers Section 125 Cafeteria Plans with FSAs by preparing and maintaining required plan documents, including the Summary Plan Description (SPD), and performing annual Section 125 nondiscrimination testing to ensure the plan remains compliant and does not disproportionately benefit Highly Compensated or Key Employees.',
         'ABY FSA administration includes access to debit card functionality and mobile account management tools, allowing participants to pay for eligible expenses directly and manage their accounts without waiting for reimbursement, when permitted under IRS rules.',
@@ -147,7 +147,7 @@ ABYQuote.language = {
         'Withdrawals for qualified medical expenses are tax-free'
       ],
       closing: [
-        'For 2026, contribution limits are $4,400 for employee-only coverage and $8,750 for family coverage, with an additional $1,000 catch-up contribution available to account holders age 55 and older.',
+        'For 2026, contribution limits are $4,400 for employee-only coverage and $8,750 for family coverage, with an additional $1,000 catch-up contribution available to account holders age 55 and older. For 2027, the limits are $4,500 for employee-only coverage and $9,000 for family coverage, and the $1,000 catch-up is unchanged.',
         'HSAs may be paired with a Limited-Purpose FSA when structured correctly. In these arrangements, the HSA is used for medical and prescription expenses, while the FSA is limited to eligible dental and vision expenses, helping preserve HSA eligibility while expanding employee benefit options.',
         'ABY administers HSA programs by coordinating account setup, payroll integration, and ongoing administration with the HSA custodian. This includes facilitating employee enrollment, supporting employer and employee contributions through payroll, and providing access to debit cards, mobile app functionality, online account management tools, bill pay services, and claims documentation storage.'
       ]
