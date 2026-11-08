@@ -407,7 +407,7 @@ agent when we already have a record of that agent separately — we just need th
 I don't want to create duplicates."*
 
 **To work through the ones we cannot place:** set **Firm: none on file**. That is **1,211 people**
-today, a quarter of the register — nearly all of them from the CE list, where the roster gave a
+today, a quarter of the register — nearly all of them from an industry list, where the roster gave a
 personal email address and no agency.
 
 **Start typing a firm beside their name and it offers the firms we already have**, with the quotes

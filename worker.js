@@ -5134,7 +5134,7 @@ const SUPPRESSED = ['do_not_contact', 'deceased'];
 const PERSON_SOURCES = ['aby_broker', 'cce_attendee', 'web_research', 'purchased_ok_doi',
                         'event', 'hand_added', 'quotes', 'import'];
 const SOURCE_LABEL = {
-  aby_broker: 'ABY Broker', cce_attendee: 'CCE Attendee', web_research: 'Web research',
+  aby_broker: 'ABY Broker', cce_attendee: 'Industry list', web_research: 'Web research',
   purchased_ok_doi: 'Purchased (OK DOI)', event: 'Event', hand_added: 'Added by hand',
   quotes: 'Seen on a quote', import: 'Imported',
 };
