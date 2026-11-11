@@ -15779,33 +15779,40 @@ async function abyDatedThings(env, opts) {
       "FROM quotes WHERE COALESCE(status,'P') = 'P' AND effective_date LIKE '____-__-__' " +
       "AND effective_date >= ? ORDER BY effective_date ASC"
     ).bind(today).all();
+    // ROLLED UP BY DATE AND BROKER FIRM (Fable review 11-10-2026): one row per pending quote made Jan 1 a wall of
+    // ~80 rows. Same shape as the follow-ups, which already roll up per broker. One quote still reads as before.
+    const groups = new Map();
     for (const q of (r.results || [])) {
       // Re-checked in JavaScript rather than trusted from SQL: the LIKE matches the SHAPE, so
       // "2026-13-45" gets through it. isoDay is the one place that decides what a date is.
       const due = isoDay(q.effective_date);
       if (!due) continue;
+      const firm = String(q.broker_agency || q.broker_name || '').trim();
+      const gk = due + '|' + firm.toLowerCase();
+      if (!groups.has(gk)) groups.set(gk, { due: due, firm: firm, quotes: [] });
+      groups.get(gk).quotes.push(q);
+    }
+    for (const g of groups.values()) {
+      const one = g.quotes.length === 1 ? g.quotes[0] : null;
+      const clients = g.quotes.map((q) => String(q.client_name || '').trim()).filter(Boolean);
       out.push({
-        key: 'quote:' + q.quote_number,
+        key: 'quote:' + (one ? one.quote_number : g.due + ':' + g.firm.toLowerCase()),
         kind: 'quote',
-        id: String(q.quote_number || ''),
-        // 🔴 THIS SAID "Coverage starts on quote X" AND EVERY ROW HERE IS A *PENDING* QUOTE.
-        // Eric, 2026-08-26: "this was just a quote from today that's still pending - it's not a
-        // sale yet. So why are you making it sound like it's sold?"
-        // ⛔ A DEFAULT RENDERED AS A FINDING. The query above filters COALESCE(status,'P') = 'P',
-        // so the ONE thing every row on this line has in common is that NOBODY HAS BOUGHT IT. The
-        // sentence asserted the opposite of the filter that selected it.
-        // ⭐ The comment above this block had it right all along: the employer's coverage is
-        // MEANT to start that day, "so it is the date the chase has to beat". That is a deadline
-        // for ABY, not an event in the world, and the title now says so.
-        // ⚠️ The date is deliberately not repeated in the words -- it is already the WHEN column.
-        title: 'Still pending: quote ' + String(q.quote_number || '') + ' asks for coverage from this date',
-        entity: String(q.client_name || ''),
+        id: one ? String(one.quote_number || '') : '',
+        // 🔴 PENDING, NEVER "coverage starts" (Eric, 2026-08-26: "this was just a quote from today that's still
+        // pending - it's not a sale yet. So why are you making it sound like it's sold?"). Every row here is a
+        // PENDING quote; the date is a deadline for ABY, not an event. The date stays in the WHEN column.
+        title: one ? ('Still pending: quote ' + String(one.quote_number || '') + ' asks for coverage from this date')
+                   : ('Still pending: ' + g.quotes.length + ' quotes ask for coverage from this date'),
+        entity: one ? String(one.client_name || '') : (g.firm || 'No broker on file'),
         owner: '',
-        note: String(q.broker_agency || q.broker_name || ''),
-        dueOn: due,
-        days: daysBetween(today, due),
+        note: one ? g.firm
+                  : (clients.slice(0, 4).join(', ') + (clients.length > 4 ? ' and ' + (clients.length - 4) + ' more' : '')),
+        dueOn: g.due,
+        days: daysBetween(today, g.due),
+        count: g.quotes.length,
       });
-      counts.quote++;
+      counts.quote++;   // one per ROW, so the chip count matches the rows it shows
     }
   } catch (e) {
     problems.push({ source: 'quote', error: String((e && e.message) || e) });
@@ -15849,7 +15856,10 @@ async function abyDatedThings(env, opts) {
         id: String(g.k || ''),
         title: n === 1 ? ('Follow up on 1 quote' + where)
                        : ('Follow up on ' + n + ' quotes' + where),
-        entity: String(g.who || agency || g.k || ''),
+        // Fable review 11-10-2026: a group with no broker on file printed "?", and a name typed as
+        // "Catlin Kellerman <>" printed its empty angle brackets. Both read as glitches.
+        entity: (String(g.k || '') === '?') ? 'No broker on file'
+          : String(g.who || agency || g.k || '').replace(/[ ]*<[^>]*>[ ]*$/, '').trim(),
         owner: '',
         note: note,
         dueOn: due,
@@ -20624,6 +20634,11 @@ function rqRow(r, settled) {
       ? '<a href="' + rqEsc(r.run_url) + '" style="display:inline-block;font-size:12px;padding:5px 9px;margin-bottom:6px;' +
         'background:#1a5e43;color:#fff;border-radius:5px;text-decoration:none;font-weight:600">Run this quote</a><br>'
       : '') +
+      // The reason box (Fable review 11-10-2026: declineRequest read a box id that existed nowhere, so every
+      // decline was saved with no reason). One per row, so two open requests never share a box.
+      '<input id="rqNote-' + rqEsc(r.id) + '" placeholder="Why not? (optional)" ' +
+          'style="display:block;width:100%;max-width:220px;font-size:13px;padding:5px 7px;margin-bottom:6px;' +
+          'border:1px solid #c8d2de;border-radius:5px">' +
       '<button class="rq-no" data-rqid="' + rqEsc(r.id) + '" ' +
           'style="font-size:12px;padding:5px 9px;border:1px solid #d6dde5;background:#fff;' +
           'border-radius:5px;cursor:pointer;color:#44546a">Not quoting this</button>';
@@ -20661,7 +20676,7 @@ async function declineRequest(id, undo) {
   // itself, which is a better answer than a dialog.
   var note = '';
   if (!undo) {
-    var box = document.getElementById('rqNote');
+    var box = document.getElementById('rqNote-' + id);
     note = box ? box.value.trim() : '';
   }
   try {
