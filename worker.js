@@ -1056,9 +1056,23 @@ async function handleListQuotes(request, env) {
     const whereSql = where.length ? ('WHERE ' + where.join(' AND ')) : '';
     const listSql = (c) =>
       `SELECT ${c} FROM quotes ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+    // REPEAT RUNS, MARKED ON THE ROW (Eric, 11-11-2026: "we often run multiple versions, and they each
+    // show up as their own"). `runs` = how many rows share this one REQUEST (quoteRequestSql: agency,
+    // employer, effective date) across the WHOLE log, not just this page; `run_no` = which one this is,
+    // oldest first. Every count of quotes counts the request once; the log still lists every run.
+    // ⛔ OPTIONAL, LIKE THE VERSION COLUMNS: if this form ever fails, the log lists without it.
+    const runsSql = (c) =>
+      `SELECT ${c}, runs, run_no FROM (SELECT *, COUNT(*) OVER (PARTITION BY ${quoteRequestSql('')}) AS runs, ` +
+      `ROW_NUMBER() OVER (PARTITION BY ${quoteRequestSql('')} ORDER BY created_at, quote_number) AS run_no FROM quotes) ` +
+      `${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
     let result;
     try {
-      result = await env.DB.prepare(listSql(cols)).bind(...args, limit, offset).all();
+      try {
+        result = await env.DB.prepare(runsSql(cols)).bind(...args, limit, offset).all();
+      } catch (err) {
+        console.warn('repeat-run marks unavailable, listing without them:', String(err && err.message || err));
+        result = await env.DB.prepare(listSql(cols)).bind(...args, limit, offset).all();
+      }
     } catch (err) {
       // ⛔ THE VERSION COLUMNS ARE OPTIONAL; THE QUOTE LOG IS NOT. Before /api/migrate has run they
       // do not exist, and naming one in a SELECT is a hard error -- which this handler's single
@@ -1840,7 +1854,7 @@ async function handleAgencyLookup(url, env) {
   if (q.length < 2) return jsonResp({ matches: [] });
   const like = '%' + q.replace(/[%_]/g, '') + '%';
   const r = await env.DB.prepare(
-    'SELECT trim(broker_agency) AS agency, COUNT(*) AS n FROM quotes ' +
+    'SELECT trim(broker_agency) AS agency, COUNT(DISTINCT ' + quoteRequestSql('') + ') AS n FROM quotes ' +
     "WHERE trim(COALESCE(broker_agency,'')) <> '' AND lower(broker_agency) LIKE ? " +
     'GROUP BY trim(broker_agency) ORDER BY n DESC LIMIT 8'
   ).bind(like).all();
@@ -4324,7 +4338,7 @@ async function handleCrmPerson(request, env) {
       'SELECT d.email, d.name, d.phone, d.agency AS agency_typed, d.agency_id, ' +
       '       d.first_seen, d.last_seen, d.assigned_rep, ' +
       '       a.name AS agency_name, ' +
-      "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(d.email)) " +
+      "       (SELECT COUNT(DISTINCT " + quoteRequestSql('q') + ") FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(d.email)) " +
       "          AND trim(q.broker_email) <> '') AS quotes, " +
       '       (SELECT MAX(q.created_at) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(d.email))) AS last_quote ' +
       'FROM broker_directory d LEFT JOIN agencies a ON a.id = d.agency_id ' +
@@ -4641,7 +4655,7 @@ async function handleCrmAgencies(request, env) {
 
   const sql =
     // One pass over the quote log, grouped. Everything else joins to THIS.
-    "WITH q AS (SELECT lower(trim(broker_agency)) k, COUNT(*) quotes, MAX(created_at) last_quote " +
+    "WITH q AS (SELECT lower(trim(broker_agency)) k, COUNT(DISTINCT " + quoteRequestSql('') + ") quotes, MAX(created_at) last_quote " +
     "           FROM quotes WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1), " +
     // ⭐⭐ SALES, ASKED FOR BY ERIC 2026-08-24: "I noticed it doesn't show sales on that page, just
     // quotes and agent count." He is right and it was a real gap -- quotes without sales says who
@@ -5610,11 +5624,9 @@ const RECENT_WINDOW = "datetime('now','-365 days')";
 // ⭐ THE FOUR MEASURES TRAVEL TOGETHER, so the referrals scoreboard and the broker list cannot
 // disagree about what a person produced. A caller that only wants the count simply ignores three
 // columns; a second CTE that computed "recent" its own way is how two screens start arguing.
-// What makes two quote ROWS the same QUOTE: same employer, same effective date, same products.
+// What makes two quote ROWS the same QUOTE: same employer, same effective date (11-11-2026: products no longer split it; see quoteRequestSql).
 // Deliberately NOT the quote number, because a commission flip mints a new one on purpose.
-const QUOTE_IDENTITY =
-  "COALESCE(NULLIF(client_match_key,''), lower(trim(COALESCE(client_name,'')))), " +
-  "COALESCE(effective_date,''), COALESCE(products,'')";
+const QUOTE_IDENTITY = quoteIdentitySql('');
 
 const PERSON_QUOTES_CTE =
   // ONE QUOTE PRICED TWO WAYS IS ONE QUOTE. Eric, 2026-08-28: "yes c/nc should count once toward
@@ -5954,7 +5966,7 @@ async function handleCrmFirmSuggest(request, env) {
       '       ((SELECT COUNT(*) FROM broker_directory d WHERE d.agency_id = a.id) + ' +
       '        (SELECT COUNT(*) FROM people p WHERE p.agency_id = a.id ' +
       '           AND NOT EXISTS (SELECT 1 FROM broker_directory d2 WHERE d2.person_id = p.id))) AS agents, ' +
-      '       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_agency)) = lower(trim(a.name))) AS quotes, ' +
+      '       (SELECT COUNT(DISTINCT ' + quoteRequestSql('q') + ') FROM quotes q WHERE lower(trim(q.broker_agency)) = lower(trim(a.name))) AS quotes, ' +
       // 🔴 A HOLDING ROW READS AS A DEAD FIRM WITHOUT THIS. The quotes and the people sit on the
       // OFFICES, by Eric's own rule, so the parent row honestly counts zero of both -- and
       // "nothing recorded yet" beside "Higginbotham" steers somebody away from the row they want.
@@ -6673,7 +6685,7 @@ async function handleAgencyPeople(request, env) {
   try {
     const { results } = await env.DB.prepare(
       'SELECT d.email, d.name, d.phone, ' +
-      "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(d.email)) " +
+      "       (SELECT COUNT(DISTINCT " + quoteRequestSql('q') + ") FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(d.email)) " +
       "          AND trim(q.broker_email) <> '') AS quotes, " +
       '       (SELECT MAX(q.created_at) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(d.email))) AS last_quote, ' +
       "       CASE WHEN EXISTS (SELECT 1 FROM brokers b WHERE lower(trim(b.email)) = lower(trim(d.email)) " +
@@ -7001,7 +7013,7 @@ async function handleCrmNeverQuoted(request, env) {
     // had THIS product on a quote. Counted by the firm's own name, exactly as the list beside it.
     const rows = await env.DB.prepare(
       PQ +
-      ", tot AS (SELECT lower(trim(broker_agency)) k, COUNT(*) quotes, MAX(created_at) last_quote " +
+      ", tot AS (SELECT lower(trim(broker_agency)) k, COUNT(DISTINCT " + quoteRequestSql('') + ") quotes, MAX(created_at) last_quote " +
       "          FROM quotes WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1) " +
       "SELECT a.id, a.name, a.city, a.state, a.priority, a.assigned_rep, " +
       "       tot.quotes, tot.last_quote " +
@@ -7016,7 +7028,7 @@ async function handleCrmNeverQuoted(request, env) {
     // How many firms CLEAR THE FLOOR at all. Without it "28 firms" is a number with no
     // denominator -- 28 out of 78 is a campaign, 28 out of 30 is a product nobody wants.
     const el = await env.DB.prepare(
-      "WITH tot AS (SELECT lower(trim(broker_agency)) k, COUNT(*) quotes FROM quotes " +
+      "WITH tot AS (SELECT lower(trim(broker_agency)) k, COUNT(DISTINCT " + quoteRequestSql('') + ") quotes FROM quotes " +
       "             WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1) " +
       "SELECT COUNT(*) AS n FROM agencies a JOIN tot ON tot.k = lower(trim(a.name)) " +
       "WHERE COALESCE(a.relationship,'') NOT IN ('succeeded','alias') " +
@@ -7046,7 +7058,7 @@ async function handleCrmAgencyDupes(request, env) {
     // ⚠️ GROUPED CTEs, NOT PER-ROW SUBQUERIES -- the earlier version locked the page for fifteen
     // seconds. The whole query runs in about 20ms.
     const { results } = await env.DB.prepare(
-      "WITH q AS (SELECT lower(trim(broker_agency)) k, COUNT(*) n, MAX(created_at) last " +
+      "WITH q AS (SELECT lower(trim(broker_agency)) k, COUNT(DISTINCT " + quoteRequestSql('') + ") n, MAX(created_at) last " +
       "           FROM quotes WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1), " +
       '     pe AS (SELECT agency_id, COUNT(*) n FROM broker_directory GROUP BY 1), ' +
       '     px AS (SELECT agency_id, COUNT(*) n FROM people WHERE agency_id IS NOT NULL GROUP BY 1) ' +
@@ -7257,7 +7269,7 @@ async function handleCrmAgencyDupes(request, env) {
       "  AND COALESCE(relationship,'') NOT IN ('succeeded','alias') ORDER BY name"
     ).all();
     const realRows = await env.DB.prepare(
-      "WITH q AS (SELECT agency_id k, COUNT(*) n FROM quotes WHERE agency_id IS NOT NULL GROUP BY 1) " +
+      "WITH q AS (SELECT agency_id k, COUNT(DISTINCT " + quoteRequestSql('') + ") n FROM quotes WHERE agency_id IS NOT NULL GROUP BY 1) " +
       "SELECT a.id, a.name, COALESCE(q.n,0) AS quotes FROM agencies a " +
       'LEFT JOIN q ON q.k = a.id ' +
       "WHERE a.name NOT LIKE '%;%' AND COALESCE(a.relationship,'') <> 'alias'"
@@ -7312,7 +7324,7 @@ async function handleCrmAgencyDupes(request, env) {
     try {
       const orph = await env.DB.prepare(
         "WITH tot AS (SELECT trim(broker_agency) AS nm, lower(trim(broker_agency)) k, " +
-        "             COUNT(*) quotes, MAX(created_at) last_quote " +
+        "             COUNT(DISTINCT " + quoteRequestSql('') + ") quotes, MAX(created_at) last_quote " +
         "             FROM quotes WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1, 2) " +
         'SELECT nm, quotes, last_quote FROM tot ' +
         'WHERE NOT EXISTS (SELECT 1 FROM agencies a WHERE lower(trim(a.name)) = tot.k) ' +
@@ -7358,7 +7370,7 @@ async function handleCrmAgencyDupes(request, env) {
       // The rows whose NAME is a person we hold. Same exclusions as every other pass, so a name
       // Eric has already confirmed cannot come back.
       const pn = await env.DB.prepare(
-        "WITH q AS (SELECT lower(trim(broker_agency)) k, COUNT(*) n FROM quotes " +
+        "WITH q AS (SELECT lower(trim(broker_agency)) k, COUNT(DISTINCT " + quoteRequestSql('') + ") n FROM quotes " +
         "           WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1), " +
         "     s AS (SELECT lower(trim(agency)) k, COUNT(*) n FROM aby_sales " +
         "           WHERE trim(COALESCE(agency,'')) <> '' GROUP BY 1) " +
@@ -7380,7 +7392,7 @@ async function handleCrmAgencyDupes(request, env) {
       // locked the page for fifteen seconds") and the one the six expression indexes were added to
       // fix. ⭐ TIME THE ENDPOINT AFTER ADDING A PASS TO IT.
       const cand = await env.DB.prepare(
-        "WITH q AS (SELECT lower(trim(broker_agency)) k, COUNT(*) n FROM quotes " +
+        "WITH q AS (SELECT lower(trim(broker_agency)) k, COUNT(DISTINCT " + quoteRequestSql('') + ") n FROM quotes " +
         "           WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1), " +
         "     s AS (SELECT lower(trim(agency)) k, COUNT(*) n FROM aby_sales " +
         "           WHERE trim(COALESCE(agency,'')) <> '' GROUP BY 1), " +
@@ -7545,7 +7557,7 @@ async function handleAdminReferrals(request, env) {
   // added together, because several people at one firm would each claim all of it.
   const roll =
     'WITH ' + PERSON_QUOTES_CTE + ', ' +
-    "     fq AS (SELECT lower(trim(broker_agency)) k, COUNT(*) n FROM quotes " +
+    "     fq AS (SELECT lower(trim(broker_agency)) k, COUNT(DISTINCT " + quoteRequestSql('') + ") n FROM quotes " +
     "            WHERE trim(COALESCE(broker_agency,'')) <> '' GROUP BY 1) " +
     'SELECT p.id, p.name, ' +
     '       (SELECT MIN(d.email) FROM broker_directory d WHERE d.person_id = p.id) AS email, ' +
@@ -7663,6 +7675,41 @@ function quoteFamilyOf(quoteNumber) {
   const s = String(quoteNumber || '').trim();
   const m = s.match(/^([A-Z]{2}\d{6}-\d{4})-(?:C|NC)(?:-\d+)?$/i);
   return m ? m[1] : s;
+}
+
+// ── ONE QUOTE REQUEST, HOWEVER MANY TIMES IT WAS RUN (Eric, 11-11-2026) ─────────────────────────
+// Eric: "think about ABY and how we can clean up some of the duplicate quotes - we often run multiple
+// versions, and they each show up as their own, so now it looks like some agencies are requesting way
+// more quotes than they really are."
+// MEASURED ON THE LIVE TABLE THAT NIGHT (read only): 6,324 rows are 6,090 requests; since 11-01-2025,
+// 679 rows are 639 requests. Typical repeats: a commission flip (-C then -NC), a product added minutes
+// later, the same employer re-priced days later for the SAME effective date.
+// THE RULE: one request = same agency + same employer + same effective date. A different effective
+// date is a different request (next year's renewal is new work). This REPLACES the 08-28 rule that
+// also split on products (Eric then: "c/nc should count once toward a broker"); a second product run
+// for the same employer and date is the same request.
+// ⛔ AN UNNAMED EMPLOYER IS NEVER MERGED. 1,485 rows say "(not stated)"; two different employers with
+// no name are indistinguishable, so each such row is its own request (the same guard as dedupe_quotes.py).
+// A missing effective date falls back to the month the quote was run.
+// ⛔ COUNTS ONLY. Nothing is deleted, merged or renumbered: the quote log still lists every run, each
+// with its own number and link, and marks the repeats.
+// Function declarations, not consts: they are hoisted, so a const above this line can call them.
+function quoteEmployerSql(a) {
+  const p = a ? a + '.' : '';
+  return "COALESCE(NULLIF(" + p + "client_match_key,''), lower(trim(COALESCE(" + p + "client_name,''))))";
+}
+function quoteIdentitySql(a) {
+  const p = a ? a + '.' : '';
+  const emp = quoteEmployerSql(a);
+  return "(CASE WHEN " + emp + " IN ('', '(not stated)', 'not stated') THEN " + p + "id " +
+    "ELSE " + emp + " || '|' || COALESCE(NULLIF(trim(" + p + "effective_date),''), substr(" + p + "created_at,1,7)) END)";
+}
+function quoteRequestSql(a) {
+  const p = a ? a + '.' : '';
+  const emp = quoteEmployerSql(a);
+  return "(CASE WHEN " + emp + " IN ('', '(not stated)', 'not stated') THEN " + p + "id " +
+    "ELSE lower(trim(COALESCE(" + p + "broker_agency,''))) || '|' || " + emp + " || '|' || " +
+    "COALESCE(NULLIF(trim(" + p + "effective_date),''), substr(" + p + "created_at,1,7)) END)";
 }
 
 function normName(s) {
@@ -12540,7 +12587,7 @@ async function handleAdminBrokers(request, env) {
     "SELECT b.id, b.email, b.name, b.phone, b.role, b.assigned_rep, b.created_at, b.last_login_at, " +
     "       CASE WHEN b.password_hash = '' THEN 1 ELSE 0 END AS pending, " +
     "       a.id AS agency_id, a.name AS agency_name, a.assigned_rep AS agency_rep, " +
-    "       (SELECT COUNT(*) FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '') AS quote_count " +
+    "       (SELECT COUNT(DISTINCT " + quoteRequestSql('q') + ") FROM quotes q WHERE lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '') AS quote_count " +
     "FROM brokers b LEFT JOIN agencies a ON a.id = b.agency_id " +
     where + " ORDER BY quote_count DESC, b.created_at DESC LIMIT 500";
   try {
@@ -12771,7 +12818,7 @@ async function handleAdminStats(request, env) {
       "       MAX(COALESCE(bd.assigned_rep, a.assigned_rep, b.assigned_rep)) AS rep, " +
       "       MAX(CASE WHEN bd.email IS NOT NULL THEN 1 ELSE 0 END) AS assignable, " +
       "       MAX(COALESCE(bd.assigned_rep,'')) AS own_rep, " +
-      "       COUNT(*) AS n, MAX(q.created_at) AS last_quote, " +
+      "       COUNT(DISTINCT " + quoteRequestSql('q') + ") AS n, MAX(q.created_at) AS last_quote, " +
       // GROUPS THIS PERSON SOLD. Eric, 2026-08-22: "the reason to pull in the clients is to try to
       // pair them with quotes so we can figure out which of our agents have sold groups and how
       // many". This is that pairing: an employer they quoted who is on our books today.
@@ -12813,7 +12860,7 @@ async function handleAdminStats(request, env) {
       // The page combines the counts and the drop-down shows each name separately.
       "       MAX(a.parent_id) AS parent_id, MAX(pa.name) AS parent_name, " +
       "       MAX(a.relationship) AS relationship, MAX(a.relationship_note) AS relationship_note, " +
-      "       COUNT(*) AS n, " +
+      "       COUNT(DISTINCT " + quoteRequestSql('q') + ") AS n, " +
       // ⚠️ Counts distinct identities the same way the agent table groups them, so "6 agents" and
       // the agent list can no longer disagree about what an agent is.
       "       COUNT(DISTINCT COALESCE(NULLIF(lower(trim(q.broker_email)),''), " +
@@ -12878,7 +12925,7 @@ async function handleAdminStats(request, env) {
       "                           THEN q.client_match_key END) AS won, " +
       "       COUNT(DISTINCT CASE WHEN cc.status = 'active' " +
       "                           THEN q.client_match_key END) AS kept, " +
-      "       COUNT(*) AS n " +
+      "       COUNT(DISTINCT " + quoteRequestSql('q') + ") AS n " +
       "FROM quotes q " +
       BROKER_JOIN + " " +
       "LEFT JOIN aby_clients cc ON cc.match_key = q.client_match_key " +
@@ -12891,7 +12938,7 @@ async function handleAdminStats(request, env) {
     // neither number was wrong on its own. A filter that silently covers only part of a page is
     // worse than no filter, because the parts it misses look like corroboration.
     const totals = await env.DB.prepare(
-      "SELECT (SELECT COUNT(*) FROM quotes q " + BROKER_JOIN + " WHERE 1=1 " + repFilter + sinceFilter + ") AS quotes, " +
+      "SELECT (SELECT COUNT(DISTINCT " + quoteRequestSql('q') + ") FROM quotes q " + BROKER_JOIN + " WHERE 1=1 " + repFilter + sinceFilter + ") AS quotes, " +
       "       (SELECT COUNT(*) FROM brokers b WHERE 1=1 " + repFilter + ") AS brokers, " +
       "       (SELECT COUNT(*) FROM agencies a WHERE 1=1 " +
                 (rep ? "AND lower(COALESCE(a.assigned_rep,'')) = ?" : '') + ") AS agencies"
@@ -12916,7 +12963,7 @@ async function handleAdminStats(request, env) {
         // just the Pending row -- a table with one filtered row and four unfiltered ones cannot
         // be added up, and the subtitle says which scope it is.
         // The pre-2026 counts are not lost: they are the Historic quotes by year card below.
-        "SELECT " + STATUS_EXPR + " AS status, COUNT(*) AS n, " +
+        "SELECT " + STATUS_EXPR + " AS status, COUNT(DISTINCT " + quoteRequestSql('q') + ") AS n, " +
         "       SUM(CASE WHEN q.first_year_value IS NOT NULL THEN 1 ELSE 0 END) AS valued, " +
         "       COALESCE(SUM(q.first_year_value),0) AS value " +
         "FROM quotes q " + BROKER_JOIN +
@@ -12934,7 +12981,7 @@ async function handleAdminStats(request, env) {
       // says nothing and buries the few that really are overdue.
       // ⛔ A DISPLAY boundary, not a disposition: no status is rewritten.
       const r2 = await env.DB.prepare(
-        "SELECT " + BUCKET_EXPR + " AS bucket, COUNT(*) AS n, " +
+        "SELECT " + BUCKET_EXPR + " AS bucket, COUNT(DISTINCT " + quoteRequestSql('q') + ") AS n, " +
         "       COALESCE(SUM(q.first_year_value),0) AS value " +
         "FROM quotes q " + BROKER_JOIN +
         " WHERE " + STATUS_EXPR + " IN ('P','I') AND substr(q.created_at,1,4) >= '2026' " +
@@ -12944,7 +12991,7 @@ async function handleAdminStats(request, env) {
       // ⭐ The other half of the same instruction: "we should have a historic quotes section that
       // shows quotes by year, 2025 first."
       const r3 = await env.DB.prepare(
-        "SELECT substr(q.created_at,1,4) AS yr, COUNT(*) AS n, " +
+        "SELECT substr(q.created_at,1,4) AS yr, COUNT(DISTINCT " + quoteRequestSql('q') + ") AS n, " +
         "       SUM(CASE WHEN " + STATUS_EXPR + " = 'S' THEN 1 ELSE 0 END) AS sold, " +
         "       COUNT(DISTINCT q.client_name) AS employers, " +
         "       COUNT(DISTINCT q.broker_agency) AS agencies " +
@@ -12965,7 +13012,7 @@ async function handleAdminStats(request, env) {
       // definition. Scoping it would make "fallen off" mean "quiet inside the window", which is
       // every agency outside the window.
       const r4 = await env.DB.prepare(
-        "SELECT " + AGENCY_EXPR + " AS agency_label, COUNT(*) AS n, " +
+        "SELECT " + AGENCY_EXPR + " AS agency_label, COUNT(DISTINCT " + quoteRequestSql('q') + ") AS n, " +
         "       MAX(q.created_at) AS last_quote, " +
         "       SUM(CASE WHEN q.created_at >= datetime('now','-365 days') THEN 1 ELSE 0 END) AS recent, " +
         // 🔴🔴 THE COMMA AT THE END OF THIS LINE IS LOAD-BEARING AND WAS MISSING FOR ONE DEPLOY.
@@ -13095,7 +13142,7 @@ async function statsPerBlock(env, firstError, rep) {
     "SELECT " + AGENT_KEY + " AS key, " +
     "       MAX(NULLIF(trim(q.broker_email),'')) AS email, " +
     "       MAX(NULLIF(trim(q.broker_name),'')) AS name, " +
-    "       MAX(NULLIF(trim(q.broker_agency),'')) AS agency, NULL AS rep, COUNT(*) AS n, " +
+    "       MAX(NULLIF(trim(q.broker_agency),'')) AS agency, NULL AS rep, COUNT(DISTINCT " + quoteRequestSql('q') + ") AS n, " +
     "       MAX(q.created_at) AS last_quote " +
     "FROM quotes q" + joinIf + AGENT_EMAIL_JOIN + "WHERE 1=1 " + repFilter +
     " GROUP BY key ORDER BY n DESC LIMIT 1000").bind(...args).all());
@@ -13103,7 +13150,7 @@ async function statsPerBlock(env, firstError, rep) {
 
   const agency = await attempt('byAgency', () => env.DB.prepare(
     "SELECT COALESCE(NULLIF(trim(q.broker_agency),''), '(no agency)') AS agency_label, " +
-    "       NULL AS agency_id, NULL AS rep, COUNT(*) AS n, " +
+    "       NULL AS agency_id, NULL AS rep, COUNT(DISTINCT " + quoteRequestSql('q') + ") AS n, " +
     "       COUNT(DISTINCT COALESCE(NULLIF(lower(trim(q.broker_email)),''), " +
     "                               NULLIF(lower(trim(q.broker_name)),''))) AS agents, " +
     "       MAX(q.created_at) AS last_quote " +
@@ -13113,12 +13160,12 @@ async function statsPerBlock(env, firstError, rep) {
   if (agency) out.byAgency = agency.results || [];
 
   const totals = await attempt('totals', () => env.DB.prepare(
-    "SELECT (SELECT COUNT(*) FROM quotes q" + joinIf + "WHERE 1=1 " + repFilter +
+    "SELECT (SELECT COUNT(DISTINCT " + quoteRequestSql('q') + ") FROM quotes q" + joinIf + "WHERE 1=1 " + repFilter +
     ") AS quotes, NULL AS brokers, NULL AS agencies").bind(...args).first());
   if (totals) out.totals = totals;
 
   const st = await attempt('byStatus', () => env.DB.prepare(
-    "SELECT COALESCE(q.status,'P') AS status, COUNT(*) AS n, " +
+    "SELECT COALESCE(q.status,'P') AS status, COUNT(DISTINCT " + quoteRequestSql('q') + ") AS n, " +
     "       SUM(CASE WHEN q.first_year_value IS NOT NULL THEN 1 ELSE 0 END) AS valued, " +
     "       COALESCE(SUM(q.first_year_value),0) AS value FROM quotes q" + joinIf +
     "WHERE substr(q.created_at,1,4) >= '2026' " + repFilter +
@@ -13137,7 +13184,7 @@ async function statsPerBlock(env, firstError, rep) {
     "  WHEN q.created_at >= datetime('now','-7 days')  THEN 'week' " +
     "  WHEN q.created_at >= datetime('now','-30 days') THEN 'month' " +
     "  WHEN q.created_at >= datetime('now','-90 days') THEN 'quarter' " +
-    "  ELSE 'older' END AS bucket, COUNT(*) AS n, COALESCE(SUM(q.first_year_value),0) AS value " +
+    "  ELSE 'older' END AS bucket, COUNT(DISTINCT " + quoteRequestSql('q') + ") AS n, COALESCE(SUM(q.first_year_value),0) AS value " +
     "FROM quotes q" + joinIf + "WHERE COALESCE(q.status,'P') IN ('P','I') " +
     "  AND substr(q.created_at,1,4) >= '2026' " + repFilter +
     " GROUP BY bucket").bind(...args).all());
@@ -19952,6 +19999,9 @@ function render() {
         // all of them carries no information (a flag true of every row buries the rows where it
         // means something).
         (Number(q.version || 1) > 1 ? '<br><span style="font-size:.8rem;color:#205aa6;font-weight:600">version ' + Number(q.version) + '</span>' : '') +
+        // REPEAT RUNS (11-11-2026): the same agency, employer and effective date run more than once.
+        // Counted ONCE everywhere quotes are counted; marked here so a re-run does not read as new work.
+        (Number(q.runs || 1) > 1 ? '<br><span style="font-size:.8rem;color:#5b4a8a;font-weight:600" title="Same agency, employer and effective date as ' + (Number(q.runs) - 1) + ' other run(s). Counted as one quote request.">run ' + Number(q.run_no || 1) + ' of ' + Number(q.runs) + '</span>' : '') +
         (String(q.retired_at || "").trim() ? '<br><span style="font-size:.8rem;color:#8a5a00;font-weight:600" title="Anyone opening this link is told the quote was replaced">link retired</span>' : '') +
       '</td>';
 
