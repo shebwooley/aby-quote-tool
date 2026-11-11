@@ -2505,7 +2505,11 @@ async function handleSaveCommitment(request, env, ctx) {
     const notify = async () => {
       const outcome = await sendCommitmentEmail(env, {
         quoteNumber, employerName, authSigner, authEmail, authPhone, brokerEmail, products,
-        origin: new URL(request.url).origin,
+        // 11-11-2026: the button pointed at the workers.dev address (the signing form posts there), and the
+        // Over the River email was "Delivered" by Resend yet never reached Eric or Niels, while every quote email
+        // (linking abyquotes.com) did. A workers.dev link in mail from abybenefits.com is the classic filter bait.
+        // Same rule as the apply link below: workers.dev becomes abyquotes.com; any other origin stays as it is.
+        origin: new URL(request.url).hostname.endsWith('.workers.dev') ? 'https://abyquotes.com' : new URL(request.url).origin,
       });
       await recordNotifyOutcome(env, id, outcome);
     };
