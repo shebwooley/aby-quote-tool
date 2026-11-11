@@ -93,6 +93,7 @@ import {
 // F-609: one click from BenefitLab into the quote tool. Its own file, like the above.
 import { HANDOFF_MIGRATIONS, handleBrokerHandoff, handleHandoffLanding } from './lib/benefitlab-handoff.js';
 import { handleQuotePdf } from './lib/pdf.js';
+import { adminTeamHTML, internalRepsForOverlay } from './lib/team.js';
 import { cleanRequestProducts, parseRequestProducts, productName, productLines, effectiveForDisplay,
          requestRunUrl, handleBrokerRequests, handleQuoteLink } from './lib/quote-request-details.js';
 
@@ -465,6 +466,11 @@ export default {
     if (path === '/admin/referrals') {
       return withAuth(request, env, () => new Response(adminReferralsHTML(), {
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }));
+    }
+    if (path === '/admin/team') {
+      return withAuth(request, env, () => new Response(adminTeamHTML(ADMIN_HEADER_CSS, abyAdminNav('/admin/team')), {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+      }));
     }
     if (path === '/admin/forms') {
       return withAuth(request, env, () => new Response(adminFormsHTML(), {
@@ -1069,6 +1075,22 @@ async function handleListQuotes(request, env) {
     const totalRow = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM quotes ${whereSql}`
     ).bind(...args).first();
+    // THE TAB COUNTS FOR THE WHOLE LOG, not just the rows sent (Fable review 11-10-2026, F2). The
+    // tabs filter in the browser, so with "Most recent 300" the Sold tab counted sold quotes among
+    // those 300 only and said so as if it were everything. The page now shows "12 of 140" when the
+    // two differ. Excludes history the same way the page does (its HISTORIC_BEFORE, '2026').
+    // A failure here only costs the "of N" hint; it must never take the log down.
+    let statusCounts = null;
+    try {
+      const sc = await env.DB.prepare(
+        `SELECT COALESCE(status, 'P') AS s, COUNT(*) AS n FROM quotes ${whereSql}` +
+        (whereSql ? ' AND ' : ' WHERE ') + "substr(created_at,1,4) >= '2026' GROUP BY 1"
+      ).bind(...args).all();
+      statusCounts = {};
+      (sc.results || []).forEach(function (r) { statusCounts[r.s] = r.n; });
+    } catch (err) {
+      console.warn('status counts unavailable:', String(err && err.message || err));
+    }
     // SALES WITH NO QUOTE, SHOWN IN THE SOLD TAB (Eric, 2026-08-21): "it would be worth adding
     // the other sold ones to the sold tab with the sold products and just putting no quote in
     // the quote number field and then we can update it if we find the quote."
@@ -1143,6 +1165,7 @@ async function handleListQuotes(request, env) {
 
     return jsonResp({ quotes: (result.results || []).concat(salesOnly),
                       total: (totalRow && totalRow.n) || 0,
+                      statusCounts: statusCounts,
                       salesWithoutQuote: salesOnly.length,
                       limit: limit, offset: offset });
   } catch (err) {
@@ -4686,7 +4709,16 @@ async function handleCrmAgencies(request, env) {
     '           SELECT c.id FROM agencies c JOIN kin ON c.parent_id = kin.id' +
     '         ) SELECT SUM(cq.quotes) FROM kin JOIN agencies k ON k.id = kin.id' +
     '           JOIN q cq ON cq.k = lower(trim(k.name))), 0) AS quotes, ' +
-    '       q.last_quote, ' +
+    '       q.last_quote AS own_last_quote, ' +
+    // THE LAST QUOTE ROLLS UP LIKE THE COUNT (11-10-2026), so a parent whose branches quoted last
+    // month does not read as "former" or drop off the quoted-recently list.
+    "       NULLIF(MAX(COALESCE(q.last_quote, ''), COALESCE((" +
+    '         WITH RECURSIVE kin3(id) AS (' +
+    '           SELECT id FROM agencies WHERE parent_id = a.id' +
+    '           UNION' +
+    '           SELECT c.id FROM agencies c JOIN kin3 ON c.parent_id = kin3.id' +
+    '         ) SELECT MAX(cq2.last_quote) FROM kin3 JOIN agencies k3 ON k3.id = kin3.id' +
+    "           JOIN q cq2 ON cq2.k = lower(trim(k3.name))), '')), '') AS last_quote, " +
     '       COALESCE(s.sales, 0) AS own_sales, ' +
     '       COALESCE(s.sales, 0) + COALESCE((' +
     '         WITH RECURSIVE kin2(id) AS (' +
@@ -4790,6 +4822,14 @@ async function handleCrmAgencies(request, env) {
     // "Never quoted" is the prospecting list; "has quoted" is the relationship list.
     if (quoted === 'no') rows = rows.filter((x) => !x.quotes);
     if (quoted === 'yes') rows = rows.filter((x) => x.quotes > 0);
+    // Eric, 11-10-2026: "separate our prospective brokers differently and mainly show ones who have quoted in the
+    // last couple years." 'recent' = a quote in the last 2 years (the same 730 days that makes a firm "former"),
+    // '12m' = the last 12 months. On the firm's rolled-up last quote, so a parent counts its branches.
+    if (quoted === 'recent' || quoted === '12m') {
+      const days = quoted === '12m' ? 365 : 730;
+      const since = Date.now() - days * 86400000;
+      rows = rows.filter((x) => x.quotes > 0 && x.last_quote && Date.parse(x.last_quote) >= since);
+    }
 
     return jsonResp({
       agencies: rows,
@@ -8103,6 +8143,7 @@ ${ADMIN_HEADER_CSS}
  .firmname{color:#12263f;font-weight:600;text-decoration:none}
  .firmname:hover{color:#1a5c3a;text-decoration:underline}
  .firmmeta{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-top:2px}
+ .musthave{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:99px;background:#1a5c3a;color:#fff;font-size:13px;font-weight:700;vertical-align:1px}
  .branches{font-size:11.5px;color:#1a5c3a;background:#e8f4ec;border-radius:9px;padding:1px 7px;font-weight:600}
  .firmmeta .muted{font-size:11.5px}
  .azbar{display:flex;flex-wrap:wrap;gap:2px;margin:0 0 12px;align-items:center}
@@ -8394,9 +8435,11 @@ ${abyAdminNav('/admin/brokers')}
       </details>
       <div class="mfilters">
         <select id="mQuoted" onchange="loadMkt()">
-          <option value="">All firms</option>
+          <option value="recent" selected>Quoted in the last 2 years</option>
+          <option value="12m">Quoted in the last 12 months</option>
+          <option value="yes">Has ever quoted</option>
           <option value="no">Never quoted</option>
-          <option value="yes">Has quoted</option>
+          <option value="">All firms</option>
         </select>
         <select id="mPriority" onchange="loadMkt()">
           <option value="">Any priority</option>
@@ -9645,7 +9688,11 @@ ${abyAdminNav('/admin/brokers')}
      return;
    }
    mktRows = d.agencies || [];
-   q('mktSub').textContent = 'Every firm we could work, including the ones that have never quoted.'
+   var qv = q('mQuoted').value;
+   q('mktSub').textContent = ({ recent: 'Firms that quoted with us in the last 2 years. Niels’s must-haves first, then the most recent quote.',
+       '12m': 'Firms that quoted with us in the last 12 months. Niels’s must-haves first, then the most recent quote.',
+       yes: 'Every firm that has ever quoted with us.', no: 'Firms that have never quoted with us.' }[qv]
+       || 'Every firm we could work, including the ones that have never quoted.')
      + (d.excludedAcquired ? ' ' + d.excludedAcquired + ' acquired names are hidden, because nobody can call them.' : '')
      + (d.excludedCompound ? ' ' + d.excludedCompound + ' rows whose name is two firms at once ("MMA; MHBT") are hidden too'
                            + ' \u2014 they came out of the quote log and are not firms anybody answers to.' : '')
@@ -10350,6 +10397,16 @@ ${abyAdminNav('/admin/brokers')}
      if (pid && byId[pid]) (kids[pid] = kids[pid] || []).push(rows[j]);
    }
    var tops = rows.filter(function(x){ return !(x.parent_id && byId[x.parent_id]); });
+   // NIELS'S MUST-HAVES FIRST (Eric, 11-10-2026: Niels marked them by making himself the owner). Then, on a
+   // quoted-recently list, the most recent quote first; otherwise A-Z as before. Choosing a letter keeps A-Z.
+   var recentView = (q('mQuoted').value === 'recent' || q('mQuoted').value === '12m') && !mktLetter;
+   tops = tops.slice().sort(function(x, y){
+     var nx = String(x.assigned_rep || '').toLowerCase() === 'niels' ? 0 : 1;
+     var ny = String(y.assigned_rep || '').toLowerCase() === 'niels' ? 0 : 1;
+     if (nx !== ny) return nx - ny;
+     if (recentView) return String(y.last_quote || '').localeCompare(String(x.last_quote || ''));
+     return 0;
+   });
 
    var h = '<div style="overflow-x:auto">'
          + '<table class="grid" style="min-width:1080px"><colgroup>'
@@ -10363,7 +10420,7 @@ ${abyAdminNav('/admin/brokers')}
          + '<th>Firm</th><th>St</th><th class="c">Agents</th><th class="c">Quotes</th>'
          // ⭐⭐ SALES SITS BESIDE QUOTES BECAUSE THE PAIR IS THE POINT. Quotes alone says who ASKS;
          // it takes both to see who BUYS, and this is the page you decide who to call from.
-         + '<th class="c">Sales</th><th>Status</th>'
+         + '<th class="c">Sales</th><th>Last quote</th>'
          + '<th>Priority</th><th>Owner</th><th>Tags</th><th class="date">Last contact</th>'
          + '</tr></thead><tbody>';
 
@@ -10389,21 +10446,22 @@ ${abyAdminNav('/admin/brokers')}
         + '<td class="firmcell"' + (depth ? ' style="padding-left:20px"' : '') + '>'
         + '<a class="firmname" href="?firm=' + encodeURIComponent(a.id) + '" onclick="openFirm('
         + "'" + a.id + "'" + ');return false">' + esc(a.name) + '</a>'
-        + ((branches || depth || a.needs_review)
+        + (String(a.assigned_rep || '').toLowerCase() === 'niels' && !depth
+            ? '<span class="musthave" title="Niels is the owner: one of his must-haves">Must have</span>' : '')
+        + ((branches || depth)
             ? '<div class="firmmeta">'
               + branches
               + (depth ? '<span class="muted">branch</span>' : '')
-              + (a.needs_review ? '<span class="rev" title="' + esc(a.needs_review) + '">check the name</span>' : '')
               + '</div>'
             : '')
         + '</td>'
         + '<td' + (whereTip ? ' title="' + esc(whereTip) + '"' : '') + '>' + where + '</td>'
         + '<td class="c">' + (a.agents || '<span class="muted">0</span>') + '</td>'
-        + '<td class="c">' + (a.quotes ? a.quotes : '<span class="never">never</span>') + '</td>'
+        + '<td class="c">' + (a.quotes ? a.quotes : '<span class="muted">0</span>') + '</td>'
         // ⚠️ NO SALES and NEVER QUOTED are different facts and must not print the same way. A firm
         // that quoted 40 times and sold nothing is the finding; a dash there would hide it.
         + '<td class="c">' + (a.sales ? a.sales : '<span class="muted">0</span>') + '</td>'
-        + '<td class="wrapcell">' + statusCell(a) + '</td>'
+        + '<td class="wrapcell">' + lastQuoteCell(a) + '</td>'
         + '<td>' + priSel(a.id, a.priority) + '</td>'
         + '<td>' + repSel(a.id, a.assigned_rep) + '</td>'
         + '<td class="wrapcell">' + (tags || '<span class="muted">&mdash;</span>') + '</td>'
@@ -11672,9 +11730,12 @@ ${abyAdminNav('/admin/brokers')}
  var QS = new URLSearchParams(location.search || '');
  var wantsMkt = QS.get('view') === 'marketing';
  var wantsQuoted = QS.get('quoted') || '';
- if (wantsQuoted === 'no' || wantsQuoted === 'yes') {
+ // The list opens on "quoted in the last 2 years" (11-10-2026). A ?firm= link must still find a firm that has not
+ // quoted lately, so it opens on All firms; ?quoted=all asks for All firms too.
+ if (wantsFirm && !wantsQuoted) wantsQuoted = 'all';
+ if (['no', 'yes', 'recent', '12m', 'all'].indexOf(wantsQuoted) !== -1) {
    var qsel = document.getElementById('mQuoted');
-   if (qsel) qsel.value = wantsQuoted;
+   if (qsel) qsel.value = wantsQuoted === 'all' ? '' : wantsQuoted;
  }
  try {
    setView(wantsFirm || wantsMkt || localStorage.getItem('abyCrmView') === 'marketing' ? 'marketing' : 'performance');
@@ -11690,6 +11751,17 @@ ${abyAdminNav('/admin/brokers')}
  // column nobody reads.
  var RECORDED = ['never quoted','quoted once','occasional','regular','former'];
 
+ // THE LAST QUOTE, IN PLACE OF THE STATUS WORDS (Fable review 11-10-2026, F4 and F16): "never" beside "never
+ // quoted" and "occasional" beside "3" said one fact twice. The date says what the words summarized; a status
+ // somebody RECORDED still shows under it, because that history is a real observation.
+ function lastQuoteCell(a){
+   var out = a.last_quote ? '<span>' + day(a.last_quote) + '</span>'
+                          : '<span class="muted">never quoted</span>';
+   var rec = a.recordedStatus, live = a.derivedStatus || '';
+   if (rec && rec !== live) out += '<div style="font-size:13px;color:#7a5c12">was ' + esc(rec) + ' &middot; ' + day(a.recordedAt) + '</div>';
+   if (a.last_quote && live === 'former') out += '<div style="font-size:13px;color:#7a5c12">former</div>';
+   return out;
+ }
  function statusCell(a){
    var live = a.derivedStatus || '';
    var rec = a.recordedStatus;
@@ -16819,6 +16891,8 @@ const ABY_ADMIN_LINKS = [
   // ⭐ 10-16-2026 (Eric: "a forms page ... with links for each of those that we could copy and email to someone"). Behind
   // withAuth like the rest; the FILES it links to are public, so the person who receives a link needs no login.
   { href: '/admin/forms',      label: 'Forms',     more: true },
+  // Eric, 11-10-2026: copy an ABY person's contact details or an intro sentence into an email (lib/team.js).
+  { href: '/admin/team',       label: 'Team',      more: true },
   // Last on purpose: it is a reference, not a place work happens. ⛔ It is behind withAuth like
   // every other admin page -- the guide names how ABY decides who to chase, which is not
   // something a broker should read about themselves.
@@ -18436,7 +18510,7 @@ async function handleMigrate(env) {
 // ABY session. It monkey-patches the engine at runtime (state + applyAdjustment)
 // and attaches state/adjustment to the save. No public file is touched.
 function abyInternalJS() {
-  return `` + ABY_INTERNAL_JS + ``;
+  return `` + ABY_INTERNAL_JS.replace('/*TEAM*/[]/*END*/', JSON.stringify(internalRepsForOverlay())) + ``;
 }
 
 // ─── Utilities ─────────────────────────────────────────────────────────────────
@@ -18693,7 +18767,7 @@ ${ADMIN_HEADER_CSS}
 .logq>summary .hint{font-weight:400;color:#4b5563;font-size:.8rem}
 .logq .body{padding:4px 24px 18px}
 .logq .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
-.logq label.f{display:flex;flex-direction:column;gap:3px;font-size:.72rem;color:#44546a;
+.logq label.f{display:flex;flex-direction:column;gap:3px;font-size:.82rem;color:#44546a;
               text-transform:uppercase;letter-spacing:.03em}
 .logq input,.logq select{padding:.45rem .6rem;border:1px solid #ddd;border-radius:6px;font-size:.9rem}
 .logq input:focus,.logq select:focus{outline:none;border-color:#1a5c3a}
@@ -18756,14 +18830,14 @@ th.sorted .arr{color:#1a5c3a}
 /* Eric: "the pill for ABY and Direct Link look weird." They were solid saturated blocks with white
    text, which reads as a STATUS badge -- the loudest thing in a row whose subject is the client.
    Tinted background, dark text, and no shouting. */
-.origin{display:inline-block;padding:2px 8px;border-radius:5px;font-size:.72rem;font-weight:600;
+.origin{display:inline-block;padding:2px 8px;border-radius:5px;font-size:.8rem;font-weight:600;
         letter-spacing:.01em;white-space:nowrap;border:1px solid transparent}
 td{padding:11px 14px;font-size:.875rem;border-top:1px solid #f0f0f0;vertical-align:middle}
 tbody tr.data-row{cursor:pointer;transition:background .1s}
 tbody tr.data-row:hover td{background:#f6fbf7}
 tbody tr.data-row.expanded td{background:#f0f8f2;border-top-color:#d4ead9}
 .qnum{font-family:monospace;font-size:.82rem;font-weight:700;color:#1a5c3a;white-space:nowrap}
-.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:.72rem;font-weight:700;letter-spacing:.03em}
+.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:.8rem;font-weight:700;letter-spacing:.03em}
 .badge-c{background:#e8f5ee;color:#1a6640}
 .badge-nc{background:#fdf3e8;color:#a85400}
 .date-main{font-size:.875rem}
@@ -18802,7 +18876,7 @@ td.repcell{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
    it is only two characters wide when empty. A mousedown handler focuses the real editor, so the
    placeholder behaves like the thing it stands in for. It is still hidden on hover and on focus.
    NOTE, no backticks anywhere in this file: it is one giant template literal. */
-.ip-ph{color:#bbb;font-style:italic;pointer-events:auto;cursor:text}
+.ip-ph{color:#6b7280;font-style:italic;pointer-events:auto;cursor:text}
 .ip:focus + .ip-ph,.ip:hover + .ip-ph{display:none}
 tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px solid #d4ead9}
 .detail-inner{max-width:none}
@@ -18819,11 +18893,11 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
 /* The placeholder cell that keeps the grid four wide when there is no link source: it holds the
    shape without drawing a divider against empty space. */
 .detail-item:empty{border-left-color:transparent}
-.detail-item label{display:block;font-size:.68rem;font-weight:700;color:#4b5563;
+.detail-item label{display:block;font-size:.8rem;font-weight:700;color:#4b5563;
                     text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px}
 .detail-item span{font-size:.875rem;color:#1a1a1a;word-break:break-word}
 .detail-notes{padding:10px 16px}
-.detail-notes label{display:block;font-size:.68rem;font-weight:700;color:#4b5563;
+.detail-notes label{display:block;font-size:.8rem;font-weight:700;color:#4b5563;
                     text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
 /* ⚠️ Chips WRAP now. They were nowrap, which is what let one of them set a floor the whole table
    had to obey. A product label with its count is long enough that no sensible column width fits it
@@ -18843,6 +18917,7 @@ tr.detail-row td{background:#f5fbf6;padding:0;border-top:none;border-bottom:2px 
 .tab-count{font-size:.75rem;background:#e8f5ee;color:#1a6640;border-radius:99px;
            padding:1px 7px;margin-left:5px;font-weight:700;display:inline-block}
 .tab.active .tab-count{background:#1a5c3a;color:white}
+.tab-of{font-weight:600;opacity:.85}
 /* A separator instead of a gap. Eric: "we don't need so much space between the sections" -- the
    answer to "which block am I looking at" is a LINE, and a line costs no vertical room. */
 .direct-tag{display:inline-block;padding:1px 8px;border-radius:10px;background:#eef2f7;
@@ -19324,6 +19399,7 @@ function syncSortIndicators() {
 // recent 300; this page used to print the length of what it received and call that the count,
 // so a book of 1,795 read as "300 quotes".
 var serverTotal = 0;
+var serverStatusCounts = null;   // per status, whole log (not just the rows loaded); see the tab counts
 
 // ⭐ WHAT THE TOOLBAR'S "how much" CONTROL MEANS, IN ONE PLACE.
 // Eric, 2026-08-19, after the import left 1,495 quotes unreachable: "I think we should instead be
@@ -19377,6 +19453,7 @@ async function load(q) {
   quotes = data.quotes || [];
   // How many MATCHED on the server, versus how many it sent. render() needs both to tell the truth.
   serverTotal = (typeof data.total === 'number') ? data.total : quotes.length;
+  serverStatusCounts = data.statusCounts || null;
   render();
 }
 
@@ -19428,7 +19505,12 @@ const ORIGIN_LABEL = { ABY: 'ABY', dashboard: 'Dashboard', direct: 'Broker' };
 function originBadge(q) {
   var who = (q.ran_by_who || '').trim();
   if (originOf(q) === 'ABY' && who && who !== 'office') {
-    return who.charAt(0).toUpperCase() + who.slice(1);
+    var name = who.charAt(0).toUpperCase() + who.slice(1);
+    // Fable review 11-10-2026 (F3): when the person who ran it is also the Rep, the row said
+    // "Niels" twice and read as a duplicate. Then the badge says ABY; the Rep column has the name.
+    var rep = String(q.rep_name || '').trim().split(/[ ]+/)[0].toLowerCase();
+    if (rep && rep === who.toLowerCase()) return ORIGIN_LABEL.ABY;
+    return name;
   }
   return ORIGIN_LABEL[originOf(q)];
 }
@@ -19682,12 +19764,21 @@ function render() {
     var y = String(q.created_at || '').slice(0, 4);
     return !(y && y < HISTORIC_BEFORE);
   });
-  ['P','S','D'].forEach(function(s) {
+  // All five tabs (Fable review 11-10-2026, F1: this loop was P, S, D only, so In process and
+  // No Response never showed a count even with rows in them).
+  // "12 of 140": the first number is what this list holds, the second the whole log, shown only
+  // when they differ (the list is the most recent 300 by default; F2).
+  ['P','I','S','D','N'].forEach(function(s) {
     var btn = document.querySelector('.tab[data-status="' + s + '"]');
     if (!btn) return;
     var n = live.filter(function(q){ return (q.status || 'P') === s; }).length;
+    var nQuotes = live.filter(function(q){ return (q.status || 'P') === s && !q.is_sale_without_quote; }).length;
+    var all = serverStatusCounts ? Number(serverStatusCounts[s] || 0) : nQuotes;
     var label = {P:'Pending',I:'In process',S:'Sold',D:'Dead',N:'No Response'}[s];
-    btn.innerHTML = label + (n ? ' <span class="tab-count">' + n + '</span>' : '');
+    var more = all > nQuotes ? ' <span class="tab-of">of ' + (all + (n - nQuotes)).toLocaleString() + '</span>' : '';
+    btn.innerHTML = label + ((n || all) ? ' <span class="tab-count">' + n.toLocaleString() + more + '</span>' : '');
+    btn.title = all > nQuotes ? ('This list shows ' + n + '; the whole log has ' + (all + (n - nQuotes)) +
+      '. Pick All quotes in Show to see every one.') : '';
   });
 
   var histRows = quotes.filter(function(q){
@@ -19839,15 +19930,15 @@ function render() {
           (originOf(q) === 'dashboard' ? 'Handed over from the BenefitLab dashboard (carries a client id)'
            : originOf(q) === 'direct' ? 'Run on the shared link - broker typed their own details'
            : 'Run by ABY from the admin') + '">' + originBadge(q) + '</span>' +
-        (q.adjustment ? '<br><span style="font-size:.72rem;color:#b8860b" title="' + esc(q.adjustment_note || "") + '">price adjusted</span>' : '') +
+        (q.adjustment ? '<br><span style="font-size:.8rem;color:#b8860b" title="' + esc(q.adjustment_note || "") + '">price adjusted</span>' : '') +
         // VERSION AND RETIREMENT, ON THE ROW. Eric asked to be able to "choose among different
         // versions", and choosing starts with SEEING that there is more than one -- a v2 whose
         // only difference from v1 is the number would otherwise look like a duplicate row.
         // v1 shows nothing, because every quote in fifteen years of history is v1 and a badge on
         // all of them carries no information (a flag true of every row buries the rows where it
         // means something).
-        (Number(q.version || 1) > 1 ? '<br><span style="font-size:.72rem;color:#205aa6;font-weight:600">version ' + Number(q.version) + '</span>' : '') +
-        (String(q.retired_at || "").trim() ? '<br><span style="font-size:.72rem;color:#8a5a00;font-weight:600" title="Anyone opening this link is told the quote was replaced">link retired</span>' : '') +
+        (Number(q.version || 1) > 1 ? '<br><span style="font-size:.8rem;color:#205aa6;font-weight:600">version ' + Number(q.version) + '</span>' : '') +
+        (String(q.retired_at || "").trim() ? '<br><span style="font-size:.8rem;color:#8a5a00;font-weight:600" title="Anyone opening this link is told the quote was replaced">link retired</span>' : '') +
       '</td>';
 
     row.addEventListener('click', function(e){
@@ -20143,7 +20234,7 @@ function esc(s) {
 }
 
 async function logout() {
-  await fetch('/api/admin/logout');
+  await fetch('/api/admin/logout', { method: 'POST' });
   location.href = '/admin';
 }
 
@@ -20382,7 +20473,7 @@ load();
 // can record: we are not quoting this.
 function rqEsc(v) { return esc(v == null ? '' : String(v)); }
 
-function rqDash() { return '<span style="color:#bbb">-</span>'; }
+function rqDash() { return '<span style="color:#6b7280">-</span>'; }
 
 function rqDate(iso) {
   if (!iso) return '';
@@ -21391,15 +21482,10 @@ const ABY_INTERNAL_JS = `
   // ⭐ They are ABY staff who are NOT in sales -- account managers and others who field quote
   // requests from brokers and clients. No job title is set because Eric said "many but not all are
   // account managers", and guessing one each would put a wrong job title on a client proposal.
-  var ABY_INTERNAL_REPS = [
-    { id: 'sara',   name: 'Sara Wallace',    title: '', phone: '(817) 510-5843', email: 'sara@abybenefits.com'   },
-    { id: 'mark',   name: 'Mark Tawadrous',  title: '', phone: '(817) 510-5841', email: 'mark@abybenefits.com'   },
-    { id: 'martha', name: 'Martha Martinez', title: '', phone: '(817) 510-5838', email: 'martha@abybenefits.com' },
-    { id: 'sam',    name: 'Sam Kimbrell',    title: '', phone: '(817) 510-5845', email: 'sam@abybenefits.com'    },
-    { id: 'joe',    name: 'Joe Schoppe',     title: '', phone: '(817) 510-5839', email: 'joe@abybenefits.com'    },
-    { id: 'katie',  name: 'Katie Tawadrous', title: '', phone: '(817) 510-5846', email: 'katie@abybenefits.com'  },
-    { id: 'gage',   name: 'Gage Bridges',    title: '', phone: '(817) 510-5847', email: 'gage@abybenefits.com'   }
-  ];
+  // The seven account managers come from lib/team.js, the ONE staff list (Fable review 11-10-2026, F10).
+  // The [] below is a placeholder, filled at serve time (see the line returning ABY_INTERNAL_JS): the page checker
+  // parses this literal as written, so it must stay valid JavaScript on its own.
+  var ABY_INTERNAL_REPS = /*TEAM*/[]/*END*/;
   if (window.ABYQuote && Array.isArray(window.ABYQuote.salesReps)) {
     ABY_INTERNAL_REPS.forEach(function (r) {
       var already = window.ABYQuote.salesReps.some(function (x) { return x.id === r.id; });
