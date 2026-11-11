@@ -93,9 +93,9 @@ import {
 // F-609: one click from BenefitLab into the quote tool. Its own file, like the above.
 import { HANDOFF_MIGRATIONS, handleBrokerHandoff, handleHandoffLanding } from './lib/benefitlab-handoff.js';
 import { handleQuotePdf } from './lib/pdf.js';
-import { adminTeamHTML, internalRepsForOverlay } from './lib/team.js';
+import { adminTeamHTML, internalRepsForOverlay, ABY_TEAM } from './lib/team.js';
 import { cleanRequestProducts, parseRequestProducts, productName, productLines, effectiveForDisplay,
-         requestRunUrl, handleBrokerRequests, handleQuoteLink } from './lib/quote-request-details.js';
+         requestRunUrl, handleBrokerRequests, handleQuoteLink, originProduct } from './lib/quote-request-details.js';
 
 export default {
   // The daily cron (wrangler.jsonc triggers): files sent through the secure upload are deleted 90 days on.
@@ -1430,8 +1430,8 @@ async function sendQuoteRequestEmail(env, r, origin) {
     '<p>' +
     (runUrl ? '<a href="' + esc((origin || '') + runUrl) + '" style="background:#1a5e43;' + btn + '">Run this quote</a>' : '') +
     '<a href="' + esc(origin || '') + '/admin?view=requests" style="background:#143c73;' + btn + '">Open the requests</a></p>' +
-    '<p style="color:#5b6b7f;font-size:13px">This came in from BenefitLab' +
-    (r.origin ? ' (' + esc(r.origin) + ')' : '') +
+    // The product it came through, by name (Eric, 11-10-2026), never the caller's internal tag.
+    '<p style="color:#5b6b7f;font-size:13px">This came in through ' + esc(originProduct(r.origin) || 'BenefitLab') +
     '. It is waiting on the Requests tab of the quote log, and it clears itself as soon as a quote ' +
     'is saved for this employer.' + (runUrl ? ' Run this quote opens the quote form with these answers filled in.' : '') +
     '</p></div>';
@@ -1476,7 +1476,7 @@ async function handleAdminQuoteRequests(request, env) {
       'FROM quote_request ORDER BY created_at DESC LIMIT 300'
     ).all();
     // ⭐ 10-25-2026: each row carries its "Run this quote" link, built here by the same function the email uses.
-    const rows = (r.results || []).map(function (x) { return Object.assign({}, x, { run_url: requestRunUrl(x) }); });
+    const rows = (r.results || []).map(function (x) { return Object.assign({}, x, { run_url: requestRunUrl(x), source: originProduct(x.origin) }); });
     return jsonResp({ requests: rows });
   } catch (err) {
     console.error('handleAdminQuoteRequests failed:', err);
@@ -3618,13 +3618,15 @@ async function handleQuoteNote(request, id, env) {
  * now asserts they agree -- one fix applied to one copy of a pattern is not applied to the
  * pattern (TRAPS #197).
  *
- * ⛔ DELIBERATELY THE PUBLIC TWO ONLY. The seven ABY staff on the internal overlay are account
- * managers who FIELD requests; the rep named on a quote is who it came from. If that turns out
- * to be wrong it is Eric's call, not a tidy-up.
+ * ✅ ERIC'S CALL, 11-10-2026: this said "deliberately the public two only" and left the call to him. He made it:
+ * account managers occasionally run quotes, so this admin list has everyone; the PUBLIC page keeps the two.
  */
+// 11-10-2026, Eric: "Occasionally account managers will run quotes, so on the admin version of the quote tool, we
+// should have everyone listed. But on the one available to outside agents, it should just have me and Niels." This
+// screen is admin-only, so it lists the whole team from the ONE staff list (lib/team.js); Eric and Niels first. The
+// public quote page still offers only the two (public/assets/js/data/reps.js).
 const QUOTE_REP_NAMES = {
-  eric:  'Eric Johnson',
-  niels: 'Niels Christiansen',
+  ...Object.fromEntries(ABY_TEAM.map((p) => [p.id, p.name])),
 };
 
 /**
@@ -19019,7 +19021,7 @@ ${abyAdminNav('/admin')}
   <select id="ranByFilter" style="padding:.4rem .5rem;border:1px solid #ddd;border-radius:6px;font-size:.85rem">
     <option value="">All sources</option>
     <option value="ABY">ABY-run</option>
-    <option value="dashboard">Broker - dashboard</option>
+    <option value="dashboard">Broker - through BenefitLab</option>
     <option value="direct">Broker - direct link</option>
     <option value="broker">Broker (either)</option>
   </select>
@@ -19505,7 +19507,9 @@ function originMatches(q, want) {
 // ⚠️ Left as he asked because it is his screen and the tooltips carry the full answer, but if it
 // ever reads oddly the fix is to make the pair explicit (Broker, Broker via dashboard) rather than
 // to go back to naming the route. ⛔ The stored VALUE stays 'direct' -- filters, saved URLs, habits.
-const ORIGIN_LABEL = { ABY: 'ABY', dashboard: 'Dashboard', direct: 'Broker' };
+// Eric, 11-10-2026: "dashboard doesn't mean anything to ABY". The label names the product; the stored value stays
+// 'dashboard' (filters, saved URLs).
+const ORIGIN_LABEL = { ABY: 'ABY', dashboard: 'BenefitLab', direct: 'Broker' };
 // The badge says WHO when an ABY login is named, and ABY when it is not.
 // ORIGIN_LABEL itself is untouched on purpose: it keys the filter dropdown and the roll-up counts,
 // and adding a person to it would silently create a new bucket in both (three names would split
@@ -20583,7 +20587,8 @@ function rqRow(r, settled) {
   // see which broker it came through, so the channel is stated on the row rather than inferred.
   var askedBy = (String(r.asked_by || '') === 'broker') ? 'Broker asked' : 'Employer asked';
   var asked = '<strong>' + rqEsc(rqWaited(r.created_at)) + '</strong>' +
-              sub(rqEsc(rqDate(r.created_at)) + ' &middot; ' + rqEsc(askedBy));
+              sub(rqEsc(rqDate(r.created_at)) + ' &middot; ' + rqEsc(askedBy) +
+                  (r.source ? ' &middot; through ' + rqEsc(r.source) : ''));
 
   var employer = '<strong>' + rqEsc(r.client_name) + '</strong>' +
     sub(r.employee_count ? rqEsc(r.employee_count) + ' employees' : '');

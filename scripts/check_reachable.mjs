@@ -1048,21 +1048,23 @@ const RULES = [
     why: "Eric, 2026-08-26: it 'assigned me but didn't capitalize my name'. The log's rep filter is"
        + " keyed on the full name, so 'eric' and 'Eric Johnson' become two people in that dropdown"
        + " and picking either hides the other's quotes.",
-    holds: (f) => /const QUOTE_REP_NAMES = \{/.test(f.worker)
+    // Since 11-10-2026 the map is built from lib/team.js (id -> full name), which keeps the display-name rule.
+    holds: (f) => /const QUOTE_REP_NAMES = \{\s*(\.\.\.Object\.fromEntries\(ABY_TEAM\.map\(\(p\) => \[p\.id, p\.name\]\)\))?/.test(f.worker)
                && /const rep = repId \? QUOTE_REP_NAMES\[repId\] : '';/.test(f.worker),
   },
   {
     name: "the rep names match the ones the quote tool itself writes",
-    why: "Two copies of one list -- worker.js and assets/js/data/reps.js -- and nothing enforced"
-       + " that they agree. One fix applied to one copy of a pattern is not applied to the pattern.",
+    why: "Two copies of one list -- lib/team.js (the admin's) and assets/js/data/reps.js (the public page's) --"
+       + " and the public page is what writes rep_name. Since 11-10-2026 Log a quote reads lib/team.js (everyone,"
+       + " Eric's call); every person marked public there must match reps.js exactly, and reps.js must hold no one else.",
     holds: (f) => {
-      const m = /const QUOTE_REP_NAMES = \{([\s\S]*?)\};/.exec(f.worker);
-      if (!m) return false;
-      const mine = (m[1].match(/'([^']+)'/g) || []).map((x) => x.slice(1, -1)).sort();
+      if (!/const QUOTE_REP_NAMES = \{\s*\.\.\.Object\.fromEntries\(ABY_TEAM\.map/.test(f.worker)) return false;
+      const pub = (f.team.match(/name: '([^']+)'[^\n]*public: true/g) || [])
+        .map((x) => /'([^']+)'/.exec(x)[1]).sort();
       const theirs = (f.reps.match(/name: '([^']+)'/g) || [])
         .map((x) => /'([^']+)'/.exec(x)[1]).sort();
-      if (!theirs.length) return false;  // could not read the tool's list: unchecked, not fine
-      return mine.length === theirs.length && mine.every((n, i) => n === theirs[i]);
+      if (!theirs.length || !pub.length) return false;  // could not read a list: unchecked, not fine
+      return pub.length === theirs.length && pub.every((n, i) => n === theirs[i]);
     },
   },
   {
@@ -1488,6 +1490,7 @@ function load() {
     // either of the two it is meant to police.
     products: read("public/assets/js/data/products.js"),
     reps: read("public/assets/js/data/reps.js"),
+    team: read("lib/team.js"),
   };
 }
 

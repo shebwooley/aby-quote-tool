@@ -1641,7 +1641,11 @@
       // The logo travels as a data URL the renderer already knows how to draw. Same rule: the
       // dashboard's logo, if one came over, wins.
       if (b.logoDataUrl && !carriedBrokerLogoUrl) accountLogoDataUrl = b.logoDataUrl;
-      applyAgencyDefaults(d.agencyDefaults, b.agency);
+      // A broker who arrived through BenefitLab's one-click button quotes under Eric, locked, so nobody picks a rep
+      // (Eric, 11-10-2026). The cookie is set by /broker/handoff (lib/benefitlab-handoff.js).
+      var viaBenefitLab = /(?:^|; *)aby_via=benefitlab(?:;|$)/.test(document.cookie || '');
+      applyAgencyDefaults(viaBenefitLab ? Object.assign({}, d.agencyDefaults || {}, { rep: 'eric', via: 'BenefitLab' })
+                                        : d.agencyDefaults, b.agency);
     }).catch(function () { /* no account, or offline -- the form is unaffected */ });
   }
 
@@ -1680,7 +1684,8 @@
           var note = document.createElement('p');
           note.id = 'abyRepLockNote';
           note.style.cssText = 'font-size:12px;color:#5b6b7f;margin:6px 0 0';
-          note.textContent = 'Your ABY sales rep' + (agencyName ? ' for ' + agencyName : '') + '.';
+          note.textContent = ad.via ? ('Your ABY contact for quotes through ' + ad.via + '.')
+                                    : ('Your ABY sales rep' + (agencyName ? ' for ' + agencyName : '') + '.');
           repSelectorEl.parentNode.insertBefore(note, repSelectorEl.nextSibling);
         }
       }

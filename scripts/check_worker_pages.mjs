@@ -241,6 +241,18 @@ function runAll(text) {
     console.log('  FAIL prelude: could not read the application questions -- ' + e.message);
     bad++;
   }
+  // A THIRD IMPORTED VALUE (11-10-2026): Log a quote's rep list is built from ABY_TEAM, imported from lib/team.js
+  // (the one staff list). READ, NOT STUBBED, like the two above.
+  try {
+    const tPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'team.js');
+    // Evaluated from its source (it has no imports) because this runs inside a non-async function.
+    const tSrc = readFileSync(tPath, 'utf8').replace(/^export /gm, '');
+    globalThis.ABY_TEAM = (0, eval)('(function(){' + tSrc + '\n; return ABY_TEAM;})()');
+    if (!Array.isArray(globalThis.ABY_TEAM) || !globalThis.ABY_TEAM.length) throw new Error('ABY_TEAM is empty');
+  } catch (e) {
+    console.log('  FAIL prelude: could not read the team list -- ' + e.message);
+    bad++;
+  }
   const flat = text.replace(/\r\n/g, "\n");
   // ⚠️ ORDER MATTERS: a declaration that reads another must come after it.
   for (const decl of ["const PRODUCT_SHORT = ", "const PRODUCT_NAME_TO_ID = ", "function shortProductName(",
