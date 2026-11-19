@@ -21702,15 +21702,23 @@ const ABY_INTERNAL_JS = `
           // Somebody who really does mean 35 can type it into Monthly admin; both
           // intentions stay expressible, and neither happens by accident.
           var floor = (meta2.kind === 'flat') ? (meta2.rate || 0) : (meta2.min || 0);
+          // 🆕 AN AGREED MINIMUM REPLACES THE STANDARD ONE (Niels via Eric, 11-18-2026: "$75 min and $4
+          // pppm for FSA, $45 and 0.75 for COBRA and $40 and $3 for HSA ... it just went to the normal
+          // rates"). He typed the minimum into Monthly admin, which is a fixed TOTAL, so the row was
+          // refused and the whole quote priced at standard. Minimum is its own box and only travels
+          // with a per-participant rate.
+          var agreedMin = (p.monthlyMin != null && !isNaN(p.monthlyMin));
+          if (agreedMin) floor = p.monthlyMin;
           var raw = p.monthlyRate * cnt;
           meta2.rate = p.monthlyRate;
           meta2.kind = 'pppm';
           copy.monthlyFee.amount = Math.round(Math.max(raw, floor) * 100) / 100;
           // money() drops the pence, and a RATE is quoted to the cent -- it printed the
           // agreed 3.50 as "3.5", which reads like a typo on an internal record.
-          var bd = rateMoney(p.monthlyRate) + ' per participant per month (agreed rate)';
+          var bd = rateMoney(p.monthlyRate) + ' per participant per month (agreed rate' +
+            (agreedMin ? ', minimum ' + money(floor) + ' per month' : '') + ')';
           if (floor > 0 && floor > raw) {
-            bd += ' - the standard minimum of ' + money(floor) + ' per month applies at this headcount';
+            bd += ' - the ' + (agreedMin ? 'agreed' : 'standard') + ' minimum of ' + money(floor) + ' per month applies at this headcount';
           }
           copy.monthlyFee.breakdown = bd;
           copy.monthlyFee.tierLabel = '';
@@ -21775,6 +21783,8 @@ const ABY_INTERNAL_JS = `
     if (m != null && !isNaN(m)) parts.push('Monthly ' + money(m));
     var pr = (adj.prices || {}).monthlyRate;
     if (pr != null && !isNaN(pr)) parts.push('Per participant ' + rateMoney(pr));
+    var mn = (adj.prices || {}).monthlyMin;
+    if (mn != null && !isNaN(mn)) parts.push('Minimum ' + money(mn));
     return parts.length ? ('Price set on ' + scope + ': ' + parts.join(', ')) : '';
   }
 
@@ -21808,6 +21818,7 @@ const ABY_INTERNAL_JS = `
         '<label style="' + LBL + '">Annual<br><input class="setAnnual" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:110px;"></label>' +
         '<label style="' + LBL + '">Monthly admin<br><input class="setMonthly" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:120px;"></label>' +
         '<label style="' + LBL + '">Per participant<br><input class="setPerPart" type="number" step="0.01" min="0" placeholder="unchanged" style="padding:6px;width:120px;"></label>' +
+        '<label style="' + LBL + '">Minimum (with per participant)<br><input class="setMin" type="number" step="0.01" min="0" placeholder="standard" style="padding:6px;width:120px;"></label>' +
       '</span>' +
       '<button type="button" class="adjRemove" style="font-size:12px;background:none;border:none;color:#b3261e;cursor:pointer;padding:6px 0;">Remove</button>';
   }
@@ -21817,7 +21828,8 @@ const ABY_INTERNAL_JS = `
     { cls: 'setRenewal', key: 'renewalFee',  label: 'Renewal' },
     { cls: 'setAnnual',  key: 'annualFee',   label: 'Annual' },
     { cls: 'setMonthly', key: 'monthlyFee',  label: 'Monthly admin' },
-    { cls: 'setPerPart', key: 'monthlyRate', label: 'Per participant' }
+    { cls: 'setPerPart', key: 'monthlyRate', label: 'Per participant' },
+    { cls: 'setMin',     key: 'monthlyMin',  label: 'Minimum' }
   ];
 
   // One row -> { item } | { error } | {} (nothing entered).
@@ -21847,7 +21859,11 @@ const ABY_INTERNAL_JS = `
       // Eric, 2026-08-21: a per-participant rate survives a headcount change; a monthly TOTAL does
       // not. Typing BOTH is refused rather than resolved: either answer would be a price nobody chose.
       if (prices.monthlyFee != null && prices.monthlyRate != null) {
-        return { error: 'it has both a monthly total and a per-participant rate, and they can disagree. Type one: the total fixes the monthly figure, the rate re-prices when the headcount changes.' };
+        return { error: 'it has both a monthly total and a per-participant rate, and they can disagree. Type one: the total fixes the monthly figure, the rate re-prices when the headcount changes. For a rate with its own minimum, put the minimum in Minimum and leave Monthly admin empty.' };
+      }
+      // A minimum is the floor UNDER a per-participant rate; on its own it prices nothing.
+      if (prices.monthlyMin != null && prices.monthlyRate == null) {
+        return { error: 'a Minimum goes with a Per participant rate. Type the rate too, or put a fixed monthly total in Monthly admin.' };
       }
       if (!Object.keys(prices).length) return {};
       return { item: { mode: 'set', scope: scope, prices: prices } };
@@ -21886,6 +21902,9 @@ const ABY_INTERNAL_JS = `
     }
     // ⛔ One bad row stops ALL of them. Applying the good rows and dropping the bad one would put a
     // price on the proposal that is neither what was typed nor the standard price.
+    // A refusal is shown in RED: on 11-18-2026 Niels' whole adjustment was refused in this line's
+    // usual blue and he read the standard prices as the feature not working.
+    summary.style.color = errors.length ? '#b3261e' : '#143c73';
     if (errors.length) {
       window.ABY_ADJUSTMENT = null;
       summary.textContent = 'Not applied - ' + errors.join(' ');
