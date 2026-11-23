@@ -114,7 +114,7 @@
   var ABY_COMMIT_JS = [
     'function abySign(v){v=(v||"").trim();var p=document.getElementById("printPreview"),s=document.getElementById("signPreview");if(p)p.textContent=v;if(s)s.textContent=v;}',
     'function abyElectedProducts(){var list=[];document.querySelectorAll(".opt-row").forEach(function(row){var cb=row.querySelector(".opt-check");if(!cb||!cb.checked)return;var label=cb.getAttribute("data-label");var sel=row.querySelector(".opt-tier-select");if(sel)label+=": "+sel.value;list.push(label);});return list;}',
-    'function abyInitSignDate(){var d=document.getElementById("signDate");if(d&&!d.value)d.valueAsDate=new Date();}',
+    'function abyInitSignDate(){var d=document.getElementById("signDate");if(d&&!d.value){var n=new Date();d.value=n.getFullYear()+"-"+("0"+(n.getMonth()+1)).slice(-2)+"-"+("0"+n.getDate()).slice(-2);}}',
     // THE DRAWN SIGNATURE (Eric, 09-30-2026): "it might feel more like a commitment for the employer."
     // A fixed 600x160 canvas, so the saved PNG stays small whatever the screen; pointer events cover mouse,
     // finger and pen. Legally it is no stronger than the typed name - the typed name still travels with it.
@@ -1249,7 +1249,7 @@
       // what makes the DOWNLOADED copy carry the id; submitCommitment's own backfill runs in the
       // employer's browser and can never reach a file that was saved before it.
       var qf = document.getElementById('quoteIdField');
-      if (qf && !qf.value) qf.value = String(id);
+      if (qf) qf.value = String(id);   // this quote's own id, never the last one's
     }
     reveal(window.__abySavedQuoteId);
     document.addEventListener('aby:quote-saved', function (e) {
@@ -1551,6 +1551,11 @@
     // SITE_LOCKED — before that, both hostnames returned a 401 login page and every downloaded
     // quote carried a broken ABY logo. The two changes ship together or neither works.
     body = body.replace('assets/images/aby-logo.png', 'https://abyquotes.com/assets/images/aby-logo.png');
+    // 11-23-2026 (review): the file carries the quote's own id (or its link's token), the proof that the signed copy is this
+    // quote's. The body is drawn again here, so the id filled in on screen never reached the file.
+    var linkTok = /^\/q\/([A-Za-z0-9]+)/.exec(window.location.pathname);
+    if (window.__abySavedQuoteId) body = body.replace('id="quoteIdField" value=""', 'id="quoteIdField" value="' + ABYQuote.utils.escapeHtml(String(window.__abySavedQuoteId)) + '"');
+    if (linkTok) body = body.replace('id="shareTokenField" value=""', 'id="shareTokenField" value="' + linkTok[1] + '"');
     var title = ABYQuote.utils.escapeHtml((form.clientName || 'ABY Quote') + ' ' + quoteNumber);
     var safeName = (form.clientName ? form.clientName.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') : 'ABY-Quote');
 
@@ -1575,6 +1580,9 @@
   }
 
   function resetForm() {
+    // 11-23-2026 (review): A FRESH PAGE. Clearing the boxes kept the re-run quote's NUMBER and client, so the next employer's
+    // quote saved over the last one's, and left the POP, ERISA and ACA options half set.
+    if (!window.__ABY_SHARED) { window.location.replace(window.location.pathname); return; }
     formEl.reset();
     var panels = formEl.querySelectorAll('[data-product-options]');
     panels.forEach(function (p) { p.hidden = true; });
@@ -1949,7 +1957,16 @@
       // actually offers; otherwise leave the placeholder, which visibly asks to be answered.
       if (el.tagName === 'SELECT') {
         var offered = Array.prototype.some.call(el.options, function (o) { return o.value === state[key]; });
-        if (!offered) return;
+        if (!offered) {
+          // 11-23-2026 (review): a SAVED quote's own date (the server's, on the employer's link) is never dropped because
+          // its month has passed: the proposal printed no effective date. A re-run or a hand-off still asks, as before.
+          var dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(state[key]));
+          if (!fromServer || !dm) return;
+          var dopt = document.createElement('option');
+          dopt.value = state[key];
+          dopt.textContent = new Date(+dm[1], +dm[2] - 1, +dm[3]).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+          el.appendChild(dopt);
+        }
       }
       el.value = state[key];
     });
@@ -2033,6 +2050,12 @@
           }
           bandEl.dispatchEvent(new Event('change'));
         }
+      }
+
+      // The option the broker recommended (saved since 11-23-2026).
+      if (p.inputs.recommended) {
+        var recEl = document.querySelector('[data-recommended="' + p.id + '"]');
+        if (recEl) { recEl.value = p.inputs.recommended; recEl.dispatchEvent(new Event('change')); }
       }
 
       // Participant / account / form count

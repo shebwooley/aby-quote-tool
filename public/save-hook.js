@@ -137,6 +137,21 @@
         }
       }
 
+      // 11-23-2026 (review): THE RECOMMENDED OPTION AND THE EXTRA ANSWERS ARE PART OF THE QUOTE. Neither was saved, so the
+      // employer's link opened on the cheapest option (an employer who signed without touching it authorized that one),
+      // and a re-run of a two-EIN ACA quote priced one EIN and replaced the stored price.
+      if (item) {
+        const rec = item.querySelector('select[data-recommended]');
+        if (rec && rec.value) inputs.recommended = rec.value;
+        const extras = {};
+        item.querySelectorAll('[data-product-input*=":extra:"]').forEach(function(x) {
+          const id = x.dataset.productInput.split(':')[2];
+          if (x.type === 'checkbox') { if (x.checked) extras[id] = true; }
+          else if (x.value !== '' && Number(x.value) > 0) extras[id] = Number(x.value);
+        });
+        if (Object.keys(extras).length) inputs.extras = extras;
+      }
+
       // Use data-product-checkbox attr first (gives clean IDs like 'pop', 'erisa'),
       // then fall back to name/id attr, registry lookup, or display name
       const id = cb.dataset.productCheckbox || cb.name || nameToId[name] || name;
@@ -268,6 +283,11 @@
         return;
       }
 
+      // 11-23-2026 (review): until THIS save answers there is no saved quote on the page. The last one's id used to stay, so
+      // a failed save left "Copy share link" copying the previous employer's link.
+      window.__abySavedQuoteId = null;
+      var sb = document.getElementById('shareBtn'); if (sb) { sb.hidden = true; sb.onclick = null; }
+      var idf = document.getElementById('quoteIdField'); if (idf) idf.value = '';
       saveQuote(qNum);
     });
 

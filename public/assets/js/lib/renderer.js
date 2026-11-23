@@ -220,7 +220,7 @@ ABYQuote.renderer = (function () {
     if (!fee || !meta || !meta.countLabel) return '';
     // tierExceeded already names the count inside its own breakdown sentence.
     if (fee.tierExceeded) return '';
-    if (fee.count != null) return 'Estimated for ' + fee.count + ' ' + meta.countLabel + '.';
+    if (fee.count != null) return 'Estimated for ' + esc(String(fee.count)) + ' ' + meta.countLabel + '.';
     if (fee.countMissing) return 'No count was entered, so this shows the lowest tier.';
     return '';
   }
@@ -245,7 +245,7 @@ ABYQuote.renderer = (function () {
     if (result.docsFee) cards.push({ label: result.docsFee.label || 'Documents', price: u.money(result.docsFee.amount), note: 'One-time.' });
     if (result.annualFee != null) {
       var aNote = countNote(result.annualFee, meta) || 'Per year.';
-      if (result.formulaBreakdown) aNote = result.formulaBreakdown;
+      if (result.formulaBreakdown) aNote = esc(result.formulaBreakdown);   // stored pricing is what the saver posted
       cards.push({ label: result.annualFee.label || 'Annual fee', price: u.money(result.annualFee.amount), note: aNote });
     }
     // ── AN OVER-CEILING MONTHLY IS OMITTED FROM A CLIENT DOCUMENT ENTIRELY (F-486) ───────────

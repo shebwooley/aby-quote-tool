@@ -1371,6 +1371,11 @@ async function handleQuoteRequest(request, env) {
   // well as onto the row. The caller is a server that is already logging this call; telling it
   // whether anybody was actually told costs one field and means a silent mail failure shows up in
   // TWO places instead of none.
+  // 11-23-2026 (review): a RETRY of a request ABY was already told about is silent; one whose email failed sends again.
+  try {
+    const told = await env.DB.prepare('SELECT notified_at FROM quote_request WHERE id = ?').bind(id).first();
+    if (told && told.notified_at) return jsonResp({ ok: true, id: id, notified: true, notifyError: null });
+  } catch (err) { /* an older table: send, as before */ }
   const sent = await sendQuoteRequestEmail(env, {
     id: id, clientName: clientName, effectiveDate: str(body.effectiveDate, 40),
     products: productsJson, brokerName: str(body.brokerName), brokerAgency: str(body.brokerAgency),
@@ -2453,7 +2458,13 @@ async function handleSaveCommitment(request, env, ctx) {
         qRow = await env.DB.prepare(COLS + 'WHERE share_token = ?')
           .bind(String(shareToken)).first();
       }
+      // 11-23-2026 (review): THE QUOTE NUMBER IS PRINTED AND GUESSABLE, so it says which quote was signed and nothing more.
+      // It used to mint and return the private link, which opened the proposal and the employer's setup answers. The id or
+      // the token is the proof; a document that carries only the number is still recorded against its quote, and ABY sends
+      // the link by hand.
+      let byNumberOnly = false;
       if (!qRow && quoteNumber && quoteNumber !== 'UNKNOWN') {
+        byNumberOnly = true;
         qRow = await env.DB.prepare(
           COLS + 'WHERE quote_number = ? ORDER BY created_at DESC LIMIT 1'
         ).bind(quoteNumber).first();
@@ -2464,7 +2475,7 @@ async function handleSaveCommitment(request, env, ctx) {
       // shareable LINK, when opening it would show a figure the employer did not sign.
       // ⛔ Do NOT "simplify" this by skipping the whole block -- losing quote_id would lose the
       // link-back that F-416 was raised to build.
-      const signBlockReason = qRow ? quoteShareBlockReason(qRow) : null;
+      const signBlockReason = !qRow ? null : byNumberOnly ? 'only the quote number was sent' : quoteShareBlockReason(qRow);
       if (qRow && signBlockReason) {
         await env.DB.prepare('UPDATE commitments SET quote_id = ? WHERE id = ?')
           .bind(qRow.id, id).run();
@@ -13521,11 +13532,11 @@ function brokerPageHTML() {
      var e=esc(x.email);
      h+='<tr><td style="padding:6px 4px">'
        +(admin?'<input value="'+esc(x.name||'')+'" style="width:100%;padding:5px 7px" '
-               +'onchange="savePerson(this,&#39;'+e+'&#39;,&#39;name&#39;)">'
+               +'data-email="'+e+'" onchange="savePerson(this,this.dataset.email,&#39;name&#39;)">'
               :(esc(x.name||'')||'&mdash;'))
        +'</td><td style="padding:6px 4px">'+e+'</td><td style="padding:6px 4px">'
        +(admin?'<input value="'+esc(x.phone||'')+'" style="width:100%;padding:5px 7px" '
-               +'onchange="savePerson(this,&#39;'+e+'&#39;,&#39;phone&#39;)">'
+               +'data-email="'+e+'" onchange="savePerson(this,this.dataset.email,&#39;phone&#39;)">'
               :(esc(x.phone||'')||'&mdash;'))
        // ⭐ THE QUOTE COUNT IS WHY THIS IS WORTH SHOWING THEM. It is the evidence that ABY
        // already knows this person, and it is what makes the row worth correcting.
@@ -13668,7 +13679,7 @@ async function handleBrokerLogin(request, env) {
   let body; try { body = await request.json(); } catch { return jsonResp({ error: 'Bad request' }, 400); }
   const email = String(body.email || '').trim().toLowerCase();
   const row = await env.DB.prepare(
-    'SELECT id, email, password_hash, name, agency, phone, logo_data_url FROM brokers WHERE lower(trim(email)) = ?'
+    'SELECT id, email, password_hash, name, agency, phone, logo_data_url, agency_id, role FROM brokers WHERE lower(trim(email)) = ?'
   ).bind(email).first();
 
   // ⚠️ ONE MESSAGE FOR BOTH FAILURES, ON PURPOSE. "No such account" tells a stranger which of ABY's
@@ -15938,7 +15949,7 @@ async function abyDatedThings(env, opts) {
     ).all();
     for (const o of (r.results || [])) {
       // A passed opportunity is not work. Everything else keeps its dates.
-      if (String(o.disposition || '') === 'pass') continue;
+      if (['pass', 'passed'].includes(String(o.disposition || ''))) continue;   // stored as 'passed'
       const slots = [
         ['closes', o.closes_at, 'Proposal due'],
         ['questions', o.questions_due_at, 'Questions due'],
@@ -16040,6 +16051,10 @@ async function abyDatedThings(env, opts) {
     if (!a.dueOn) return 1;
     if (!b.dueOn) return -1;
     if (a.dueOn !== b.dueOn) return a.dueOn < b.dueOn ? -1 : 1;
+    // 11-23-2026 (review): to-dos on one day keep the query's order (time, then the hand-set order). Sorting them by their
+    // random id shuffled them and made Move up and Move down do nothing.
+    const ta = String(a.key).startsWith('todo:'), tb = String(b.key).startsWith('todo:');
+    if (ta && tb) return 0;
     return a.key < b.key ? -1 : 1;
   });
 
@@ -20959,6 +20974,17 @@ document.querySelectorAll('.tab').forEach(function(btn) {
 })();
 
 var commitmentData = {};
+// Every string inside a value, escaped (not the key named skip).
+function escDeep(v, skip) {
+  if (typeof v === 'string') return esc(v);
+  if (Array.isArray(v)) return v.map(function(x) { return escDeep(x); });
+  if (v && typeof v === 'object') {
+    var o = {};
+    Object.keys(v).forEach(function(k) { o[k] = k === skip ? v[k] : escDeep(v[k]); });
+    return o;
+  }
+  return v;
+}
 let commitmentsLoaded = false;
 
 // ⭐ DELEGATED ONCE, ON THE STATIC TBODY -- NOT inside loadCommitments, and NOT with { once: true }.
@@ -20997,11 +21023,14 @@ async function loadCommitments() {
     const rows = data.commitments || [];
     document.getElementById('count').textContent = rows.length + ' commitment' + (rows.length !== 1 ? 's' : '');
     if (!rows.length) { ctbody.innerHTML = '<tr><td colspan="6" style="padding:20px;color:#4b5563;text-align:center">No commitments yet.</td></tr>'; return; }
-    ctbody.innerHTML = rows.map(function(c) {
+    ctbody.innerHTML = rows.map(function(raw) {
+      // 11-23-2026 (review): every value here was typed on a PUBLIC form. Escaped once, for the row and for the Download.
+      var c = escDeep(raw, 'products');
       var dt = new Date(c.submitted_at);
       var dateStr = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
       var products = [];
-      try { products = JSON.parse(c.products || '[]'); } catch(e) {}
+      try { products = escDeep(JSON.parse(raw.products || '[]')); } catch(e) {}
+      if (!Array.isArray(products)) products = [];
       commitmentData[c.id] = { c: c, products: products };
       var td = function(v, extra) { return '<td style="padding:9px 12px;border-bottom:1px solid #eee;vertical-align:top' + (extra || '') + '">' + (v || '<span style="color:#bbb">—</span>') + '</td>'; };
       // Prefer what the commitment itself recorded; fall back to the quote it references.
@@ -21057,7 +21086,7 @@ async function loadCommitments() {
       // full-width button rule (direct children only) leaves them as plain links; a long name is cut with an
       // ellipsis and the full name is in the tooltip, so the column keeps its width.
       var uploadsList = function(row) {
-        var f = row.uploads || [];
+        var f = raw.uploads || [];   // each name is escaped below
         if (!f.length) return '';
         return '<div style="margin:0 0 8px;font-size:12px;line-height:1.5">'
           + '<div style="font-weight:600;color:#1f2937">' + f.length + ' file' + (f.length === 1 ? '' : 's') + ' uploaded</div>'
@@ -21076,10 +21105,10 @@ async function loadCommitments() {
         }
         if (row.notify_error) {
           return '<br><span style="color:#c0392b;font-size:12px;font-weight:600" title="'
-            + String(row.notify_error).replace(/"/g, '&quot;')
+            + row.notify_error
             + '">&#9888; NOT NOTIFIED</span>'
             + '<br><span style="color:#c0392b;font-size:11px">'
-            + String(row.notify_error).slice(0, 90) + '</span>';
+            + esc(String(raw.notify_error).slice(0, 90)) + '</span>';
         }
         return '';
       };
