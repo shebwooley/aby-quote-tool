@@ -952,6 +952,17 @@ async function handleSaveQuote(request, env, ctx) {
     }
   }
 
+  // 11-24-2026 (Eric): A RE-RUN MOVES THE LOG'S VALUE TOO. It was written only when a quote was first saved, so every
+  // re-run left the first version's value in the log. Best-effort, like the price above.
+  if (!isNew && Number(firstYearValue) > 0) {
+    try {
+      await env.DB.prepare('UPDATE quotes SET first_year_value = ?, employee_count = COALESCE(?, employee_count) WHERE id = ?')
+        .bind(Number(firstYearValue), Number(employeeCount) || null, rowId).run();
+    } catch (err) {
+      console.warn('value not updated on re-run:', String(err && err.message || err));
+    }
+  }
+
   // WHICH LOGIN SAVED IT, for the rule above: an assistant who quotes under a producer's email saves their own quote again.
   // The table makes itself, so there is no migration to wait for.
   if (isNew && me && !adminName) {

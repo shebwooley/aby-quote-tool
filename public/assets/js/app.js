@@ -306,6 +306,20 @@
       span.textContent = f.label + ' (' + ABYQuote.utils.money(f.amount) + (f.unit ? ' ' + f.unit : '') + ')';
       label.appendChild(cb); label.appendChild(span);
       det.appendChild(label);
+      if (ABYQuote.engine.isFlatFee(f)) return;
+      // How many, so "$3 per notice" reaches the total (Eric, 11-24-2026). An initial notice starts from the count already
+      // on the form; the broker can change it, and blank leaves it out of the total.
+      var qty = document.createElement('input');
+      qty.type = 'number'; qty.min = '0'; qty.placeholder = 'How many';
+      qty.className = 'fee-qty'; qty.hidden = true;
+      qty.dataset.feeQty = f.label;
+      qty.setAttribute('aria-label', 'How many: ' + f.label);
+      det.appendChild(qty);
+      cb.addEventListener('change', function () {
+        qty.hidden = !cb.checked;
+        var count = formEl.querySelector('[data-product-input="' + product.id + ':count"]');
+        if (cb.checked && qty.value === '' && /^Initial/.test(f.label) && count && count.value) qty.value = count.value;
+      });
     });
     return det;
   }
@@ -881,7 +895,13 @@
       }
       var fees = Array.prototype.map.call(formEl.querySelectorAll('[data-product-input="' + productId + ':fee"]:checked'),
         function (el) { return el.dataset.feeLabel; });
-      if (fees.length) selection.fees = fees;
+      if (fees.length) {
+        selection.fees = fees;
+        selection.feeQty = {};
+        formEl.querySelectorAll('[data-product-options="' + productId + '"] [data-fee-qty]').forEach(function (el) {
+          if (Number(el.value) > 0) selection.feeQty[el.dataset.feeQty] = Number(el.value);
+        });
+      }
       data.selections.push(selection);
     });
 
@@ -914,7 +934,8 @@
             packageId: pkgId,
             count: sel.count,
             extras: sel.extras,
-            fees: sel.fees
+            fees: sel.fees,
+            feeQty: sel.feeQty
           });
         });
       } else {
@@ -1169,7 +1190,10 @@
     // `__abyClientId` and `__abyQuoteNumber` already use.
     try {
       var fyv = 0, heads = 0;
-      results.forEach(function (r) {
+      // 11-24-2026: one option per service, as the printed total counts (every option offered was added together), and the
+      // additional services (they were left out). Adonius: logged $1,660 on a $1,610 quote.
+      ABYQuote.renderer.chosenResults(results, form).forEach(function (r) {
+        fyv += (r.extrasTotal || 0) + (r.electedTotal || 0);
         // ⭐ A SETUP FEE COUNTS ONLY WHERE A RENEWAL FEE FOLLOWS IT. Eric, 2026-08-18: "For HSA,
         // I would not include the setup fee in the calculation since there is no renewal fee."
         // ⛔ Written as HIS RULE rather than as `productId === 'hsa'`: he gave the reason, not just
@@ -2087,6 +2111,12 @@
         document.querySelectorAll('[data-product-input="' + p.id + ':fee"]').forEach(function (el) {
           el.checked = p.inputs.fees.indexOf(el.dataset.feeLabel) !== -1;
           if (el.checked && el.closest('details')) el.closest('details').open = true;
+        });
+        var savedQty = p.inputs.feeQty || {};
+        document.querySelectorAll('[data-product-options="' + p.id + '"] [data-fee-qty]').forEach(function (el) {
+          el.hidden = p.inputs.fees.indexOf(el.dataset.feeQty) === -1;
+          if (savedQty[el.dataset.feeQty]) el.value = savedQty[el.dataset.feeQty];
+          else if (!el.hidden && /^Initial/.test(el.dataset.feeQty) && p.inputs.count) el.value = p.inputs.count;
         });
       }
 

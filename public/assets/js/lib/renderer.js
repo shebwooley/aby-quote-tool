@@ -490,7 +490,7 @@ ABYQuote.renderer = (function () {
       var amt = (f.amount === 0) ? 'Included' : u.money(f.amount);
       var unit = (f.amount !== 0 && f.unit) ? ' <span class="fee-unit">' + esc(f.unit) + '</span>' : '';
       var on = f.elected ? ' fee-elected' : '';
-      var tag = f.elected ? ' <span class="fee-tag">Selected</span>' : '';
+      var tag = f.elected ? ' <span class="fee-tag">Selected' + (f.qty ? ': ' + f.qty + ' x ' + u.money(f.amount) + ' = ' + u.money(f.lineTotal) : '') + '</span>' : '';
       if (!f.description) {
         return '<div class="fee-item' + on + '"><div class="fee-static">' +
           '<span class="fee-name">' + esc(f.label) + tag + '</span>' +
@@ -911,6 +911,7 @@ ABYQuote.renderer = (function () {
       // signed record as "<service>: <line> ($125 per year)" - after the colon, so it still reads as that service.
       var feeRows = electedFees(g).map(function (f) {
         var price = u.money(f.amount) + (f.unit ? ' ' + f.unit : '');
+        if (f.qty) price = f.qty + ' x ' + price + ' = ' + u.money(f.lineTotal);
         return '<label class="opt-fee-row"><input type="checkbox" class="opt-fee" data-label="' +
           esc(name + ': ' + f.label + ' (' + price + ')') + '" checked>' +
           '<span class="opt-fee-name">' + esc(f.label) + '</span><span class="opt-fee-price">' + esc(price) + '</span></label>';
@@ -1128,7 +1129,9 @@ ABYQuote.renderer = (function () {
     // service lines, land short of the headline, and have no way to see where the gap came from.
     // ⛔ It names the QUANTITIES ENTERED rather than a general "extras may apply", because they
     // are quantities the broker put on this specific quote.
-    if (groups.some(function (g) { return electedFees(g).length; })) notes.push('Additional services priced per notice or per item are billed by the number used and are not in this total.');
+    var picked = groups.reduce(function (a, g) { return a.concat(electedFees(g)); }, []);
+    if (picked.some(function (f) { return f.qty; })) notes.push('Additional services priced per notice or per item are estimated at the quantity shown and billed by the number used.');
+    if (picked.some(function (f) { return f.lineTotal == null; })) notes.push('Additional services with no quantity shown are billed by the number used and are not in this total.');
     if (t.hasExtras) notes.push('Includes the additional services elected on this quote, at the quantities entered.');
     // 🔴 THIS SENTENCE USED TO SAY "the lowest-cost option is used for this estimate" AND IT IS
     // NO LONGER TRUE. The total now follows the option selected on the page. A caveat left
@@ -1259,7 +1262,20 @@ ABYQuote.renderer = (function () {
     return render(form, results, quoteNumber, o);
   }
 
+  // The one result per service the Estimated First-Year Total is built on (the quote log's value reads the same ones).
+  function chosenResults(results, form) {
+    var order = [], by = {};
+    (results || []).forEach(function (r) { if (!by[r.productId]) { by[r.productId] = []; order.push(r.productId); } by[r.productId].push(r); });
+    return order.map(function (id) {
+      var kept = by[id].filter(function (r) { return !r.blocked; });
+      var g = { productId: id, results: kept.length ? kept : by[id] };
+      var want = defaultOptionFor(g, form);
+      return g.results.filter(function (r) { return r.packageId === want; })[0] || g.results[0];
+    });
+  }
+
   return {
+    chosenResults: chosenResults,
     render: render,
     renderInternal: renderInternal,
     renderForClient: renderForClient,

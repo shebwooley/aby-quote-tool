@@ -153,6 +153,9 @@
         const fees = [];
         item.querySelectorAll('[data-fee-label]:checked').forEach(function(f) { fees.push(f.dataset.feeLabel); });
         if (fees.length) inputs.fees = fees;
+        const feeQty = {};
+        item.querySelectorAll('[data-fee-qty]').forEach(function(q) { if (fees.indexOf(q.dataset.feeQty) !== -1 && Number(q.value) > 0) feeQty[q.dataset.feeQty] = Number(q.value); });
+        if (Object.keys(feeQty).length) inputs.feeQty = feeQty;
       }
 
       // Use data-product-checkbox attr first (gives clean IDs like 'pop', 'erisa'),

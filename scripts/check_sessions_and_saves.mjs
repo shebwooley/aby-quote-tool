@@ -20,7 +20,7 @@ CREATE TABLE agencies (id TEXT, name TEXT, share_quotes INTEGER, logo_data_url T
 CREATE TABLE people (id TEXT, name TEXT, created_at TEXT, updated_at TEXT, agency_id TEXT);
 CREATE TABLE broker_directory (email TEXT, name TEXT, phone TEXT, agency TEXT, agency_id TEXT, first_seen TEXT, last_seen TEXT, quote_count INTEGER, person_id TEXT, source TEXT);
 CREATE TABLE admin_login_fails (ip TEXT, at TEXT);
-CREATE TABLE quotes (id TEXT, quote_number TEXT, created_at TEXT, client_name TEXT, effective_date TEXT, broker_name TEXT, broker_agency TEXT, broker_phone TEXT, broker_email TEXT, rep_name TEXT, rep_phone TEXT, rep_email TEXT, commission_included INTEGER, products TEXT, ran_by TEXT, ran_by_who TEXT, state TEXT, adjustment TEXT, adjustment_note TEXT, client_id TEXT, client_match_key TEXT, version INTEGER, quote_family TEXT, revision INTEGER, agency_id TEXT, share_token TEXT, resolved_pricing TEXT, status TEXT);`);
+CREATE TABLE quotes (id TEXT, quote_number TEXT, created_at TEXT, client_name TEXT, effective_date TEXT, broker_name TEXT, broker_agency TEXT, broker_phone TEXT, broker_email TEXT, rep_name TEXT, rep_phone TEXT, rep_email TEXT, commission_included INTEGER, products TEXT, ran_by TEXT, ran_by_who TEXT, state TEXT, adjustment TEXT, adjustment_note TEXT, client_id TEXT, client_match_key TEXT, version INTEGER, quote_family TEXT, revision INTEGER, agency_id TEXT, share_token TEXT, resolved_pricing TEXT, status TEXT, first_year_value REAL, employee_count INTEGER);`);
 const env = { DB: { prepare: st, batch: async (l) => Promise.all(l.map((x) => x.run())) }, ADMIN_PASSWORD: 'office-pass', ADMIN_PASSWORD_ERIC: 'eric-pass', SESSION_SECRET: 'x'.repeat(48) };
 let fail = 0;
 const ok = (n, c) => { console.log((c ? '  ok   ' : '  FAIL ') + n); if (!c) fail++; };
@@ -55,6 +55,17 @@ ok('a colleague can once the agency shares', (await save(asst, N, { clientName: 
 db.exec("UPDATE agencies SET share_quotes = 0 WHERE id = 'A'");
 ok("an assistant saves and re-saves a quote under a producer's email",
   (await save(asst, 'TX261123-2222-C')).status === 200 && (await save(asst, 'TX261123-2222-C', { clientName: 'Again' })).status === 200);
+
+// THE LOG'S VALUE (Eric, 11-24-2026): a re-run moves it, whether or not anything else changed; a save with no value keeps it.
+const V = 'TX261124-3333-C', worth = () => db.prepare('SELECT first_year_value v FROM quotes WHERE quote_number=?').get(V).v;
+await save(ann, V, { firstYearValue: 1660 });
+ok('a first save records the value', worth() === 1660);
+await save(ann, V, { firstYearValue: 1685, products: [{ id: 'cobra' }] });
+ok('a re-run updates the value', worth() === 1685);
+await save(ann, V, { firstYearValue: 1700, products: [{ id: 'cobra' }] });
+ok('...and a re-open with nothing else changed corrects it', worth() === 1700);
+await save(ann, V, { products: [{ id: 'fsa' }] });
+ok('...and a save without a value keeps it', worth() === 1700);
 
 // ABY
 let eric = '';

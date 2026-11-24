@@ -72,7 +72,7 @@ async function run(browser) {
   }));
   const open = async (state, q) => { await page.goto(ORIGIN + '/?rerun=' + encodeURIComponent(JSON.stringify(state)) + (q || ''), { waitUntil: 'load' }); await settle(); };
   const generate = async () => { await page.evaluate(() => document.getElementById('quoteForm').requestSubmit()); await settle(); };
-  const tick = (l) => page.evaluate((x) => { const e = [...document.querySelectorAll('[data-fee-label]')].find((y) => y.dataset.feeLabel === x && y.closest('.product-row').querySelector('[data-product-checkbox]').checked); if (e) e.checked = true; return !!e; }, l);
+  const tick = (l) => page.evaluate((x) => { const e = [...document.querySelectorAll('[data-fee-label]')].find((y) => y.dataset.feeLabel === x && y.closest('.product-row').querySelector('[data-product-checkbox]').checked); if (e) { e.checked = true; e.dispatchEvent(new Event('change')); } return !!e; }, l);
 
   // 1. nothing ticked: the quote reads as before
   await open(base); await generate();
@@ -85,15 +85,25 @@ async function run(browser) {
   must(await tick(PACKET), '2 no box for the packet'); must(await tick(RIGHTS), '2 no box for the rights notices');
   if (SHOTS && shotsOn) { await page.evaluate(() => document.querySelectorAll('.product-fees').forEach((d) => { if (d.querySelector(':checked')) d.open = true; })); await page.screenshot({ path: join(SHOTS, 'form.png'), fullPage: true }); }
   await generate(); v = await read();
-  must(v.hi.length === 2 && v.hi.every((x) => /Selected$/.test(x)), '2 highlighted: ' + v.hi.join(' | '));
+  must(v.hi.length === 2 && v.hi.every((x) => /Selected(: 25 x \$3 = \$75)?$/.test(x)), '2 highlighted: ' + v.hi.join(' | '));
   must(v.bg.every((c) => c === 'rgb(255, 246, 204)'), '2 highlight color: ' + v.bg);
-  must(v.sign.includes('ERISA Wrap Document: ' + PACKET + ' ($125 per year)') && v.sign.includes('COBRA: ' + RIGHTS + ' ($3 per notice)'), '2 signing page: ' + v.sign.join(' | '));
-  must(Number(v.total.replace(/[^0-9]/g, '')) === plain + 125, '2 total ' + v.total + ', expected ' + (plain + 125));
+  must(v.sign.includes('ERISA Wrap Document: ' + PACKET + ' ($125 per year)') && v.sign.includes('COBRA: ' + RIGHTS + ' (25 x $3 per notice = $75)'), '2 signing page: ' + v.sign.join(' | '));
+  must(Number(v.total.replace(/[^0-9]/g, '')) === plain + 200, '2 total ' + v.total + ', expected ' + (plain + 200));
   must(saved && saved.products.length === 2 && saved.products.every((p) => p.inputs.fees && p.inputs.fees.length === 1), '2 saved: ' + JSON.stringify(saved && saved.products));
   // 3. a re-run restores them
   const again = { ...base, products: saved ? saved.products : [] };
   await open(again); await generate(); v = await read();
-  must(v.hi.length === 2, '3 a re-run lost them');
+  must(v.hi.length === 2 && Number(v.total.replace(/[^0-9]/g, '')) === plain + 200, '3 a re-run lost them, total ' + v.total);
+  // 3b. a quote that ticked the notices before quantities existed takes the count on the form (Adonius)
+  const old = JSON.parse(JSON.stringify(again)); old.products.forEach((p) => { delete p.inputs.feeQty; });
+  await open(old); await generate(); v = await read();
+  must(Number(v.total.replace(/[^0-9]/g, '')) === plain + 200, '3b re-run without a quantity, total ' + v.total);
+  // 3c. the log's value is the printed total, also when several options are offered
+  must(saved.firstYearValue === plain + 200, '3c the log would say ' + saved.firstYearValue);
+  const two = JSON.parse(JSON.stringify(again)); two.products[1].inputs.packageIds = 'enhanced,fullSpdTesting';
+  await open(two); await generate(); v = await read();
+  must(saved.firstYearValue === Number(v.total.replace(/[^0-9]/g, '')), '3c two options: log ' + saved.firstYearValue + ', printed ' + v.total);
+  await open(again); await generate();
   // 4. the employer's link, from the saved price; one left off; the signed record
   shared = { ...again, readonly: true, resolvedPricing: saved && saved.resolvedPricing };
   await page.goto(ORIGIN + '/', { waitUntil: 'load' }); await settle(); v = await read();
