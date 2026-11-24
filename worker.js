@@ -703,6 +703,21 @@ async function handleSaveQuote(request, env, ctx) {
     }
   }
 
+  // 11-23-2026 (Eric's yes): THE NUMBER IS PRINTED ON THE PROPOSAL, SO IT IS NOT PERMISSION TO REPLACE THE QUOTE. A broker
+  // may save over their own quote (the broker on it, or the login that saved it) or one their agency lets them open; ABY any.
+  if (me && !adminName) {
+    let own = null;
+    try {
+      own = await env.DB.prepare('SELECT id, broker_email, agency_id FROM quotes WHERE quote_number = ?').bind(quoteNumber).first();
+    } catch (err) {
+      console.error('quote owner could not be read:', String(err && err.message || err));
+      return jsonResp({ error: 'The quote could not be saved. Please try again.' }, 500);
+    }
+    if (own && !(await brokerMaySave(env, me, own))) {
+      return jsonResp({ error: 'This quote number belongs to another broker, so nothing was saved. Click Reset to start your own quote, or ask ABY.', notYours: true }, 403);
+    }
+  }
+
   let existing = null;
   try {
     existing = await env.DB.prepare(
@@ -935,6 +950,15 @@ async function handleSaveQuote(request, env, ctx) {
     } catch (err) {
       console.warn('resolved_pricing not stored (column missing?):', String(err && err.message || err));
     }
+  }
+
+  // WHICH LOGIN SAVED IT, for the rule above: an assistant who quotes under a producer's email saves their own quote again.
+  // The table makes itself, so there is no migration to wait for.
+  if (isNew && me && !adminName) {
+    try {
+      await env.DB.prepare('CREATE TABLE IF NOT EXISTS quote_saver (quote_id TEXT PRIMARY KEY, broker_id TEXT NOT NULL)').run();
+      await env.DB.prepare('INSERT OR IGNORE INTO quote_saver (quote_id, broker_id) VALUES (?,?)').bind(rowId, me.id).run();
+    } catch (err) { console.warn('quote saver not recorded:', String(err && err.message || err)); }
   }
 
   // WHOSE AGENCY RAN IT, FROM THE SESSION RATHER THAN FROM THE TYPED NAME (F-6, 09-25-2026).
@@ -2814,7 +2838,7 @@ async function handleLogin(request, env) {
     await env.DB.prepare('DELETE FROM admin_login_fails WHERE ip = ?').bind(ip).run();
   } catch (err) { /* nothing to do; the rows age out on their own */ }
 
-  const token = await makeToken(env[ADMIN_IDENTITIES.find((i) => i.who === who).secret], who);
+  const token = await makeToken(env, who);
   return new Response(JSON.stringify({ ok: true, who }), {
     headers: {
       'Content-Type': 'application/json',
@@ -3332,12 +3356,25 @@ const ADMIN_IDENTITIES = [
  * ⛔ The signature covers the NAME as well as the constant, or every identity signed with the same
  * secret would produce interchangeable tokens.
  */
-async function makeToken(password, who) {
+async function makeToken(env, who, exp) {
+  const id = ADMIN_IDENTITIES.find((i) => i.who === who);
+  const until = exp || Date.now() + SESSION_MS;
+  return who + '.' + until + '.' + await sessionMac(env, 'aby-admin-v2:' + who + ':' + until + ':' + String(env[id.secret] || ''));
+}
+
+/**
+ * HOW A SESSION IS SIGNED (11-23-2026, Eric's yes). It was signed with the office password alone and never ended: a copied
+ * cookie worked for good, anyone who knew that password could sign in as any broker, and a broker's own cookie let them
+ * guess at it. Now: SESSION_SECRET (random, only on the server; scripts/set-session-secret.sh), the date it ends, and the
+ * password it came from, so changing a password signs that login out. No SESSION_SECRET = nobody is signed in.
+ */
+const SESSION_MS = 1000 * 60 * 60 * 24 * 30;
+async function sessionMac(env, text) {
+  const secret = String(env.SESSION_SECRET || '');
+  if (secret.length < 32) throw new Error('SESSION_SECRET is not set');
   const enc = new TextEncoder();
-  const key  = await crypto.subtle.importKey('raw', enc.encode(password), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const sig  = await crypto.subtle.sign('HMAC', key, enc.encode('aby-admin-v1:' + (who || 'office')));
-  const mac  = btoa(String.fromCharCode(...new Uint8Array(sig)));
-  return who ? who + '.' + mac : mac;
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(text)))));
 }
 
 /**
@@ -3345,26 +3382,14 @@ async function makeToken(password, who) {
  * "is this allowed" reads it as truthy, and a caller that wants the name gets it from the same
  * call -- so the two can never disagree about who is signed in.
  *
- * ⭐ A BARE TOKEN WITH NO NAME IS STILL ACCEPTED, AND THAT IS DELIBERATE: every session issued
- * before this shipped looks like that. Forcing a re-login would have been a self-inflicted
- * outage for whoever was mid-task.
+ * A session from before 11-23-2026 (no end date) is refused: everybody signs in once more.
  */
 async function tokenIdentity(token, env) {
   if (!token) return null;
-  const dot = token.indexOf('.');
-  const named = dot > 0 ? token.slice(0, dot) : '';
-  for (const id of ADMIN_IDENTITIES) {
-    const secret = env[id.secret];
-    if (!secret) continue;
-    if (named) {
-      if (named !== id.who) continue;
-      try { if (token === await makeToken(secret, id.who)) return id.who; } catch { /* next */ }
-    } else {
-      // Legacy shape, minted before names existed. Only the shared password ever produced one.
-      try { if (token === await makeToken(secret, null)) return 'office'; } catch { /* next */ }
-    }
-  }
-  return null;
+  const [who, until] = String(token).split('.');
+  const id = ADMIN_IDENTITIES.find((i) => i.who === who);
+  if (!id || !env[id.secret] || !/^[0-9]{13}$/.test(until || '') || Number(until) < Date.now()) return null;
+  try { return safeEqual(token, await makeToken(env, who, Number(until))) ? who : null; } catch { return null; }
 }
 
 async function verifyToken(token, env) {
@@ -6653,7 +6678,7 @@ async function linkBrokerIntoDirectory(env, opts) {
       // ⭐ ONE THING IS FILLED IN RATHER THAN OVERWRITTEN: an address ABY knew from a quote may have
       // no agency record attached. Now that a signed-in administrator has asserted the membership,
       // that is the best evidence there will ever be for it.
-      if (!existing.agency_id && agencyId) {
+      if (!existing.agency_id && agencyId && !(opts && opts.attachKnown === false)) {
         await env.DB.prepare('UPDATE broker_directory SET agency_id = ? WHERE lower(trim(email)) = ? AND agency_id IS NULL')
           .bind(agencyId, email).run();
       }
@@ -13762,17 +13787,35 @@ async function handleBrokerQuoteLink(request, env) {
   if (!id) return jsonResp({ error: 'Which quote?' }, 400);
   const q = await env.DB.prepare('SELECT id, broker_email FROM quotes WHERE id = ?').bind(id).first();
   const owner = q ? String(q.broker_email || '').trim().toLowerCase() : '';
-  let allowed = !!owner && owner === String(me.email || '').trim().toLowerCase();
-  if (!allowed && owner && me.agency_id) {
-    const agency = await env.DB.prepare('SELECT share_quotes FROM agencies WHERE id = ?').bind(me.agency_id).first();
-    if (me.role === 'admin' || (agency && agency.share_quotes)) {
-      const colleague = await env.DB.prepare('SELECT 1 AS ok FROM brokers WHERE lower(trim(email)) = ? AND agency_id = ?')
-        .bind(owner, me.agency_id).first();
-      allowed = !!colleague;
-    }
-  }
-  if (!allowed) return jsonResp({ error: 'Not found' }, 404);
+  if (!owner || !(await brokerSeesOwner(env, me, owner))) return jsonResp({ error: 'Not found' }, 404);
   return handleShareQuote(id, env, new URL(request.url));
+}
+
+/**
+ * SOMEBODY IN THE AGENCY = THEY JOINED IT (11-23-2026, Eric's yes). An administrator types an invitation's address, so an
+ * unanswered one proves nothing about that person: their quotes stay theirs until they set a password or have signed in
+ * (a BenefitLab broker has no ABY password).
+ */
+const JOINED_SQL = "(b.password_hash <> '' OR b.last_login_at IS NOT NULL)";
+
+/** May this broker see quotes run under this email? Their own, or a colleague's when the agency shares (or they run it). */
+async function brokerSeesOwner(env, me, owner) {
+  if (owner === String(me.email || '').trim().toLowerCase()) return true;
+  if (!me.agency_id) return false;
+  const agency = await env.DB.prepare('SELECT share_quotes FROM agencies WHERE id = ?').bind(me.agency_id).first();
+  if (me.role !== 'admin' && !(agency && agency.share_quotes)) return false;
+  return !!(await env.DB.prepare('SELECT 1 AS ok FROM brokers b WHERE lower(trim(b.email)) = ? AND b.agency_id = ? AND ' + JOINED_SQL)
+    .bind(owner, me.agency_id).first());
+}
+
+/** May this broker save over this quote? Who may see it, plus the login that first saved it. */
+async function brokerMaySave(env, me, q) {
+  const owner = String(q.broker_email || '').trim().toLowerCase();
+  if (owner ? await brokerSeesOwner(env, me, owner) : (!!q.agency_id && q.agency_id === me.agency_id)) return true;
+  try {
+    const s = await env.DB.prepare('SELECT broker_id FROM quote_saver WHERE quote_id = ?').bind(q.id).first();
+    return !!s && s.broker_id === me.id;
+  } catch { return false; }   // no quote has been saved by a broker since this shipped
 }
 
 // ─── Agencies, invitations and resets (F-53) ───────────────────────────────────
@@ -13872,6 +13915,9 @@ async function handleAgencyInvite(request, env) {
     await linkBrokerIntoDirectory(env, {
       email, name, phone: '', agencyId: me.agency_id,
       agencyName: agency ? agency.name : '', source: 'invite',
+      // Someone ABY already knows is attached to this firm when they ACCEPT (handleSetPassword), not when they are typed in:
+      // the firm's people list shows a person's phone and how much they have quoted.
+      attachKnown: false,
     });
 
     const token = await issueResetToken(env, id);
@@ -14066,14 +14112,21 @@ async function handleSetPassword(request, env) {
   if (password.length < 10) return jsonResp({ error: 'Use at least 10 characters.' }, 400);
   if (!token) return jsonResp({ error: 'That link is not valid.' }, 400);
 
-  const row = await env.DB.prepare('SELECT id, email, reset_expires FROM brokers WHERE reset_token = ?').bind(token).first();
+  const row = await env.DB.prepare('SELECT id, email, agency_id, reset_expires FROM brokers WHERE reset_token = ?').bind(token).first();
   if (!row) return jsonResp({ error: 'That link is not valid. Ask for a new one.' }, 400);
   if (!row.reset_expires || new Date(row.reset_expires) < new Date()) {
     return jsonResp({ error: 'That link has expired. Ask for a new one.' }, 400);
   }
   // ⭐ The token is cleared in the same statement that sets the password, so a link works ONCE.
-  await env.DB.prepare('UPDATE brokers SET password_hash = ?, reset_token = NULL, reset_expires = NULL WHERE id = ?')
-    .bind(await hashPassword(password), row.id).run();
+  await env.DB.prepare('UPDATE brokers SET password_hash = ?, reset_token = NULL, reset_expires = NULL, last_login_at = ? WHERE id = ?')
+    .bind(await hashPassword(password), new Date().toISOString(), row.id).run();
+  // Accepting an invitation is what attaches a person ABY already knew to the firm.
+  if (row.agency_id) {
+    try {
+      await env.DB.prepare("UPDATE broker_directory SET agency_id = ? WHERE lower(trim(email)) = ? AND COALESCE(agency_id, '') = ''")
+        .bind(row.agency_id, String(row.email || '').trim().toLowerCase()).run();
+    } catch (err) { console.warn('directory not attached:', String(err && err.message || err)); }
+  }
 
   return new Response(JSON.stringify({ ok: true }), { status: 200,
     headers: { 'Content-Type': 'application/json',
@@ -14174,7 +14227,7 @@ async function handleAgencyQuotes(request, env) {
   // Joined on email, which is the same key everything else in this system uses.
   const r = await env.DB.prepare(
     `SELECT ${cols} FROM quotes q JOIN brokers b ON lower(trim(q.broker_email)) = lower(trim(b.email)) AND trim(q.broker_email) <> '' ` +
-    `WHERE b.agency_id = ? ORDER BY q.created_at DESC LIMIT 500`
+    `WHERE b.agency_id = ? AND ${JOINED_SQL} ORDER BY q.created_at DESC LIMIT 500`
   ).bind(me.agency_id).all();
   return jsonResp({ quotes: r.results || [] });
 }
@@ -14212,30 +14265,32 @@ async function verifyPassword(password, stored) {
   } catch { return false; }
 }
 
-// A session is `<brokerId>.<hmac>`, signed with the admin password as the server secret.
+// A session is `<brokerId>.<when it ends>.<hmac>`, signed as sessionMac says, over the broker's own password hash too.
 // ⚠️ THE ID IS SIGNED, NOT ENCRYPTED. It is not a secret -- the point is that a broker cannot
 // EDIT it to become another broker, which is what an unsigned cookie would allow.
 const BROKER_COOKIE = 'aby_broker';
 
 async function makeBrokerToken(brokerId, env) {
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(String(env.ADMIN_PASSWORD || '')),
-    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode('aby-broker-v1:' + brokerId));
-  return brokerId + '.' + b64(sig);
+  const row = await env.DB.prepare('SELECT password_hash FROM brokers WHERE id = ?').bind(brokerId).first();
+  return brokerToken(env, brokerId, Date.now() + SESSION_MS, row ? row.password_hash : '');
+}
+async function brokerToken(env, brokerId, until, passwordHash) {
+  return brokerId + '.' + until + '.' + await sessionMac(env, 'aby-broker-v2:' + brokerId + ':' + until + ':' + String(passwordHash || ''));
 }
 
 /** The signed-in broker's row, or null. Never trusts the id in the cookie without the signature. */
 async function currentBroker(request, env) {
   const raw = parseCookies(request.headers.get('Cookie') || '')[BROKER_COOKIE];
   if (!raw) return null;
-  const dot = raw.lastIndexOf('.');
-  if (dot < 1) return null;
-  const id = raw.slice(0, dot);
-  if (!safeEqual(raw, await makeBrokerToken(id, env))) return null;
+  const [id, until] = raw.split('.');
+  if (!id || !/^[0-9]{13}$/.test(until || '') || Number(until) < Date.now()) return null;
   try {
-    return await env.DB.prepare(
-      'SELECT id, email, name, agency, phone, logo_data_url, agency_id, role FROM brokers WHERE id = ?').bind(id).first();
-  } catch { return null; }   // table not migrated yet
+    const row = await env.DB.prepare(
+      'SELECT id, email, name, agency, phone, logo_data_url, agency_id, role, password_hash FROM brokers WHERE id = ?').bind(id).first();
+    if (!row || !safeEqual(raw, await brokerToken(env, id, Number(until), row.password_hash))) return null;
+    const { password_hash, ...me } = row;   // the hash never travels with the person
+    return me;
+  } catch { return null; }   // table not migrated yet, or no SESSION_SECRET
 }
 
 function parseCookies(header) {
@@ -21760,7 +21815,7 @@ const ABY_INTERNAL_JS = `
       //
       // 🔴 THE FLAG OUTLIVED THE CONDITION. tierExceeded means "this count is off the published
       // ladder", which stays true -- but everything DOWNSTREAM reads it as "nobody has priced
-      // this": productAnnual() drops the monthly out of the Estimated Annual Total, the renderer
+      // this": productFirstYear() drops the monthly out of the Estimated First-Year Total, the renderer
       // prints contact-ABY wording, and the internal box goes red. So an agreed price still
       // produced a quote with a short total and a refusal on it.
       //

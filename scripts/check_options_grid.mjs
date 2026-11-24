@@ -10,7 +10,7 @@
 // WHY THIS NEEDS A CHECKER RATHER THAN A CAREFUL EDIT. Showing several options at once turned two
 // numbers on a CLIENT-FACING document into things that have to AGREE:
 //   * each option's printed price and the figures its radio carries, and
-//   * the sum of the pre-checked options and the Estimated Annual Total.
+//   * the sum of the pre-checked options and the Estimated First-Year Total.
 // Neither disagreement throws. Both render as a confident, wrong money figure on a page an
 // employer signs. Three of the defects below were live before this change and invisible only
 // because POP never showed two options at once:
@@ -241,7 +241,7 @@ const RULES = [
     },
   },
   {
-    name: "the Estimated Annual Total EQUALS the sum of the pre-checked options",
+    name: "the Estimated First-Year Total EQUALS the sum of the pre-checked options",
     why: "⭐ THE RULE THE WHOLE CHANGE RESTS ON. The headline figure and the selected options are"
        + " two statements about one price, computed in different places. Nothing else compares them.",
     holds: (A) => {
@@ -250,11 +250,27 @@ const RULES = [
       const chosen = picks(q.client).filter((x) => x.checked);
       // The single-option product (HSA) is not a radio, so take its figure from the engine.
       const hsa = q.results.filter((r) => r.productId === "hsa")[0];
-      const hsaAnnual = (hsa.renewalFee ? hsa.renewalFee.amount : 0) +
+      // First year (Eric, 11-23-2026): the setup is in it, a renewal is not.
+      const hsaAnnual = (hsa.setupFee ? hsa.setupFee.amount : 0) +
                         (hsa.annualFee ? hsa.annualFee.amount : 0) +
                         (hsa.monthlyFee ? hsa.monthlyFee.amount * 12 : 0);
       const sum = chosen.reduce((a, x) => a + x.annual, 0) + hsaAnnual;
       return bigTotal(q.client) === moneyOf(A, sum);
+    },
+  },
+  {
+    name: "the first-year total counts a SET or WAIVED setup fee as set or waived, and no renewal",
+    why: "Eric, 11-23-2026: first year with setup. The total counted the RENEWAL in place of the setup, so neither a"
+       + " setup ABY changed nor one it waived ever reached it.",
+    holds: (A) => {
+      const base = A.engine.calculateAll([{ productId: "cobra", count: 40 }], true, "TX")[0];
+      const total = (amt) => {
+        const r = JSON.parse(JSON.stringify(base)); r.setupFee.amount = amt;
+        return bigTotal(A.renderer.renderForClient(FORM, [r], "TX261123-0001-C", {}));
+      };
+      const m = base.monthlyFee.amount * 12;
+      return base.renewalFee.amount > 0 && m > 0
+        && [0, 60, 500].every((x) => total(x) === moneyOf(A, m + x));
     },
   },
   {
@@ -270,7 +286,7 @@ const RULES = [
       return cards.every((card) => {
         const pkg = /data-opt-package="([^"]*)"/.exec(card)[1];
         const annual = Number(/data-opt-annual="([^"]*)"/.exec(card)[1]);
-        const oneTime = Number(/data-opt-onetime="([^"]*)"/.exec(card)[1]);
+        const oneTime = 0;   // no POP option has a setup that differs from its renewal
         const perYear = [...card.matchAll(/<span class="opt-price-amount">([^<]*)<\/span><span class="opt-price-unit">per year<\/span>/g)];
         const setups = [...card.matchAll(/<span class="opt-price-amount">([^<]*)<\/span><span class="opt-price-unit">one-time setup<\/span>/g)];
         const shownYear = perYear.length ? perYear[0][1] : A.utils.money(0);
@@ -438,7 +454,7 @@ const RULES = [
     },
   },
   {
-    name: "the elected EXTRAS reach the Estimated Annual Total",
+    name: "the elected EXTRAS reach the Estimated First-Year Total",
     why: "🔴 F-483, Eric 2026-09-04: *\"EIN and state filing charges would apply to the annual total"
        + " if they enter the number of EINs for 2-9 and 10+ and enter the number of states.\"* They"
        + " reached it on NO quote before that — a two-EIN ACA quote headlined $1,500 short of what"
@@ -566,7 +582,7 @@ const SABOTAGES = [
     edit: (rel, s) => rel.endsWith("renderer.js") ? s.replace("var CARD_LIMIT = 3;", "var CARD_LIMIT = 99;") : s },
   { why: "the radio loses its figures, so the total cannot follow it",
     edit: (rel, s) => rel.endsWith("renderer.js")
-      ? s.split("' data-opt-annual=\"' + esc(String(productAnnual(r))) + '\"' +").join("") : s },
+      ? s.split("' data-opt-annual=\"' + esc(String(productFirstYear(r))) + '\"' +").join("") : s },
   { why: "no option is pre-checked",
     edit: (rel, s) => rel.endsWith("renderer.js")
       ? s.replace("(isDefault ? ' checked' : '')", "''") : s },
@@ -576,15 +592,18 @@ const SABOTAGES = [
   { why: "the total goes back to always taking the cheapest option",
     edit: (rel, s) => rel.endsWith("renderer.js")
       ? s.replace("var wantId = defaultOptionFor(g, form);",
-                  "var wantId = g.results.reduce(function (a, b) { return productAnnual(b) < productAnnual(a) ? b : a; }).packageId;") : s },
+                  "var wantId = g.results.reduce(function (a, b) { return productFirstYear(b) < productFirstYear(a) ? b : a; }).packageId;") : s },
   // ⛔ SINGLE-LINE ANCHORS ONLY, EVERY ONE OF THEM. The working tree is CRLF (measured: 1,174
   // CRLF pairs and zero bare LF in renderer.js), so an anchor written across a newline matches
   // NOTHING and the sabotage silently changes nothing -- TRAPS #246 and #299. Two of these were
   // written multi-line and reported BROKEN, which is the floor below doing its job.
   { why: "the card prints the setup fee again beside the annual one (the $700 bug)",
     edit: (rel, s) => rel.endsWith("renderer.js")
-      ? s.replace("var one = productOneTime(r);",
-                  "var one = 0; lines.push({ amount: u.money((r.setupFee||{}).amount || 0), unit: 'one-time setup' });") : s },
+      ? s.replace("if (perYear > 0) lines.push({ amount: u.money(perYear), unit: 'per year' });",
+                  "if (perYear > 0) lines.push({ amount: u.money(perYear), unit: 'per year' }); lines.push({ amount: u.money((r.setupFee||{}).amount || 0), unit: 'one-time setup' });") : s },
+  { why: "the total goes back to counting the renewal instead of the setup",
+    edit: (rel, s) => rel.endsWith("renderer.js")
+      ? s.replace("if (r.setupFee) total += r.setupFee.amount || 0;", "if (r.setupFee && r.renewalFee == null) total += r.setupFee.amount || 0;") : s },
   // ⚠️ THIS SABOTAGE IS NOT "the names lose their colon", THOUGH THAT WAS THE ORIGINAL DEFECT.
   // Dropping the colon no longer empties anything, because both layouts fall back to the pricing
   // description -- so a sabotage written that way reported MISSED while the code was RIGHT, and
@@ -727,6 +746,6 @@ if (SELF_TEST) {
 
 console.log("");
 if (bad) { console.log(bad + " problem(s)."); process.exit(1); }
-console.log("Options render, one is pre-checked, and the Estimated Annual Total follows it.");
+console.log("Options render, one is pre-checked, and the Estimated First-Year Total follows it.");
 console.log("  This checks the RENDERED page and the REAL downloaded bundle. It cannot check that");
 console.log("  the prices themselves are right -- that is pricing.js and ABY's rate sheet.");

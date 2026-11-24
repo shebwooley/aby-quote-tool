@@ -134,7 +134,7 @@
     // option instead."
     //
     // ⭐⭐ IT PICKS BETWEEN NUMBERS THE ENGINE ALREADY PRODUCED. Every option carries its own
-    // `data-opt-annual` and `data-opt-onetime`, computed by `productAnnual` / `productOneTime`
+    // `data-opt-annual`, computed by `productFirstYear`
     // when the quote was rendered. This code sums and formats; it does not price anything. A
     // page that re-priced in the reader's browser is the exact failure `check_share_guard`
     // exists to stop -- an employer opening a page showing more than the document they were sent.
@@ -157,20 +157,15 @@
     // Sum every product row: a row with options reads the checked radio, a row without one keeps
     // the figures it was rendered with. Reading the RENDERED cell back for single-option rows
     // means this function never has to know how those were worked out.
-    'function abyRetotal(){var annual=0,one=0;var rows=document.querySelectorAll("[data-aby-row]");if(!rows.length)return;' +
+    'function abyRetotal(){var annual=0;var rows=document.querySelectorAll("[data-aby-row]");if(!rows.length)return;' +
       'rows.forEach(function(row){var pid=row.getAttribute("data-aby-row");var pick=abyPicked(pid);' +
-        'var a,o;' +
-        'if(pick){a=Number(pick.getAttribute("data-opt-annual"))||0;o=Number(pick.getAttribute("data-opt-onetime"))||0;' +
-          'var ac=row.querySelector("[data-aby-row-annual]"),oc=row.querySelector("[data-aby-row-onetime]");' +
-          'if(ac)ac.textContent=abyMoney(Math.round(a));if(oc)oc.textContent=o>0?abyMoney(o):"—";}' +
-        'else{a=abyCell(row,"[data-aby-row-annual]");o=abyCell(row,"[data-aby-row-onetime]");}' +
-        'annual+=a;one+=o;});' +
-      'document.querySelectorAll("[data-aby-total-annual]").forEach(function(el){el.textContent=abyMoney(Math.round(annual));});' +
-      'document.querySelectorAll("[data-aby-total-onetime]").forEach(function(el){el.textContent=abyMoney(one);});' +
-      'document.querySelectorAll("[data-aby-onetime-note]").forEach(function(el){el.textContent=abyMoney(one);});' +
-      'var line=document.querySelector("[data-aby-onetime-line]");if(line)line.style.display=one>0?"":"none";' +
-      'var foot=document.querySelector("[data-aby-foot-onetime]");if(foot)foot.style.display=one>0?"":"none";' +
-      'var dash=document.querySelector("[data-aby-foot-dash]");if(dash)dash.textContent=one>0?"":"—";}',
+        'var a;' +
+        'if(pick){a=Number(pick.getAttribute("data-opt-annual"))||0;' +
+          'var ac=row.querySelector("[data-aby-row-annual]");' +
+          'if(ac)ac.textContent=abyMoney(Math.round(a));}' +
+        'else{a=abyCell(row,"[data-aby-row-annual]");}' +
+        'annual+=a;});' +
+      'document.querySelectorAll("[data-aby-total-annual]").forEach(function(el){el.textContent=abyMoney(Math.round(annual));});}',
 
     // Read a money cell back out of the table. An em dash means nothing, not zero.
     'function abyCell(row,sel){var el=row.querySelector(sel);if(!el)return 0;var t=(el.textContent||"").replace(/[^0-9.]/g,"");var n=Number(t);return isNaN(n)?0:n;}',

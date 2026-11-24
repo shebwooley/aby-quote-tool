@@ -200,6 +200,15 @@
       // ⛔ STILL FIRE-AND-FORGET IN SPIRIT: if the read fails, or the save failed, the id simply
       // stays null and the share button does not appear. Nothing here can interrupt the broker.
       const saved = await res.json().catch(function () { return null; });
+      const old = document.getElementById('abyNotSaved'); if (old) old.remove();
+      if (res.status === 403 && saved && saved.notYours) {
+        const box = document.createElement('p');
+        box.id = 'abyNotSaved'; box.setAttribute('role', 'alert'); box.className = 'no-print';
+        box.style.cssText = 'margin:0 0 12px;padding:12px 14px;border:1px solid #c0392b;border-radius:8px;background:#fdf1ef;color:#8e2318';
+        box.textContent = saved.error;
+        const out = document.getElementById('quoteOutput');
+        if (out && out.parentNode) out.parentNode.insertBefore(box, out);
+      }
       if (saved && saved.id) {
         window.__abySavedQuoteId = saved.id;
         document.dispatchEvent(new CustomEvent('aby:quote-saved', { detail: { id: saved.id } }));

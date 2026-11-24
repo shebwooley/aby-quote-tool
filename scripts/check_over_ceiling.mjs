@@ -126,7 +126,7 @@ const overCeiling = (A) => A.engine.calculateAll([{ productId: "fsa", count: OVE
 const client = (A, r) => A.renderer.renderForClient(FORM, r, "TX270101-0001-C", {});
 const internal = (A, r) => A.renderer.renderInternal(FORM, r, "TX270101-0001-C", {});
 const text = (h) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
-const totalOf = (h) => (/Estimated Annual Total\s*(\$[\d,]+)/.exec(text(h)) || [])[1];
+const totalOf = (h) => (/Estimated First-Year Total\s*(\$[\d,]+)/.exec(text(h)) || [])[1];
 
 const RULES = [
   {

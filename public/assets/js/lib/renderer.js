@@ -314,40 +314,30 @@ ABYQuote.renderer = (function () {
   var CARD_LIMIT = 3;
 
   /**
-   * WHAT ONE OPTION COSTS, PRINTED FROM THE SAME TWO FUNCTIONS THAT BUILD THE TOTAL.
+   * WHAT ONE OPTION COSTS, PRINTED FROM THE SAME FEES THAT BUILD THE TOTAL.
    *
-   * 🔴🔴 THIS IS DERIVED FROM `productAnnual` AND `productOneTime` ON PURPOSE, AND THE FIRST
-   * VERSION OF IT WAS NOT. That version read the fee fields directly and printed POP's
-   * Documents + NDT as "$350 one-time setup" AND "$350 per year" -- which reads as $700 in year
-   * one -- while the Estimated Annual Total for the same option said $350. Caught by rendering
-   * it, not by reading it.
-   *
-   * ⭐ WHY THEY DISAGREED, AND IT IS A REAL RULE RATHER THAN AN OVERSIGHT: `productOneTime`
-   * counts a setup fee ONLY when it is not already the recurring annual fee -- "renewal is $0 or
-   * absent, the HSA case". POP charges $350 setup in year one and $350 renewal after, so the
-   * employer pays $350 a year from the first year. "$350 per year" states that completely; a
-   * separate setup line double-counts it.
-   *
-   * ⛔ A CARD THAT DISAGREES WITH THE TOTAL BESIDE IT IS WORSE THAN EITHER NUMBER BEING WRONG,
-   * because the reader cannot tell which one to believe. Deriving both from one place is what
-   * stops that, so do not "improve" this by reading the fee fields again.
+   * POP charges $350 setup in year one and $350 renewal after: "$350 per year" states that completely, and a second
+   * setup line reads as $700 in year one. A setup that differs from the renewal (set or waived by ABY) prints both.
+   * The total (productFirstYear) counts the setup, never both.
    */
   function optionPriceLines(r) {
     var lines = [];
     if (r.monthlyFee && !r.monthlyFee.tierExceeded) {
       lines.push({ amount: u.money(r.monthlyFee.amount), unit: 'per month' });
     }
-    var perYear = (r.annualFee != null ? r.annualFee.amount : 0) +
-                  (r.renewalFee != null ? r.renewalFee.amount : 0);
+    var setup = r.setupFee ? (r.setupFee.amount || 0) : 0, renew = r.renewalFee != null ? r.renewalFee.amount : 0;
+    var sameEveryYear = renew > 0 && (!r.setupFee || setup === renew);   // "$350 per year" says it all
+    var perYear = (r.annualFee != null ? r.annualFee.amount : 0) + (sameEveryYear ? renew : 0);
     if (perYear > 0) lines.push({ amount: u.money(perYear), unit: 'per year' });
-    var one = productOneTime(r);
-    if (one > 0) lines.push({ amount: u.money(one), unit: 'one-time setup' });
+    if (!sameEveryYear && setup > 0) lines.push({ amount: u.money(setup), unit: 'one-time setup' });
+    if (!sameEveryYear && renew > 0) lines.push({ amount: u.money(renew), unit: 'per year after the first' });
+    if (r.docsFee && r.docsFee.amount > 0) lines.push({ amount: u.money(r.docsFee.amount), unit: 'one-time documents' });
     if (!lines.length) lines.push({ amount: 'On request', unit: '' });
     return lines;
   }
 
   /**
-   * The options as cards, each with a radio that drives the Estimated Annual Total.
+   * The options as cards, each with a radio that drives the Estimated First-Year Total.
    *
    * ⭐ THE RADIO IS THE WHOLE POINT OF THE `data-opt-*` ATTRIBUTES. Eric: "Perhaps by pre-checking
    * an option and changing the total if someone selects a different option instead." The figures
@@ -375,8 +365,7 @@ ABYQuote.renderer = (function () {
           ' name="aby-opt-' + esc(group.productId) + '"' +
           ' data-opt-product="' + esc(group.productId) + '"' +
           ' data-opt-package="' + esc(r.packageId) + '"' +
-          ' data-opt-annual="' + esc(String(productAnnual(r))) + '"' +
-          ' data-opt-onetime="' + esc(String(productOneTime(r))) + '"' +
+          ' data-opt-annual="' + esc(String(productFirstYear(r))) + '"' +
           ' data-opt-label="' + esc(parsed.name) + '"' +
           (isDefault ? ' checked' : '') + '>' +
         '<div class="opt-card-body">' +
@@ -387,7 +376,7 @@ ABYQuote.renderer = (function () {
       '</label>';
     }).join('\n');
     return '<div class="options-grid cols-' + group.results.length + '">\n' + cards + '\n</div>' +
-      '<p class="options-hint no-print">Select an option to see what it makes the estimated annual total.</p>';
+      '<p class="options-hint no-print">Select an option to see what it makes the estimated first-year total.</p>';
   }
 
   /**
@@ -395,7 +384,7 @@ ABYQuote.renderer = (function () {
    *
    * ⭐⭐ IT CARRIES THE SAME RADIO AS THE CARDS, AND THAT IS NOT DECORATION. Without it the two
    * layouts would BEHAVE differently: a reader could switch the option on the signature page of
-   * a six-option ERISA quote and the Estimated Annual Total above would sit still, because
+   * a six-option ERISA quote and the Estimated First-Year Total above would sit still, because
    * nothing on the page held that option's figures. The card path would re-figure and the table
    * path would not, for no reason a reader could see.
    * ⛔ So the split Eric chose is about LAYOUT ONLY. Anything a reader can do to one list they
@@ -422,8 +411,7 @@ ABYQuote.renderer = (function () {
           ' name="aby-opt-' + esc(group.productId) + '"' +
           ' data-opt-product="' + esc(group.productId) + '"' +
           ' data-opt-package="' + esc(r.packageId) + '"' +
-          ' data-opt-annual="' + esc(String(productAnnual(r))) + '"' +
-          ' data-opt-onetime="' + esc(String(productOneTime(r))) + '"' +
+          ' data-opt-annual="' + esc(String(productFirstYear(r))) + '"' +
           ' data-opt-label="' + esc(parsed.name) + '"' +
           (r.packageId === defaultPackageId ? ' checked' : '') + '></td>';
       var nameCell = '<td><label for="' + esc(rid) + '">' + esc(parsed.name) + '</label>' + recTag + '</td>';
@@ -453,7 +441,7 @@ ABYQuote.renderer = (function () {
       head,
       '  <tbody>' + rows + '</tbody>',
       '</table>',
-      '<p class="options-hint no-print">Select an option to see what it makes the estimated annual total.</p>'
+      '<p class="options-hint no-print">Select an option to see what it makes the estimated first-year total.</p>'
     ].join('\n');
   }
 
@@ -518,7 +506,7 @@ ABYQuote.renderer = (function () {
   /**
    * WHICH OPTION THE QUOTE ASSUMES UNTIL SOMEBODY PICKS A DIFFERENT ONE.
    *
-   * ⭐⭐ ONE DEFINITION, THREE READERS -- the pre-checked radio, the Estimated Annual Total, and
+   * ⭐⭐ ONE DEFINITION, THREE READERS -- the pre-checked radio, the Estimated First-Year Total, and
    * the authorization page's Option dropdown. Eric asked for the total to follow a pre-checked
    * option, and three places each deciding for themselves what "pre-checked" means is exactly
    * how a quote ends up with the total naming one option and the signature page naming another.
@@ -535,7 +523,7 @@ ABYQuote.renderer = (function () {
     var hasRec = rec && group.results.some(function (r) { return r.packageId === rec; });
     if (hasRec) return rec;
     return group.results.reduce(function (a, b) {
-      return productAnnual(b) < productAnnual(a) ? b : a;
+      return productFirstYear(b) < productFirstYear(a) ? b : a;
     }).packageId;
   }
 
@@ -816,7 +804,7 @@ ABYQuote.renderer = (function () {
         // 🔴 THE PRE-SELECTED OPTION IS THE ONE THE TOTAL IS BUILT ON, NOT MERELY THE
         // RECOMMENDED ONE. This used to select the broker's recommendation and nothing else,
         // so a quote with NO recommendation opened its signature page on whichever option
-        // happened to be first while the Estimated Annual Total was built on the cheapest.
+        // happened to be first while the Estimated First-Year Total was built on the cheapest.
         // The employer would then have signed for one option having read a total for another.
         // `defaultOptionFor` is the single answer to "which one does this quote assume".
         var pre = defaultOptionFor(g, form);
@@ -1027,29 +1015,24 @@ ABYQuote.renderer = (function () {
   }
 
   // -------------------------------------------------------------
-  // Estimated Annual Total
-  // Recurring = annual/renewal fees + 12 months of admin.
-  // One-time  = setup that is NOT already the recurring annual fee (e.g. HSA).
+  // Estimated First-Year Total (Eric, 11-23-2026: "We can do first year with setup.")
+  // What the employer pays ABY in the first twelve months: setup + documents + annual fees + 12 months of administration.
+  // A renewal fee begins in the second year, so it is not in it. A setup fee ABY set or waived is counted as set or waived
+  // (the total used to count the RENEWAL in its place, so neither reached it).
   // -------------------------------------------------------------
 
-  function productAnnual(r) {
+  function productFirstYear(r) {
     var total = 0;
-    if (r.annualFee != null) total += r.annualFee.amount;
-    if (r.renewalFee != null) total += r.renewalFee.amount;       // 0 for HSA
-    if (r.monthlyFee && !r.monthlyFee.tierExceeded) total += r.monthlyFee.amount * 12;
-    return total;
-  }
-  function productOneTime(r) {
-    var total = 0;
+    if (r.setupFee) total += r.setupFee.amount || 0;
+    else if (r.renewalFee != null) total += r.renewalFee.amount;   // a price with no setup line at all starts at its renewal
     if (r.docsFee) total += r.docsFee.amount;
-    // Setup counts as one-time only when it is not already the recurring annual fee
-    // (i.e. renewal is $0 or absent — the HSA case).
-    if (r.setupFee && (r.renewalFee == null || r.renewalFee.amount === 0)) total += r.setupFee.amount;
+    if (r.annualFee != null) total += r.annualFee.amount;
+    if (r.monthlyFee && !r.monthlyFee.tierExceeded) total += r.monthlyFee.amount * 12;
     return total;
   }
 
   function computeTotals(groups, form) {
-    var t = { recurring: 0, oneTime: 0, hasMonthly: false, monthlyIncomplete: false, anyMultiOption: false, rows: [] };
+    var t = { recurring: 0, hasMonthly: false, monthlyIncomplete: false, anyMultiOption: false, rows: [] };
     groups.forEach(function (g) {
       var meta = findProduct(g.productId);
       var name = meta ? (meta.shortName || meta.name) : g.productId;
@@ -1065,18 +1048,19 @@ ABYQuote.renderer = (function () {
       } else {
         r = g.results[0];
       }
-      var ann = productAnnual(r), one = productOneTime(r);
+      var ann = productFirstYear(r);
       t.recurring += ann;
-      t.oneTime += one;
+      if (r.setupFee && r.setupFee.amount > 0) t.hasSetup = true;
+      if (r.setupFee && r.renewalFee && r.renewalFee.amount > 0) t.hasRenewal = true;
       if (r.monthlyFee) { t.hasMonthly = true; if (r.monthlyFee.countMissing) t.monthlyIncomplete = true; }
-      t.rows.push({ productId: g.productId, name: name, annual: ann, oneTime: one, multi: multi });
+      t.rows.push({ productId: g.productId, name: name, annual: ann, multi: multi });
 
       // ── THE ELECTED EXTRAS REACH THE TOTAL (F-483, Eric 2026-09-04) ─────────────────────
       //
       // **Eric:** *"Yes EIN and state filing charges would apply to the annual total if they enter
       // the number of EINs for 2-9 and 10+ and enter the number of states."*
       //
-      // 🔴 THEY REACHED IT ON NO QUOTE BEFORE THIS. `productAnnual()` sums annual + renewal +
+      // 🔴 THEY REACHED IT ON NO QUOTE BEFORE THIS. `productFirstYear()` sums annual + renewal +
       // monthly x 12 and nothing else, so a two-EIN ACA quote's headline was $1,500 short of what
       // the employer would be billed — while that same $1,500 was printed twice elsewhere on the
       // same page. ⭐ **His condition is already the behaviour**: `applyExtras()` prices a line
@@ -1100,7 +1084,6 @@ ABYQuote.renderer = (function () {
           productId: g.productId + '-extras',
           name: name + ': additional services',
           annual: extras,
-          oneTime: 0,
           multi: false
         });
       }
@@ -1111,11 +1094,12 @@ ABYQuote.renderer = (function () {
   function renderTotalsSummary(groups, form) {
     if (!groups || !groups.length) return '';
     var t = computeTotals(groups, form);
-    if (t.recurring <= 0 && t.oneTime <= 0) return '';
+    if (t.recurring <= 0) return '';
 
     var notes = [];
     if (t.hasMonthly) notes.push('Includes 12 months of administration.');
-    if (t.oneTime > 0) notes.push('A one-time setup of <span data-aby-onetime-note>' + u.money(t.oneTime) + '</span> applies in the first year (shown separately below).');
+    if (t.hasSetup) notes.push('Includes setup fees.');
+    if (t.hasRenewal) notes.push('Renewal fees begin in the second year.');
     if (t.monthlyIncomplete) notes.push('Some monthly fees use a starting-tier estimate until participant counts are confirmed.');
     // ⚠️ SAY THAT THE ELECTED CHARGES ARE IN IT (F-483). Without this the reader can add up the
     // service lines, land short of the headline, and have no way to see where the gap came from.
@@ -1130,36 +1114,28 @@ ABYQuote.renderer = (function () {
 
     var big =
       '<div class="price-box featured">' +
-        '<div class="price-label">Estimated Annual Total</div>' +
-        '<div class="price"><span data-aby-total-annual>' + u.money(Math.round(t.recurring)) + '</span> <small>per year</small></div>' +
-        '<p class="muted" data-aby-onetime-line' + (t.oneTime > 0 ? '' : ' style="display:none;"') + '>plus <span data-aby-total-onetime>' +
-          u.money(t.oneTime) + '</span> one-time setup (year one only)</p>' +
+        '<div class="price-label">Estimated First-Year Total</div>' +
+        '<div class="price"><span data-aby-total-annual>' + u.money(Math.round(t.recurring)) + '</span> <small>first year</small></div>' +
       '</div>';
 
     // ⭐ EVERY ROW IS ADDRESSABLE BY PRODUCT ID, so the switching script can rewrite one line
     // rather than re-render the section. The `multi` rows are the only ones that ever move.
     var rows = t.rows.map(function (row) {
       return '<tr data-aby-row="' + esc(row.productId) + '"><td>' + esc(row.name) + '</td>' +
-        '<td style="text-align:right;" data-aby-row-annual>' + u.money(Math.round(row.annual)) + '</td>' +
-        '<td style="text-align:right;" data-aby-row-onetime>' + (row.oneTime > 0 ? u.money(row.oneTime) : '—') + '</td></tr>';
+        '<td style="text-align:right;" data-aby-row-annual>' + u.money(Math.round(row.annual)) + '</td></tr>';
     }).join('\n');
-    var tfootOne =
-      '<tr data-aby-foot-onetime' + (t.oneTime > 0 ? '' : ' style="display:none;"') + '>' +
-      '<td><strong>One-time setup (year one)</strong></td><td></td>' +
-      '<td style="text-align:right;"><strong data-aby-total-onetime>' + u.money(t.oneTime) + '</strong></td></tr>';
     var table =
       '<table class="options-table" style="margin-top:16px;">' +
-      '<thead><tr><th>Service</th><th style="text-align:right;">Est. annual</th><th style="text-align:right;">One-time</th></tr></thead>' +
+      '<thead><tr><th>Service</th><th style="text-align:right;">Est. first year</th></tr></thead>' +
       '<tbody>' + rows + '</tbody>' +
-      '<tfoot><tr><td><strong>Estimated annual total</strong></td>' +
-      '<td style="text-align:right;"><strong data-aby-total-annual>' + u.money(Math.round(t.recurring)) + '</strong></td>' +
-      '<td style="text-align:right;" data-aby-foot-dash>' + (t.oneTime > 0 ? '' : '—') + '</td></tr>' + tfootOne + '</tfoot>' +
+      '<tfoot><tr><td><strong>Estimated first-year total</strong></td>' +
+      '<td style="text-align:right;"><strong data-aby-total-annual>' + u.money(Math.round(t.recurring)) + '</strong></td></tr></tfoot>' +
       '</table>';
 
     return [
       '<section>',
       '  <div class="section-card keep-together">',
-      '    <div class="section-head hero-head"><h2>Estimated Annual Cost</h2><p>A summary estimate based on the services and counts entered. Final cost may vary with actual enrollment and elections.</p></div>',
+      '    <div class="section-head hero-head"><h2>Estimated First-Year Cost</h2><p>A summary estimate based on the services and counts entered. Final cost may vary with actual enrollment and elections.</p></div>',
       '    <div class="section-body">',
       '      <div class="pricing-grid cols-1">' + big + '</div>',
       // ⚠️ NOT ESCAPED, AND THAT IS A DELIBERATE NARROWING RATHER THAN A RELAXATION. Every
