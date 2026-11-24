@@ -180,6 +180,14 @@
 .aby-proposal .fee-name { flex: 1 1 auto; }
 .aby-proposal .fee-amount { flex: 0 0 auto; white-space: nowrap; font-weight: 700; color: var(--aby-blue-dark); }
 .aby-proposal .fee-amount .fee-unit { color: var(--muted); font-weight: 500; font-size: 12px; }
+.aby-proposal .fee-elected { background: #fff6cc; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.aby-proposal .fee-elected .fee-name { font-weight: 700; }
+.aby-proposal .fee-tag { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 10px; background: #1a5c3a; color: #fff; font-size: 11px; font-weight: 700; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.aby-proposal .opt-fees { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 9px; }
+.aby-proposal .opt-fees-title { font-size: 12.5px; font-weight: 700; color: var(--muted); margin-bottom: 4px; }
+.aby-proposal .opt-fee-row { display: flex; align-items: flex-start; gap: 10px; padding: 4px 0; font-size: 13.5px; cursor: pointer; }
+.aby-proposal .opt-fee-name { flex: 1; }
+.aby-proposal .opt-fee-price { font-weight: 700; white-space: nowrap; }
 .aby-proposal .fee-static { display: flex; align-items: center; gap: 12px; padding: 11px 16px 11px 44px; font-size: 14px; }
 .aby-proposal .fee-explain { padding: 0 16px 13px 44px; color: var(--muted); font-size: 13px; }
 

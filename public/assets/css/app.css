@@ -415,6 +415,9 @@ button.print:hover { background: var(--aby-shaded); }
 .product-extras label.extra-num span { flex: 1; }
 .product-extras label.extra-num input { width: 92px; min-width: 0; padding: 5px 8px; border: 1px solid #c8d2de; border-radius: 5px; }
 .product-extras label.extra-check { cursor: pointer; }
+.product-fees { display: block; }
+.product-fees summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.product-fees label { margin-top: 8px !important; }
 
 /* The ACA band control and its live preview, added 2026-09-04 with F-486. Same scoping rule. */
 .product-package-band { display: flex; flex-direction: column; gap: 10px; width: 100%; }

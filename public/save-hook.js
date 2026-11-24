@@ -150,6 +150,9 @@
           else if (x.value !== '' && Number(x.value) > 0) extras[id] = Number(x.value);
         });
         if (Object.keys(extras).length) inputs.extras = extras;
+        const fees = [];
+        item.querySelectorAll('[data-fee-label]:checked').forEach(function(f) { fees.push(f.dataset.feeLabel); });
+        if (fees.length) inputs.fees = fees;
       }
 
       // Use data-product-checkbox attr first (gives clean IDs like 'pop', 'erisa'),

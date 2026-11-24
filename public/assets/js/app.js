@@ -113,7 +113,7 @@
 
   var ABY_COMMIT_JS = [
     'function abySign(v){v=(v||"").trim();var p=document.getElementById("printPreview"),s=document.getElementById("signPreview");if(p)p.textContent=v;if(s)s.textContent=v;}',
-    'function abyElectedProducts(){var list=[];document.querySelectorAll(".opt-row").forEach(function(row){var cb=row.querySelector(".opt-check");if(!cb||!cb.checked)return;var label=cb.getAttribute("data-label");var sel=row.querySelector(".opt-tier-select");if(sel)label+=": "+sel.value;list.push(label);});return list;}',
+    'function abyElectedProducts(){var list=[];document.querySelectorAll(".opt-row").forEach(function(row){var cb=row.querySelector(".opt-check");if(!cb||!cb.checked)return;var label=cb.getAttribute("data-label");var sel=row.querySelector(".opt-tier-select");if(sel)label+=": "+sel.value;list.push(label);row.querySelectorAll(".opt-fee").forEach(function(f){if(f.checked)list.push(f.getAttribute("data-label"));});});return list;}',
     'function abyInitSignDate(){var d=document.getElementById("signDate");if(d&&!d.value){var n=new Date();d.value=n.getFullYear()+"-"+("0"+(n.getMonth()+1)).slice(-2)+"-"+("0"+n.getDate()).slice(-2);}}',
     // THE DRAWN SIGNATURE (Eric, 09-30-2026): "it might feel more like a commitment for the employer."
     // A fixed 600x160 canvas, so the saved PNG stays small whatever the screen; pointer events cover mouse,
@@ -276,7 +276,38 @@
         }));
       }
     }
+    var fees = buildFeePicks(product);
+    if (fees) wrap.appendChild(fees);
     return wrap;
+  }
+
+  /**
+   * ADDITIONAL SERVICES THE CLIENT IS TAKING (Eric, 11-24-2026). One box per priced line of the product's own fee schedule.
+   * A ticked line is highlighted on the quote and listed on the page the employer signs. ACA is left out: its extra
+   * charges are already asked by quantity (buildExtras).
+   */
+  function buildFeePicks(product) {
+    var tx = (ABYQuote.pricing.TX || ABYQuote.pricing).commissioned || {};
+    var list = ((tx[product.id] || {}).additionalFees || []).filter(function (f) { return f.amount > 0; });
+    if (!list.length || product.extras) return null;
+    var det = document.createElement('details');
+    det.className = 'product-extras product-fees';
+    var sum = document.createElement('summary');
+    sum.textContent = 'Additional services the client is taking (optional)';
+    det.appendChild(sum);
+    list.forEach(function (f) {
+      var label = document.createElement('label');
+      label.className = 'extra-check';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset.productInput = product.id + ':fee';
+      cb.dataset.feeLabel = f.label;
+      var span = document.createElement('span');
+      span.textContent = f.label + ' (' + ABYQuote.utils.money(f.amount) + (f.unit ? ' ' + f.unit : '') + ')';
+      label.appendChild(cb); label.appendChild(span);
+      det.appendChild(label);
+    });
+    return det;
   }
 
   /**
@@ -848,6 +879,9 @@
         });
         if (Object.keys(extras).length) selection.extras = extras;
       }
+      var fees = Array.prototype.map.call(formEl.querySelectorAll('[data-product-input="' + productId + ':fee"]:checked'),
+        function (el) { return el.dataset.feeLabel; });
+      if (fees.length) selection.fees = fees;
       data.selections.push(selection);
     });
 
@@ -879,7 +913,8 @@
             productId: sel.productId,
             packageId: pkgId,
             count: sel.count,
-            extras: sel.extras
+            extras: sel.extras,
+            fees: sel.fees
           });
         });
       } else {
@@ -2045,6 +2080,14 @@
           }
           bandEl.dispatchEvent(new Event('change'));
         }
+      }
+
+      // The additional services selected (11-24-2026).
+      if (Array.isArray(p.inputs.fees) && p.inputs.fees.length) {
+        document.querySelectorAll('[data-product-input="' + p.id + ':fee"]').forEach(function (el) {
+          el.checked = p.inputs.fees.indexOf(el.dataset.feeLabel) !== -1;
+          if (el.checked && el.closest('details')) el.closest('details').open = true;
+        });
       }
 
       // The option the broker recommended (saved since 11-23-2026).

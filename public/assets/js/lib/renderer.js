@@ -475,6 +475,12 @@ ABYQuote.renderer = (function () {
     ].join('\n');
   }
 
+  // The additional services selected on this quote, by the same rule the fee schedule prints under.
+  function electedFees(group) {
+    var docsOnly = isDocsOnlyPop(group);
+    return (group.results[0].additionalFees || []).filter(function (f) { return f.elected && !(docsOnly && f.needsTesting); });
+  }
+
   function renderFeeSchedule(result, meta, docsOnly) {
     var fees = result.additionalFees || [];
     // ⛔ FILTERED ON THE FEE'S OWN FLAG, never on its label. See the note beside them in pricing.js.
@@ -483,13 +489,15 @@ ABYQuote.renderer = (function () {
     var items = fees.map(function (f) {
       var amt = (f.amount === 0) ? 'Included' : u.money(f.amount);
       var unit = (f.amount !== 0 && f.unit) ? ' <span class="fee-unit">' + esc(f.unit) + '</span>' : '';
+      var on = f.elected ? ' fee-elected' : '';
+      var tag = f.elected ? ' <span class="fee-tag">Selected</span>' : '';
       if (!f.description) {
-        return '<div class="fee-item"><div class="fee-static">' +
-          '<span class="fee-name">' + esc(f.label) + '</span>' +
+        return '<div class="fee-item' + on + '"><div class="fee-static">' +
+          '<span class="fee-name">' + esc(f.label) + tag + '</span>' +
           '<span class="fee-amount">' + amt + unit + '</span></div></div>';
       }
-      return '<details class="fee-item">' +
-        '<summary>' + CHEV + '<span class="fee-name">' + esc(f.label) + '</span>' +
+      return '<details class="fee-item' + on + '">' +
+        '<summary>' + CHEV + '<span class="fee-name">' + esc(f.label) + tag + '</span>' +
         '<span class="fee-amount">' + amt + unit + '</span></summary>' +
         '<div class="fee-explain">' + esc(f.description) + '</div></details>';
     }).join('\n');
@@ -893,8 +901,17 @@ ABYQuote.renderer = (function () {
             '<strong class="elected-total-amount">' + u.money(firstResult.extrasTotal) + '</strong></div>' +
         '</div>';
       }
+      // The additional services selected on this quote, each one the employer can leave off. What is ticked goes on the
+      // signed record as "<service>: <line> ($125 per year)" - after the colon, so it still reads as that service.
+      var feeRows = electedFees(g).map(function (f) {
+        var price = u.money(f.amount) + (f.unit ? ' ' + f.unit : '');
+        return '<label class="opt-fee-row"><input type="checkbox" class="opt-fee" data-label="' +
+          esc(name + ': ' + f.label + ' (' + price + ')') + '" checked>' +
+          '<span class="opt-fee-name">' + esc(f.label) + '</span><span class="opt-fee-price">' + esc(price) + '</span></label>';
+      }).join('');
+      if (feeRows) feeRows = '<div class="opt-fees"><div class="opt-fees-title">Additional services</div>' + feeRows + '</div>';
       return '<div class="opt-row"><input type="checkbox" class="opt-check" data-label="' + esc(name) + '" checked>' +
-        '<div class="opt-main"><div class="opt-title">' + esc(name) + '</div>' + desc + tier + countBox + extraRows + '</div></div>';
+        '<div class="opt-main"><div class="opt-title">' + esc(name) + '</div>' + desc + tier + countBox + extraRows + feeRows + '</div></div>';
     }).join('\n');
 
     // F-481. `signed` is the commitment this quote already carries, or null. When it is present
@@ -1076,7 +1093,7 @@ ABYQuote.renderer = (function () {
       // ⭐ AND IT NEEDS NO NEW SWITCHING CODE. `abyRetotal()` reads a row's rendered cells when
       // that row has no option radio, so a row keyed `<id>-extras` is summed as a constant and
       // stays put while the product's own row moves with the reader's pick.
-      var extras = r.extrasTotal || 0;
+      var extras = (r.extrasTotal || 0) + (r.electedTotal || 0);
       if (extras > 0) {
         t.recurring += extras;
         t.hasExtras = true;
@@ -1105,6 +1122,7 @@ ABYQuote.renderer = (function () {
     // service lines, land short of the headline, and have no way to see where the gap came from.
     // ⛔ It names the QUANTITIES ENTERED rather than a general "extras may apply", because they
     // are quantities the broker put on this specific quote.
+    if (groups.some(function (g) { return electedFees(g).length; })) notes.push('Additional services priced per notice or per item are billed by the number used and are not in this total.');
     if (t.hasExtras) notes.push('Includes the additional services elected on this quote, at the quantities entered.');
     // 🔴 THIS SENTENCE USED TO SAY "the lowest-cost option is used for this estimate" AND IT IS
     // NO LONGER TRUE. The total now follows the option selected on the page. A caveat left

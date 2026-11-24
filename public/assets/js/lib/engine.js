@@ -313,6 +313,25 @@ ABYQuote.engine = (function () {
     if (given.priorYears) result.priorYears = true;
   }
 
+  /**
+   * ADDITIONAL SERVICES THE CLIENT IS TAKING (Eric, 11-24-2026, for Jana Nentwich: the Annual Notice Packet and the initial
+   * rights notices had to be highlighted and reach the page the employer signs). The lines come from the fee schedule
+   * itself, by label, so a price has one home. CLONED, because `additionalFees` is the shared pricing table.
+   * Only a fee that is one known amount reaches the total; "$3 per notice" has no quantity yet.
+   */
+  function applyElectedFees(result, selection) {
+    var want = selection.fees || [];
+    if (!want.length) return;
+    result.additionalFees = (result.additionalFees || []).map(function (f) {
+      var c = {}; for (var k in f) c[k] = f[k];
+      if (f.amount > 0 && want.indexOf(f.label) !== -1) c.elected = true;
+      return c;
+    });
+    result.electedTotal = result.additionalFees.reduce(function (a, f) {
+      return a + (f.elected && ['per year', 'annually', 'one-time fee'].indexOf(f.unit) !== -1 ? f.amount : 0);
+    }, 0);
+  }
+
   function calculatePackageWithCount(productId, rates, packageId, count) {
     var pkg = rates.packages[packageId];
     if (!pkg) return null;
@@ -391,6 +410,7 @@ ABYQuote.engine = (function () {
     }
 
     if (result) applyExtras(result, selection);
+    if (result) applyElectedFees(result, selection);
 
     if (result && rateLookup.usedFallback) {
       result.warnings.unshift(
