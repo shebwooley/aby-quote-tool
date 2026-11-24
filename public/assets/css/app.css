@@ -415,7 +415,7 @@ button.print:hover { background: var(--aby-shaded); }
 .product-extras label.extra-num span { flex: 1; }
 .product-extras label.extra-num input { width: 92px; min-width: 0; padding: 5px 8px; border: 1px solid #c8d2de; border-radius: 5px; }
 .product-extras label.extra-check { cursor: pointer; }
-.product-fees { display: block; }
+.product-extras.product-fees { display: block; flex: 1 1 100%; }
 .product-fees summary { cursor: pointer; font-size: 13px; font-weight: 600; }
 .product-fees label { margin-top: 8px !important; }
 

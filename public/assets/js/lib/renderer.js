@@ -807,7 +807,13 @@ ABYQuote.renderer = (function () {
     var picker = groups.map(function (g, i) {
       var meta = findProduct(g.productId);
       var name = meta ? (meta.shortName || meta.name) : g.productId;
-      var tier = '', desc = '';
+      var tier = '', desc = '', only = '';
+      // 11-24-2026: a quote with ONE option names it here and on the signed record, the way several options already do
+      // (it signed a bare "ERISA Wrap Document": no option, and White Glove's Form 5500 questions were never asked).
+      if (g.results.length === 1 && g.results[0].packageId) {
+        var onlyPkg = findPackage(meta, g.results[0].packageId);
+        if (onlyPkg) only = splitPackageName(onlyPkg.name).name;
+      }
       if (g.results.length > 1) {
         // 🔴 THE PRE-SELECTED OPTION IS THE ONE THE TOTAL IS BUILT ON, NOT MERELY THE
         // RECOMMENDED ONE. This used to select the broker's recommendation and nothing else,
@@ -910,8 +916,8 @@ ABYQuote.renderer = (function () {
           '<span class="opt-fee-name">' + esc(f.label) + '</span><span class="opt-fee-price">' + esc(price) + '</span></label>';
       }).join('');
       if (feeRows) feeRows = '<div class="opt-fees"><div class="opt-fees-title">Additional services</div>' + feeRows + '</div>';
-      return '<div class="opt-row"><input type="checkbox" class="opt-check" data-label="' + esc(name) + '" checked>' +
-        '<div class="opt-main"><div class="opt-title">' + esc(name) + '</div>' + desc + tier + countBox + extraRows + feeRows + '</div></div>';
+      return '<div class="opt-row"><input type="checkbox" class="opt-check" data-label="' + esc(name + (only ? ': ' + only : '')) + '" checked>' +
+        '<div class="opt-main"><div class="opt-title">' + esc(name + (only ? ': ' + only : '')) + '</div>' + desc + tier + countBox + extraRows + feeRows + '</div></div>';
     }).join('\n');
 
     // F-481. `signed` is the commitment this quote already carries, or null. When it is present

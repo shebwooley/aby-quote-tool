@@ -17,6 +17,7 @@ const { chromium } = createRequire(new URL('../../stella-quoting-app/package.jso
 const PUB = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const arg = (n) => { const i = process.argv.indexOf(n); return i < 0 ? '' : process.argv[i + 1]; };
 const SHOTS = arg('--shots');
+let shotsOn = true;
 const SELF = process.argv.includes('--self-test');
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
 let shared = null, sabotage = false, saved = null, signed = null;
@@ -82,7 +83,7 @@ async function run(browser) {
   // 2. both ticked
   await open(base);
   must(await tick(PACKET), '2 no box for the packet'); must(await tick(RIGHTS), '2 no box for the rights notices');
-  if (SHOTS) { await page.evaluate(() => document.querySelectorAll('.product-fees').forEach((d) => { if (d.querySelector(':checked')) d.open = true; })); await page.screenshot({ path: join(SHOTS, 'form.png'), fullPage: true }); }
+  if (SHOTS && shotsOn) { await page.evaluate(() => document.querySelectorAll('.product-fees').forEach((d) => { if (d.querySelector(':checked')) d.open = true; })); await page.screenshot({ path: join(SHOTS, 'form.png'), fullPage: true }); }
   await generate(); v = await read();
   must(v.hi.length === 2 && v.hi.every((x) => /Selected$/.test(x)), '2 highlighted: ' + v.hi.join(' | '));
   must(v.bg.every((c) => c === 'rgb(255, 246, 204)'), '2 highlight color: ' + v.bg);
@@ -97,7 +98,7 @@ async function run(browser) {
   shared = { ...again, readonly: true, resolvedPricing: saved && saved.resolvedPricing };
   await page.goto(ORIGIN + '/', { waitUntil: 'load' }); await settle(); v = await read();
   must(v.hi.length === 2 && v.sign.length === 2, '4 the employer link: ' + JSON.stringify(v));
-  if (SHOTS) {
+  if (SHOTS && shotsOn) {
     await (await page.$('.ack-group')).screenshot({ path: join(SHOTS, 'sign.png') });
     for (const [i, e] of (await page.$$('.fees-wrap')).entries()) await e.screenshot({ path: join(SHOTS, 'fees' + i + '.png') });
     await page.setViewportSize({ width: 390, height: 800 }); await (await page.$('.ack-group')).screenshot({ path: join(SHOTS, 'sign-phone.png') });
@@ -105,11 +106,11 @@ async function run(browser) {
   }
   await page.evaluate(() => { const e = document.querySelector('.opt-fee[data-label^="COBRA"]'); if (e) e.checked = false; });
   const list = await page.evaluate(() => window.abyElectedProducts());
-  must(list.length === 3 && list.some((x) => x.includes(PACKET)) && !list.some((x) => x.includes('rights')), '4 signed list: ' + list.join(' | '));
+  must(list.length === 3 && list.includes('ERISA Wrap Document: Enhanced') && list.some((x) => x.includes(PACKET)) && !list.some((x) => x.includes('rights')), '4 signed list: ' + list.join(' | '));
   const f = formsFor(base.products, list);
   must(f.forms.join() === 'cobra,erisa' && !f.other.length, '4 setup questions: ' + JSON.stringify(f));
   // 5. leaving the whole service off leaves its additional service off
-  await page.evaluate(() => { document.querySelector('.opt-check[data-label="ERISA Wrap Document"]').checked = false; });
+  await page.evaluate(() => { document.querySelector('.opt-check[data-label="ERISA Wrap Document: Enhanced"]').checked = false; });
   must(!(await page.evaluate(() => window.abyElectedProducts())).some((x) => x.includes('ERISA')), '5 a service left off still signs its add-on');
   await page.close();
   return bad;
@@ -122,6 +123,6 @@ try {
   bad.forEach((b) => console.log('  FAIL ' + b));
   if (!bad.length) console.log('ok   selected services: highlighted, on the signing page, totaled, saved, shared, signed, re-run.');
   else code = 1;
-  if (SELF) { sabotage = true; const s = await run(browser); console.log(s.length ? 'ok   sabotage caught' : 'FAIL sabotage missed'); if (!s.length) code = 1; }
+  if (SELF) { shotsOn = false; sabotage = true; const s = await run(browser); console.log(s.length ? 'ok   sabotage caught' : 'FAIL sabotage missed'); if (!s.length) code = 1; }
 } finally { await browser.close(); server.close(); }
 process.exit(code);
