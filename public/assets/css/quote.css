@@ -188,7 +188,7 @@
 .aby-proposal .opt-fee-row { display: flex; align-items: flex-start; gap: 10px; padding: 4px 0; font-size: 13.5px; cursor: pointer; }
 .aby-proposal .opt-fee-name { flex: 1; }
 .aby-proposal .opt-fee-price { font-weight: 700; white-space: nowrap; }
-@media (max-width: 600px) { .aby-proposal .opt-fee-row { flex-wrap: wrap; } .aby-proposal .opt-fee-name { flex: 1 1 calc(100% - 40px); min-width: 0; } .aby-proposal .opt-fee-price { margin-left: 30px; } }
+@media (max-width: 600px) { .aby-proposal .opt-fee-row { flex-wrap: wrap; } .aby-proposal .opt-fee-name { flex: 1 1 calc(100% - 40px); min-width: 0; } .aby-proposal .opt-fee-price { margin-left: 30px; white-space: normal; } }
 .aby-proposal .fee-static { display: flex; align-items: center; gap: 12px; padding: 11px 16px 11px 44px; font-size: 14px; }
 .aby-proposal .fee-explain { padding: 0 16px 13px 44px; color: var(--muted); font-size: 13px; }
 
