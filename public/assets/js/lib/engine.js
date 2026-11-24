@@ -419,6 +419,8 @@ ABYQuote.engine = (function () {
 
     if (result) applyExtras(result, selection);
     if (result) applyElectedFees(result, selection);
+    // Shown in the quote only (Eric, 11-24-2026, for Jana Nentwich): priced on its own page, not in the total or the authorization.
+    if (result && selection.infoOnly) result.infoOnly = true;
 
     if (result && rateLookup.usedFallback) {
       result.warnings.unshift(

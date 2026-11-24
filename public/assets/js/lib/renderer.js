@@ -564,7 +564,7 @@ ABYQuote.renderer = (function () {
            '</div>';
   }
 
-  function renderProductSection(group, form) {
+  function renderProductSection(group, form, infoOnly) {
     var meta = findProduct(group.productId);
     if (!meta) return '';
     var lang = L.products[group.productId] || {};
@@ -590,6 +590,7 @@ ABYQuote.renderer = (function () {
       '    <div class="section-head hero-head"><h2>' + esc(lang.heading || meta.name) + '</h2></div>',
       '    <div class="section-body">',
       intro,
+      infoOnly ? '<p class="info-only-note"><strong>For your information.</strong> This service is priced here but is not included in the Estimated First-Year Cost or the authorization page.</p>' : '',
       renderLearnMore(group.productId, true, docsOnly),
       pricing,
       renderExtraCharges(first),
@@ -754,7 +755,16 @@ ABYQuote.renderer = (function () {
     return '<aside class="quote-warnings no-print"><h4>Internal notes (hidden in print / client file)</h4><ul>' + items + '</ul></aside>';
   }
 
+  // The services the employer is being asked to buy. A quote where EVERY service is marked shown-only keeps them all: an
+  // authorization page with nothing on it could never be signed.
+  function offered(groups) {
+    var buy = groups.filter(function (g) { return !g.results[0].infoOnly; });
+    return buy.length ? buy : groups;
+  }
+  function shownOnly(group, groups) { return offered(groups).indexOf(group) === -1; }
+
   function renderAuthorizationPage(form, groups, quoteNumber, opts) {
+    groups = offered(groups);
     opts = opts || {};
     // What this line has to say is what the employer is AUTHORIZING, and it was missing
     // two thirds of it: it printed the per-participant rate but neither the headcount the
@@ -1117,6 +1127,7 @@ ABYQuote.renderer = (function () {
   }
 
   function renderTotalsSummary(groups, form) {
+    groups = offered(groups);
     if (!groups || !groups.length) return '';
     var t = computeTotals(groups, form);
     if (t.recurring <= 0) return '';
@@ -1217,7 +1228,7 @@ ABYQuote.renderer = (function () {
     body.push(renderHeroTiles(groups));
     body.push(renderAboutABY());
     body.push(renderStandardServices());
-    groups.forEach(function (g) { body.push(renderProductSection(g, form)); });
+    groups.forEach(function (g) { body.push(renderProductSection(g, form, shownOnly(g, groups))); });
     body.push(renderTotalsSummary(groups, form));
     body.push(renderDisclosures());
     body.push(renderFileFeed());
@@ -1267,7 +1278,8 @@ ABYQuote.renderer = (function () {
   function chosenResults(results, form) {
     var order = [], by = {};
     (results || []).forEach(function (r) { if (!by[r.productId]) { by[r.productId] = []; order.push(r.productId); } by[r.productId].push(r); });
-    return order.map(function (id) {
+    var buy = order.filter(function (id) { return !by[id][0].infoOnly; });
+    return (buy.length ? buy : order).map(function (id) {
       var kept = by[id].filter(function (r) { return !r.blocked; });
       var g = { productId: id, results: kept.length ? kept : by[id] };
       var want = defaultOptionFor(g, form);

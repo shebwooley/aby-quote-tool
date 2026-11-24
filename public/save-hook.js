@@ -150,6 +150,8 @@
           else if (x.value !== '' && Number(x.value) > 0) extras[id] = Number(x.value);
         });
         if (Object.keys(extras).length) inputs.extras = extras;
+        const info = item.querySelector('[data-product-input$=":infoOnly"]');
+        if (info && info.checked) inputs.infoOnly = true;
         const fees = [];
         item.querySelectorAll('[data-fee-label]:checked').forEach(function(f) { fees.push(f.dataset.feeLabel); });
         if (fees.length) inputs.fees = fees;

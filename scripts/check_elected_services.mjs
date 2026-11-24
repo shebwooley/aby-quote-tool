@@ -105,7 +105,8 @@ async function run(browser) {
   must(saved.firstYearValue === Number(v.total.replace(/[^0-9]/g, '')), '3c two options: log ' + saved.firstYearValue + ', printed ' + v.total);
   await open(again); await generate();
   // 4. the employer's link, from the saved price; one left off; the signed record
-  shared = { ...again, readonly: true, resolvedPricing: saved && saved.resolvedPricing };
+  const first = saved && saved.resolvedPricing;
+  shared = { ...again, readonly: true, resolvedPricing: first };
   await page.goto(ORIGIN + '/', { waitUntil: 'load' }); await settle(); v = await read();
   must(v.hi.length === 2 && v.sign.length === 2, '4 the employer link: ' + JSON.stringify(v));
   if (SHOTS && shotsOn) {
@@ -143,6 +144,25 @@ async function run(browser) {
   must(signed && signed.ein === '12-3456789', '4b sent EIN: ' + JSON.stringify(signed && signed.ein));
   await trySign('');
   must(signed && signed.ein === '', '4b a blank EIN blocked the signature');
+  // 6. a service shown in the quote only (Gates Production, 11-24-2026)
+  shared = null; saved = null;
+  const gates = { ...base, quoteNumber: 'TX261124-5474-C', products: [{ id: 'fsa', name: 'FSA', inputs: { count: '1', infoOnly: true } }, { id: 'erisa', name: 'ERISA', inputs: { packageIds: 'buyUp' } }] };
+  await open(gates); await generate();
+  const look = () => page.evaluate(() => ({ rows: [...document.querySelectorAll('[data-aby-row]')].map((r) => r.getAttribute('data-aby-row')).join(), total: document.querySelector('[data-aby-total-annual]').textContent, sign: [...document.querySelectorAll('.opt-check')].map((e) => e.dataset.label).join(), page: document.querySelector('.aby-proposal').textContent, notes: document.querySelectorAll('.info-only-note').length }));
+  const inBoth = async (where) => {
+    const g = await look();
+    must(g.rows === 'erisa' && g.total === '$525' && g.sign === 'ERISA Wrap Document: Buy-Up' && g.notes === 1 && /\$85/.test(g.page), '6 ' + where + ': ' + g.rows + ' ' + g.total + ' ' + g.sign + ' ' + g.notes);
+  };
+  await inBoth('on screen');
+  must(saved && saved.firstYearValue === 525 && saved.products[0].inputs.infoOnly === true, '6 saved: ' + JSON.stringify(saved && [saved.firstYearValue, saved.products]));
+  if (SHOTS && shotsOn) for (const [i, e] of (await page.$$('.section-card')).entries()) if ((await e.textContent()).includes('For your information')) await e.screenshot({ path: join(SHOTS, 'infoonly.png') });
+  shared = { ...gates, products: saved.products, readonly: true, resolvedPricing: saved.resolvedPricing };
+  await page.goto(ORIGIN + '/', { waitUntil: 'load' }); await settle(); await inBoth('employer link');
+  shared = null;
+  await open({ ...gates, products: gates.products.map((p) => ({ ...p, inputs: { ...p.inputs, infoOnly: true } })) }); await generate();
+  must((await look()).sign.split(',').length === 2, '6 every service marked shown-only left nothing to sign');
+  shared = { ...again, readonly: true, resolvedPricing: first };
+  await page.goto(ORIGIN + '/', { waitUntil: 'load' }); await settle();
   // 5. leaving the whole service off leaves its additional service off
   await page.evaluate(() => { document.querySelector('.opt-check[data-label="ERISA Wrap Document: Enhanced"]').checked = false; });
   must(!(await page.evaluate(() => window.abyElectedProducts())).some((x) => x.includes('ERISA')), '5 a service left off still signs its add-on');

@@ -278,6 +278,15 @@
     }
     var fees = buildFeePicks(product);
     if (fees) wrap.appendChild(fees);
+    var info = document.createElement('label');
+    info.className = 'info-only';
+    var infoCb = document.createElement('input');
+    infoCb.type = 'checkbox';
+    infoCb.dataset.productInput = product.id + ':infoOnly';
+    var infoSpan = document.createElement('span');
+    infoSpan.textContent = 'Show in the quote only (leave it out of the estimated cost and the authorization page)';
+    info.appendChild(infoCb); info.appendChild(infoSpan);
+    wrap.appendChild(info);
     return wrap;
   }
 
@@ -895,6 +904,8 @@
       }
       var fees = Array.prototype.map.call(formEl.querySelectorAll('[data-product-input="' + productId + ':fee"]:checked'),
         function (el) { return el.dataset.feeLabel; });
+      var infoEl = formEl.querySelector('[data-product-input="' + productId + ':infoOnly"]');
+      if (infoEl && infoEl.checked) selection.infoOnly = true;
       if (fees.length) {
         selection.fees = fees;
         selection.feeQty = {};
@@ -935,7 +946,8 @@
             count: sel.count,
             extras: sel.extras,
             fees: sel.fees,
-            feeQty: sel.feeQty
+            feeQty: sel.feeQty,
+            infoOnly: sel.infoOnly
           });
         });
       } else {
@@ -2134,6 +2146,11 @@
           }
           bandEl.dispatchEvent(new Event('change'));
         }
+      }
+
+      if (p.inputs.infoOnly) {
+        var infoBox = document.querySelector('[data-product-input="' + p.id + ':infoOnly"]');
+        if (infoBox) infoBox.checked = true;
       }
 
       // The additional services selected (11-24-2026).
