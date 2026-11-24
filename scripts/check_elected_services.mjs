@@ -119,6 +119,30 @@ async function run(browser) {
   must(list.length === 3 && list.includes('ERISA Wrap Document: Enhanced') && list.some((x) => x.includes(PACKET)) && !list.some((x) => x.includes('rights')), '4 signed list: ' + list.join(' | '));
   const f = formsFor(base.products, list);
   must(f.forms.join() === 'cobra,erisa' && !f.other.length, '4 setup questions: ' + JSON.stringify(f));
+  // 4c. on paper (Eric, 11-24-2026: "Will this still look good ... saved as a pdf?"): the employer's print keeps their details
+  // and signature on one sheet (print.css hid every form), and Download PDF does too.
+  const sheet = async (how) => page.evaluate(() => {
+    const c = document.querySelector('.ack-card').getBoundingClientRect(), i = document.querySelector('.ack-page input[name=ein]').getBoundingClientRect();
+    return { h: c.height, w: c.width, shown: i.height > 0 && !!document.getElementById('sigPad').getBoundingClientRect().height };
+  });
+  await page.setViewportSize({ width: 739, height: 979 });   // letter, 0.4in margins
+  await page.emulateMedia({ media: 'print' });
+  const paper = await sheet();
+  must(paper.shown && paper.h <= 975, '4c the printed signing page: ' + JSON.stringify(paper));
+  await page.emulateMedia({ media: 'screen' }); await page.setViewportSize({ width: 1200, height: 1000 });
+  // 4b. the EIN: on the signing page, refused at the wrong length, sent formatted, optional
+  must(await page.evaluate(() => { const e = document.querySelector('.ack-page input[name=ein]'); return !!e && !e.readOnly && e.closest('.ack-field').textContent.includes('EIN'); }), '4b no EIN box');
+  if (SHOTS && shotsOn) await (await page.$('.ack-page')).screenshot({ path: join(SHOTS, 'ein.png') });
+  const trySign = async (ein) => {
+    signed = null;
+    await page.evaluate((x) => { window.print = () => {}; window.__abySigInk = true; const f = document.querySelector('.ack-page form'); f.ein.value = x; f.authSigner.value = 'Test Signer'; const b = document.getElementById('commitBtn'); b.disabled = false; b.style.display = ''; return window.submitCommitment({ preventDefault() {}, target: f }); }, ein);
+    return page.evaluate(() => document.getElementById('commitMsg').textContent);
+  };
+  must(/9 digits/.test(await trySign('12-345')) && !signed, '4b a short EIN was sent');
+  await trySign('123456789');
+  must(signed && signed.ein === '12-3456789', '4b sent EIN: ' + JSON.stringify(signed && signed.ein));
+  await trySign('');
+  must(signed && signed.ein === '', '4b a blank EIN blocked the signature');
   // 5. leaving the whole service off leaves its additional service off
   await page.evaluate(() => { document.querySelector('.opt-check[data-label="ERISA Wrap Document: Enhanced"]').checked = false; });
   must(!(await page.evaluate(() => window.abyElectedProducts())).some((x) => x.includes('ERISA')), '5 a service left off still signs its add-on');

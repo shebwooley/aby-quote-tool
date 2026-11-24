@@ -2124,6 +2124,12 @@ async function serveSharedQuote(token, env, request) {
         ).bind(String(token || '')).first();
         if (im && im.signature_image) shared.signed.signatureImage = im.signature_image;
       } catch (e) { /* no column yet: the typed signature shows, as before */ }
+      try {
+        const en = await env.DB.prepare(
+          'SELECT ein FROM commitments WHERE share_token = ? ORDER BY submitted_at DESC LIMIT 1'
+        ).bind(String(token || '')).first();
+        if (en && en.ein) shared.signed.ein = en.ein;
+      } catch (e) { /* no column until the first EIN is signed */ }
     }
   } catch (err) {
     // An older database without the commitments columns must still serve the proposal.
@@ -2479,6 +2485,19 @@ async function handleSaveCommitment(request, env, ctx) {
       }
     }
 
+    // THE EIN (Eric, 11-24-2026). Nine digits or nothing. Its own statement, and the column makes itself, so a database
+    // without it still keeps the authorization and there is no migration to wait for.
+    const einDigits = String(body.ein || '').replace(/[^0-9]/g, '');
+    if (einDigits.length === 9) {
+      const ein = einDigits.slice(0, 2) + '-' + einDigits.slice(2);
+      const keepEin = () => env.DB.prepare('UPDATE commitments SET ein = ? WHERE id = ?').bind(ein, id).run();
+      try { await keepEin(); }
+      catch (err) {
+        try { await env.DB.prepare('ALTER TABLE commitments ADD COLUMN ein TEXT').run(); } catch (e) { /* another save made it */ }
+        try { await keepEin(); } catch (e) { console.error('commitment: could not store the EIN:', String(e && e.message || e)); }
+      }
+    }
+
     let linkedToken = null;   // F-625: the apply link is only offered when a quote link exists
     try {
       // F-480. The three lookups now also fetch what decides whether a LINK is safe to hand out.
@@ -2723,6 +2742,7 @@ async function handleCommitmentExport(request, id, env) {
         name: val(row.employer_name),
         address: val(row.address),
         city_state_zip: val(row.city_state_zip),
+        ein: val(row.ein),
         client_id: val(row.client_id),
       },
       authorized_signer: {
@@ -21360,6 +21380,7 @@ async function downloadCommitment(id) {
       '<div class="grid">' +
         '<div class="field"><div class="lbl">Company Name</div><div class="val">' + (c.employer_name || '') + '</div></div>' +
         '<div class="field"><div class="lbl">Address</div><div class="val">' + (c.address || '') + (c.city_state_zip ? '<br>' + c.city_state_zip : '') + '</div></div>' +
+        '<div class="field"><div class="lbl">EIN</div><div class="val">' + (c.ein || '&mdash;') + '</div></div>' +
       '</div>' +
     '</div>' +
     '<div class="section">' +

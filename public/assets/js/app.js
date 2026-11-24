@@ -195,7 +195,7 @@
     // downloaded document, and a backslash escape inside it is eaten before it ever
     // becomes code -- which is TRAPS #224, and it would leave a pattern that silently
     // matches nothing. indexOf and slice need no escaping.
-    'async function submitCommitment(e){e.preventDefault();var form=e.target;var qf=document.getElementById("quoteIdField");if(qf&&!qf.value&&window.__abySavedQuoteId)qf.value=window.__abySavedQuoteId;var tf=document.getElementById("shareTokenField");if(tf&&!tf.value){var pp=String(location.pathname||"");if(pp.indexOf("/q/")===0)tf.value=pp.slice(3).split("/")[0];}var products=abyElectedProducts();var msg=document.getElementById("commitMsg");if(products.length===0){msg.style.display="block";msg.style.color="#c00";msg.textContent="Please select at least one service to authorize.";return;}var sp0=document.getElementById("sigPad");if(sp0&&!window.__abySigInk){msg.style.display="block";msg.style.color="#c00";msg.textContent="Please sign in the signature box.";return;}document.getElementById("productsField").value=JSON.stringify(products);var authSigner=(form.authSigner.value||"").trim();form.acceptedPrint.value=authSigner;form.acceptedSign.value=authSigner;var btn=document.getElementById("commitBtn");btn.disabled=true;btn.textContent="Submitting...";var payload={};new FormData(form).forEach(function(v,k){payload[k]=v;});var sp=document.getElementById("sigPad");if(sp&&window.__abySigInk)payload.signatureImage=sp.toDataURL("image/png");try{payload.products=JSON.parse(payload.products||"[]");}catch(_){payload.products=products;}try{var res=await fetch("https://aby-quote-tool.eric-185.workers.dev/api/commitments",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(res.ok){var rj={};try{rj=await res.json();}catch(_){}msg.style.display="block";msg.style.color="#1a5c3a";msg.innerHTML="✓ Authorization received. ABY Benefits has been notified and will be in touch shortly. You may print or save this page for your records."+(rj.applyUrl?"<div style=margin-top:14px;font-size:15px;color:#12263f><strong>Next: a few setup questions.</strong> They save as you go, so you can stop and come back.<br><a href="+rj.applyUrl+" target=_blank style=display:inline-block;margin-top:10px;background:#143c73;color:#fff;padding:10px;border-radius:6px;text-decoration:none;font-weight:600>Continue to the setup questions</a></div>":"");btn.style.display="none";if(!rj.applyUrl)window.print();}else{msg.style.display="block";msg.style.color="#c00";msg.textContent="Submission failed. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}catch(err){msg.style.display="block";msg.style.color="#c00";msg.textContent="Network error. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}'
+    'async function submitCommitment(e){e.preventDefault();var form=e.target;var qf=document.getElementById("quoteIdField");if(qf&&!qf.value&&window.__abySavedQuoteId)qf.value=window.__abySavedQuoteId;var tf=document.getElementById("shareTokenField");if(tf&&!tf.value){var pp=String(location.pathname||"");if(pp.indexOf("/q/")===0)tf.value=pp.slice(3).split("/")[0];}var products=abyElectedProducts();var msg=document.getElementById("commitMsg");if(products.length===0){msg.style.display="block";msg.style.color="#c00";msg.textContent="Please select at least one service to authorize.";return;}var sp0=document.getElementById("sigPad");if(sp0&&!window.__abySigInk){msg.style.display="block";msg.style.color="#c00";msg.textContent="Please sign in the signature box.";return;}document.getElementById("productsField").value=JSON.stringify(products);var ein=form.ein?(form.ein.value||"").replace(/[^0-9]/g,""):"";if(ein&&ein.length!==9){msg.style.display="block";msg.style.color="#c00";msg.textContent="An EIN has 9 digits, like 12-3456789. Please check it, or leave it blank.";form.ein.focus();return;}if(ein)form.ein.value=ein.slice(0,2)+"-"+ein.slice(2);var authSigner=(form.authSigner.value||"").trim();form.acceptedPrint.value=authSigner;form.acceptedSign.value=authSigner;var btn=document.getElementById("commitBtn");btn.disabled=true;btn.textContent="Submitting...";var payload={};new FormData(form).forEach(function(v,k){payload[k]=v;});var sp=document.getElementById("sigPad");if(sp&&window.__abySigInk)payload.signatureImage=sp.toDataURL("image/png");try{payload.products=JSON.parse(payload.products||"[]");}catch(_){payload.products=products;}try{var res=await fetch("https://aby-quote-tool.eric-185.workers.dev/api/commitments",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(res.ok){var rj={};try{rj=await res.json();}catch(_){}msg.style.display="block";msg.style.color="#1a5c3a";msg.innerHTML="✓ Authorization received. ABY Benefits has been notified and will be in touch shortly. You may print or save this page for your records."+(rj.applyUrl?"<div style=margin-top:14px;font-size:15px;color:#12263f><strong>Next: a few setup questions.</strong> They save as you go, so you can stop and come back.<br><a href="+rj.applyUrl+" target=_blank style=display:inline-block;margin-top:10px;background:#143c73;color:#fff;padding:10px;border-radius:6px;text-decoration:none;font-weight:600>Continue to the setup questions</a></div>":"");btn.style.display="none";if(!rj.applyUrl)window.print();}else{msg.style.display="block";msg.style.color="#c00";msg.textContent="Submission failed. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}catch(err){msg.style.display="block";msg.style.color="#c00";msg.textContent="Network error. Please contact ABY Benefits directly.";btn.disabled=false;btn.textContent="Submit Authorization to ABY";}}'
   ].join('\n');
   // Define the authorization-page helpers in-app so the on-screen preview is interactive too.
   try { (0, eval)(ABY_COMMIT_JS); } catch (e) {}
@@ -1367,8 +1367,38 @@
     '.aby-proposal .ack-page{zoom:0.72;}',
     // !important because the section rule above would otherwise cancel it (the sign page is a section).
     '.aby-proposal section.ack-page{break-before:page !important;page-break-before:always !important;padding-top:0 !important;}',
-    '.aby-proposal .ack-card{break-inside:avoid;page-break-inside:avoid;}'
+    '.aby-proposal .ack-card{break-inside:auto;page-break-inside:auto;padding:16px 22px;border-width:2px;}',
+    // Tighter on paper than on screen, so the EIN and the additional services still leave it on one sheet (11-24-2026).
+    '.aby-proposal .ack-head{margin-bottom:10px;}.aby-proposal .ack-head h2{margin:2px 0;}.aby-proposal .ack-guarantee{margin-top:5px;padding:4px 14px;}',
+    '.aby-proposal .ack-group{margin-top:8px !important;margin-bottom:6px !important;}.aby-proposal .sign-preview{min-height:34px !important;}',
+    '.aby-proposal .ack-field-grid{row-gap:8px !important;}.aby-proposal .ack-field input{padding-top:7px !important;padding-bottom:7px !important;}',
+    '.aby-proposal .opt-row{padding:8px 12px;margin-bottom:6px;}.aby-proposal .opt-fees{margin-top:5px;padding-top:5px;}.aby-proposal .opt-fee-row{padding:1px 0;}',
+    '.aby-proposal .ack-disclaimer{margin-top:8px !important;padding-top:8px !important;}',
+    '.aby-proposal #commitBtn,.aby-proposal #sigClear,.aby-proposal .sign-hint{display:none !important;}',
+    '.aby-proposal .ack-submit{margin-top:8px !important;padding:0 !important;}'
   ].join('\n');
+
+  // THE EMPLOYER'S OWN PRINT / SAVE AS PDF (11-24-2026, Eric). print.css hides every <form> so the quote-builder stays off
+  // paper, and the authorization IS a form: a printed copy had no employer details and no signature, right after the page
+  // says "print or save this page for your records". The screen now prints by the Download PDF's own rules.
+  function installPrintRules() {
+    var style = document.createElement('style');
+    style.media = 'print';
+    style.textContent = PRINT_CSS + '\n' +
+      '@page{margin:0.4in;}' +
+      '.aby-proposal{zoom:0.82;}' +
+      '.aby-proposal form{display:block !important;padding:0 !important;border:0 !important;box-shadow:none !important;background:none !important;}' +
+      '.aby-proposal .section-head h2,.aby-proposal .ack-head h2{margin-top:0 !important;}' +
+      '.aby-proposal #sigPad{height:80px !important;}' +
+      '.aby-proposal .cross-sell-grid{break-inside:auto;}.aby-proposal .section-head{break-inside:avoid;}' +
+      '.app-shell,.output-shell{padding:0 !important;margin:0 !important;}';
+    document.head.appendChild(style);
+    var opened = [];
+    window.addEventListener('beforeprint', function () {
+      opened = Array.prototype.filter.call(document.querySelectorAll('.aby-proposal details:not([open])'), function (d) { d.open = true; return true; });
+    });
+    window.addEventListener('afterprint', function () { opened.forEach(function (d) { d.open = false; }); opened = []; });
+  }
 
   function downloadQuoteAsPdf(form, quoteNumber) {
     var liveQuote = outputEl.querySelector('.quote');
@@ -2221,6 +2251,7 @@
       .replace(/[^A-Za-z0-9._-]/g, '').slice(0, 40);
     if (srcParam) window.__abySourceTag = srcParam;
 
+    installPrintRules();
     prePopulateFromRerun();
     prefillFromBrokerAccount();
 

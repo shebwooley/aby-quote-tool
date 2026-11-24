@@ -67,6 +67,15 @@ ok('...and a re-open with nothing else changed corrects it', worth() === 1700);
 await save(ann, V, { products: [{ id: 'fsa' }] });
 ok('...and a save without a value keeps it', worth() === 1700);
 
+// THE EIN ON THE AUTHORIZATION (Eric, 11-24-2026): kept formatted, the column makes itself, a bad one never loses the signature.
+db.exec("CREATE TABLE IF NOT EXISTS commitments (id TEXT, quote_number TEXT, submitted_at TEXT, employer_name TEXT, address TEXT, city_state_zip TEXT, auth_signer TEXT, auth_title TEXT, auth_email TEXT, auth_phone TEXT, hr_contact TEXT, hr_title TEXT, hr_email TEXT, hr_phone TEXT, start_date TEXT, accepted_print TEXT, accepted_sign TEXT, products TEXT, client_id TEXT, broker_email TEXT, quote_id TEXT, share_token TEXT, notified_at TEXT, notify_error TEXT)");
+const sign = async (name, ein) => { const x = await call('/api/commitments', 'POST', { quoteNumber: 'TX261124-9999-C', employerName: name, products: ['COBRA'], ein }); return x.status === 200; };
+ok('a signature with no EIN saves before the column exists', await sign('E0', '') && !!db.prepare("SELECT id FROM commitments WHERE employer_name='E0'").get());
+ok('an EIN is kept, formatted', await sign('E1', '123456789') && db.prepare("SELECT ein e FROM commitments WHERE employer_name='E1'").get().e === '12-3456789');
+ok('a wrong-length EIN is dropped and the signature kept', await sign('E2', '12-34') && db.prepare("SELECT ein e FROM commitments WHERE employer_name='E2'").get().e === null);
+const { prefillFrom } = await import('../lib/application.js');
+ok('the setup questions start with it', prefillFrom({ ein: '12-3456789' }, {})['co.ein'] === '12-3456789');
+
 // ABY
 let eric = '';
 for (const p of ['/api/admin/login', '/api/login', '/admin/login']) {
