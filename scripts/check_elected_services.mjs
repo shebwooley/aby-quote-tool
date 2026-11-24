@@ -144,6 +144,36 @@ async function run(browser) {
   must(signed && signed.ein === '12-3456789', '4b sent EIN: ' + JSON.stringify(signed && signed.ein));
   await trySign('');
   must(signed && signed.ein === '', '4b a blank EIN blocked the signature');
+  // 7. the employer unchecks a service (Eric, 11-24-2026): the total follows, in both places, and back again
+  {
+    const t = () => page.evaluate(() => ({ total: [...document.querySelectorAll('[data-aby-total-annual]')].map((e) => e.textContent).join(), off: document.querySelectorAll('tr.aby-off').length, list: abyElectedProducts().join('|') }));
+    const click = (sel) => page.evaluate((x) => { const e = document.querySelector(x); if (e) e.click(); }, sel);
+    shared = { ...again, readonly: true, resolvedPricing: first };
+    await page.goto(ORIGIN + '/', { waitUntil: 'load' }); await settle();
+    const whole = plain + 200, m = (n) => '$' + n.toLocaleString('en-US') + ',$' + n.toLocaleString('en-US');
+    let z = await t(); must(z.total === m(whole) && !z.off, '7 start ' + z.total);
+    await click('.aby-inc[data-inc="cobra"]'); z = await t();
+    must(z.total === m(whole - 860) && z.off === 2 && !/COBRA/.test(z.list), '7 COBRA off in the table: ' + JSON.stringify(z));
+    await click('.opt-check[data-inc="cobra"]'); z = await t();
+    must(z.total === m(whole) && !z.off && /Initial/.test(z.list), '7 COBRA back on the authorization page: ' + JSON.stringify(z));
+    await click('.opt-fee[data-inc="erisa-fee-0"]'); z = await t();
+    must(z.total === m(whole - 125) && z.off === 1 && !/Packet/.test(z.list), '7 the packet off: ' + JSON.stringify(z));
+    if (SHOTS && shotsOn) await page.evaluate(() => document.querySelector('[data-aby-row]').closest('section').setAttribute('id', 'shotcost')).then(async () => (await page.$('#shotcost')).screenshot({ path: join(SHOTS, 'cost.png') }));
+    // an ERISA option with the box unchecked: picking another option does not bring it back
+    await click('.aby-inc[data-inc="erisa"]'); z = await t(); must(z.total === m(860), '7 ERISA off: ' + z.total);
+    // a signed copy shows what was signed, and nothing moves
+    shared = { ...again, readonly: true, resolvedPricing: first, signed: { acceptedSign: 'X', products: ['ERISA Wrap Document: Enhanced'] } };
+    await page.goto(ORIGIN + '/', { waitUntil: 'load' }); await settle(); z = await t();
+    must(z.total === m(700) && z.off === 3 && (await page.evaluate(() => [...document.querySelectorAll('input[data-inc]')].every((b) => b.disabled))), '7 signed: ' + JSON.stringify(z));
+    shared = { ...again, readonly: true, resolvedPricing: first, signed: { acceptedSign: 'X' } };
+    await page.goto(ORIGIN + '/', { waitUntil: 'load' }); await settle(); z = await t();
+    must(z.total === m(whole) && !z.off, '7 an older signature keeps every service: ' + z.total);
+    // an option pick still moves the total, and respects the box
+    shared = null; await open({ ...base, products: [base.products[0], { id: 'erisa', name: 'ERISA', inputs: { packageIds: 'basic,enhanced' } }] }); await generate();
+    await page.evaluate(() => { const r = document.querySelector('input.opt-pick[data-opt-package="enhanced"]'); r.checked = true; r.dispatchEvent(new Event('change')); }); z = await t();
+    must(z.total === m(785 + 700), '7 option pick ' + z.total);
+    await click('.aby-inc[data-inc="erisa"]'); z = await t(); must(z.total === m(785), '7 option pick then off ' + z.total);
+  }
   // 6. a service shown in the quote only (Gates Production, 11-24-2026)
   shared = null; saved = null;
   const gates = { ...base, quoteNumber: 'TX261124-5474-C', products: [{ id: 'fsa', name: 'FSA', inputs: { count: '1', infoOnly: true } }, { id: 'erisa', name: 'ERISA', inputs: { packageIds: 'buyUp' } }] };

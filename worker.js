@@ -2125,6 +2125,13 @@ async function serveSharedQuote(token, env, request) {
         if (im && im.signature_image) shared.signed.signatureImage = im.signature_image;
       } catch (e) { /* no column yet: the typed signature shows, as before */ }
       try {
+        const pr = await env.DB.prepare(
+          'SELECT products FROM commitments WHERE share_token = ? ORDER BY submitted_at DESC LIMIT 1'
+        ).bind(String(token || '')).first();
+        const list = pr && pr.products ? JSON.parse(pr.products) : null;
+        if (Array.isArray(list)) shared.signed.products = list;
+      } catch (e) { /* an unreadable list shows every service, as before */ }
+      try {
         const en = await env.DB.prepare(
           'SELECT ein FROM commitments WHERE share_token = ? ORDER BY submitted_at DESC LIMIT 1'
         ).bind(String(token || '')).first();

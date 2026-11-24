@@ -919,15 +919,14 @@ ABYQuote.renderer = (function () {
       }
       // The additional services selected on this quote, each one the employer can leave off. What is ticked goes on the
       // signed record as "<service>: <line> ($125 per year)" - after the colon, so it still reads as that service.
-      var feeRows = electedFees(g).map(function (f) {
-        var price = u.money(f.amount) + (f.unit ? ' ' + f.unit : '');
-        if (f.qty) price = f.qty + ' x ' + price + ' = ' + u.money(f.lineTotal);
-        return '<label class="opt-fee-row"><input type="checkbox" class="opt-fee" data-label="' +
-          esc(name + ': ' + f.label + ' (' + price + ')') + '" checked>' +
-          '<span class="opt-fee-name">' + esc(f.label) + '</span><span class="opt-fee-price">' + esc(price) + '</span></label>';
+      var feeRows = electedFees(g).map(function (f, fi) {
+        var key = g.productId + '-fee-' + fi;
+        return '<label class="opt-fee-row"><input type="checkbox" class="opt-fee" data-inc="' + esc(key) + '" data-label="' +
+          esc(feeLabel(g, f)) + '"' + (keptKey(key, groups, pageOpts.signed) ? ' checked' : '') + (pageOpts.signed ? ' disabled' : '') + '>' +
+          '<span class="opt-fee-name">' + esc(f.label) + '</span><span class="opt-fee-price">' + esc(feePrice(f)) + '</span></label>';
       }).join('');
       if (feeRows) feeRows = '<div class="opt-fees"><div class="opt-fees-title">Additional services</div>' + feeRows + '</div>';
-      return '<div class="opt-row"><input type="checkbox" class="opt-check" data-label="' + esc(name + (only ? ': ' + only : '')) + '" checked>' +
+      return '<div class="opt-row"><input type="checkbox" class="opt-check" data-inc="' + esc(g.productId) + '" data-label="' + esc(name + (only ? ': ' + only : '')) + '"' + (keptKey(g.productId, groups, pageOpts.signed) ? ' checked' : '') + (pageOpts.signed ? ' disabled' : '') + '>' +
         '<div class="opt-main"><div class="opt-title">' + esc(name + (only ? ': ' + only : '')) + '</div>' + desc + tier + countBox + extraRows + feeRows + '</div></div>';
     }).join('\n');
 
@@ -1111,12 +1110,20 @@ ABYQuote.renderer = (function () {
       // ⭐ AND IT NEEDS NO NEW SWITCHING CODE. `abyRetotal()` reads a row's rendered cells when
       // that row has no option radio, so a row keyed `<id>-extras` is summed as a constant and
       // stays put while the product's own row moves with the reader's pick.
-      var extras = (r.extrasTotal || 0) + (r.electedTotal || 0);
+      // One row per selected additional service (11-24-2026), so each can be taken off the total on its own.
+      electedFees(g).forEach(function (f, fi) {
+        if (f.lineTotal == null) return;
+        t.recurring += f.lineTotal;
+        t.rows.push({ productId: g.productId + '-fee-' + fi, parent: g.productId, annual: f.lineTotal, multi: false,
+          name: name + ': ' + f.label + (f.qty ? ' (' + f.qty + ' x ' + u.money(f.amount) + ')' : '') });
+      });
+      var extras = r.extrasTotal || 0;
       if (extras > 0) {
         t.recurring += extras;
         t.hasExtras = true;
         t.rows.push({
           productId: g.productId + '-extras',
+          parent: g.productId,
           name: name + ': additional services',
           annual: extras,
           multi: false
@@ -1126,7 +1133,35 @@ ABYQuote.renderer = (function () {
     return t;
   }
 
-  function renderTotalsSummary(groups, form) {
+  // What the authorization page calls each service and each selected additional service.
+  function serviceLabel(g) {
+    var meta = findProduct(g.productId), name = meta ? (meta.shortName || meta.name) : g.productId;
+    if (g.results.length !== 1 || !g.results[0].packageId) return name;
+    var pkg = findPackage(meta, g.results[0].packageId);
+    return pkg ? name + ': ' + splitPackageName(pkg.name).name : name;
+  }
+  function feePrice(f) {
+    var price = u.money(f.amount) + (f.unit ? ' ' + f.unit : '');
+    return f.qty ? f.qty + ' x ' + price + ' = ' + u.money(f.lineTotal) : price;
+  }
+  function feeLabel(g, f) {
+    var meta = findProduct(g.productId), name = meta ? (meta.shortName || meta.name) : g.productId;
+    return name + ': ' + f.label + ' (' + feePrice(f) + ')';
+  }
+  // Is this row on the signed record? An unsigned quote, or a signature from before the record was read back, keeps all.
+  function keptKey(key, groups, signed) {
+    if (!signed || !Array.isArray(signed.products) || !signed.products.length) return true;
+    var list = signed.products.map(function (p) { return typeof p === 'string' ? p : (p && p.name) || ''; });
+    return groups.some(function (g) {
+      if (key === g.productId) {
+        var label = serviceLabel(g), meta = findProduct(g.productId), full = meta && meta.name;
+        return list.some(function (x) { return x === label || x.indexOf(label + ':') === 0 || x === full; });
+      }
+      return electedFees(g).some(function (f, i) { return key === g.productId + '-fee-' + i && list.indexOf(feeLabel(g, f)) !== -1; });
+    });
+  }
+
+  function renderTotalsSummary(groups, form, signed) {
     groups = offered(groups);
     if (!groups || !groups.length) return '';
     var t = computeTotals(groups, form);
@@ -1149,6 +1184,7 @@ ABYQuote.renderer = (function () {
     // NO LONGER TRUE. The total now follows the option selected on the page. A caveat left
     // standing after the behaviour under it moved is worse than none: a reader who trusts it
     // is told the headline is the cheapest thing on offer when it may be the dearest.
+    if (t.rows.length > 1 && !signed) notes.push('<span class="no-print">Uncheck a service to see the total without it.</span>');
     if (t.anyMultiOption) notes.push('Where several options are offered, this total follows the option selected above. Select a different one and it will re-figure.');
 
     var big =
@@ -1159,8 +1195,13 @@ ABYQuote.renderer = (function () {
 
     // ⭐ EVERY ROW IS ADDRESSABLE BY PRODUCT ID, so the switching script can rewrite one line
     // rather than re-render the section. The `multi` rows are the only ones that ever move.
+    // THE EMPLOYER'S OWN CHECKBOX (Eric, 11-24-2026: like picking a different ERISA plan). Unchecking a service here or on the
+    // authorization page takes it off both (abyInc in app.js). A signed copy shows what was signed and cannot be changed.
+    // A charge that follows its service (the ACA quantities) has no box of its own.
     var rows = t.rows.map(function (row) {
-      return '<tr data-aby-row="' + esc(row.productId) + '"><td>' + esc(row.name) + '</td>' +
+      var box = (t.rows.length < 2 || /-extras$/.test(row.productId)) ? '' : '<input type="checkbox" class="aby-inc" data-inc="' + esc(row.productId) + '"' +
+        (keptKey(row.productId, groups, signed) ? ' checked' : '') + (signed ? ' disabled' : '') + ' aria-label="Include ' + esc(row.name) + '">';
+      return '<tr data-aby-row="' + esc(row.productId) + '"' + (row.parent ? ' data-aby-parent="' + esc(row.parent) + '"' : '') + '><td><label class="aby-inc-label">' + box + '<span>' + esc(row.name) + '</span></label></td>' +
         '<td style="text-align:right;" data-aby-row-annual>' + u.money(Math.round(row.annual)) + '</td></tr>';
     }).join('\n');
     var table =
@@ -1229,7 +1270,7 @@ ABYQuote.renderer = (function () {
     body.push(renderAboutABY());
     body.push(renderStandardServices());
     groups.forEach(function (g) { body.push(renderProductSection(g, form, shownOnly(g, groups))); });
-    body.push(renderTotalsSummary(groups, form));
+    body.push(renderTotalsSummary(groups, form, opts.signed || null));
     body.push(renderDisclosures());
     body.push(renderFileFeed());
     body.push(renderCrossSell(results.map(function (r) { return r.productId; })));

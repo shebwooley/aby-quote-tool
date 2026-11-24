@@ -159,13 +159,26 @@
     // means this function never has to know how those were worked out.
     'function abyRetotal(){var annual=0;var rows=document.querySelectorAll("[data-aby-row]");if(!rows.length)return;' +
       'rows.forEach(function(row){var pid=row.getAttribute("data-aby-row");var pick=abyPicked(pid);' +
+        'var off=!abyIncluded(row);row.classList.toggle("aby-off",off);' +
         'var a;' +
         'if(pick){a=Number(pick.getAttribute("data-opt-annual"))||0;' +
           'var ac=row.querySelector("[data-aby-row-annual]");' +
           'if(ac)ac.textContent=abyMoney(Math.round(a));}' +
         'else{a=abyCell(row,"[data-aby-row-annual]");}' +
-        'annual+=a;});' +
+        'if(!off)annual+=a;});' +
       'document.querySelectorAll("[data-aby-total-annual]").forEach(function(el){el.textContent=abyMoney(Math.round(annual));});}',
+
+    // Is this row in the total? Its own box, and its service's box when it is an additional service.
+    'function abyIncBox(key){return document.querySelector("input.aby-inc[data-inc=" + JSON.stringify(key) + "]");}',
+    'function abyIncluded(row){var own=abyIncBox(row.getAttribute("data-aby-row"));if(own&&!own.checked)return false;' +
+      'var p=row.getAttribute("data-aby-parent");var up=p?abyIncBox(p):null;return !up||up.checked;}',
+
+    // A service unchecked in the cost table or on the authorization page is unchecked in both (11-24-2026). The attribute is
+    // set as well as the property, so a PDF made from the page carries it.
+    'function abyInc(key,on){document.querySelectorAll("input[data-inc=" + JSON.stringify(key) + "]").forEach(function(b){b.checked=on;' +
+      'if(on)b.setAttribute("checked","");else b.removeAttribute("checked");});' +
+      'document.querySelectorAll("input[data-inc]").forEach(function(b){var k=b.getAttribute("data-inc");if(k.indexOf(key+"-fee-")===0)b.disabled=!on;});' +
+      'abyRetotal();}',
 
     // Read a money cell back out of the table. An em dash means nothing, not zero.
     'function abyCell(row,sel){var el=row.querySelector(sel);if(!el)return 0;var t=(el.textContent||"").replace(/[^0-9.]/g,"");var n=Number(t);return isNaN(n)?0:n;}',
@@ -181,6 +194,7 @@
       'if(r&&!r.checked)r.checked=true;abyRetotal();}',
 
     'function abyWireOptions(){' +
+      'document.querySelectorAll("input[data-inc]").forEach(function(b){b.addEventListener("change",function(){abyInc(b.getAttribute("data-inc"),b.checked);});});' +
       'document.querySelectorAll("input.opt-pick").forEach(function(r){' +
         'r.addEventListener("change",function(){abySyncOption(r.getAttribute("data-opt-product"),r.getAttribute("data-opt-package"));});});' +
       'document.querySelectorAll("select.opt-tier-select[data-opt-product]").forEach(function(s){' +

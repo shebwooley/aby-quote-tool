@@ -180,6 +180,9 @@
 .aby-proposal .fee-name { flex: 1 1 auto; }
 .aby-proposal .fee-amount { flex: 0 0 auto; white-space: nowrap; font-weight: 700; color: var(--aby-blue-dark); }
 .aby-proposal .fee-amount .fee-unit { color: var(--muted); font-weight: 500; font-size: 12px; }
+.aby-proposal .aby-inc-label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.aby-proposal .aby-inc { width: 18px; height: 18px; margin-top: 1px; flex: 0 0 auto; accent-color: var(--aby-green); cursor: pointer; }
+.aby-proposal tr.aby-off td { color: var(--muted); text-decoration: line-through; }
 .aby-proposal .info-only-note { margin: 0 0 14px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft-blue); font-size: 13.5px; }
 .aby-proposal .fee-elected { background: #fff6cc; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .aby-proposal .fee-elected .fee-name { font-weight: 700; }
