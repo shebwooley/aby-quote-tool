@@ -3747,7 +3747,7 @@ async function handleAdminAddQuote(request, env) {
   if (!employer) return jsonResp({ error: 'Which employer?' }, 400);
 
   const agency = String(body.agency || '').trim().slice(0, 160);
-  const when = String(body.quotedOn || '').trim() || new Date().toISOString().slice(0, 10);
+  const when = String(body.quotedOn || '').trim() || todayIso();
   // ⛔ AN UNKNOWN REP IS REFUSED, NEVER STORED AND NEVER SILENTLY BLANKED. Storing the raw string
   // is what produced the lowercase "eric"; blanking it would lose the one fact the person typing
   // actually knew. Same shape as the unrecognised-product refusal on this form.
@@ -4001,7 +4001,7 @@ async function handleCrmAdd(request, env) {
   // Accepted as a plain YYYY-MM-DD and stored as typed. ⛔ NOT parsed through Date(): the string
   // 2026-03-01 through new Date() is 2026-02-28 in a US timezone, which is how a compliance anchor
   // once moved a day nationwide. A date the user typed is stored as the date they typed.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   const wanted = String(body.happened_at || '').trim();
   if (wanted && !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(wanted)) {
     return jsonResp({ error: 'happened_at must be YYYY-MM-DD.' }, 400);
@@ -5087,7 +5087,7 @@ async function handleCrmRelationship(request, env) {
     const to = (survivor && survivor.name) || '';
     const from = String(me.name || '').trim();
     if (to && from && to.toLowerCase() !== from.toLowerCase()) {
-      const stamp = new Date().toISOString().slice(0, 10);
+      const stamp = todayIso();
       for (const t of [['quotes', 'broker_agency', 'notes', 'quote'],
                        ['aby_sales', 'agency', 'note', 'sale']]) {
         try {
@@ -5147,7 +5147,7 @@ async function handleCrmRename(request, env) {
   const me = await env.DB.prepare('SELECT id, name FROM agencies WHERE id = ?').bind(id).first();
   if (!me) return jsonResp({ error: 'No such agency.' }, 404);
 
-  const now = new Date().toISOString().slice(0, 10);
+  const now = todayIso();
   let renamed = false, quotes = 0, sales = 0;
 
   if (raw && raw !== me.name) {
@@ -6471,7 +6471,7 @@ async function handleCrmImport(request, env) {
 
   // The tag is optional -- somebody may just be adding people -- but it is the reason this exists.
   const label = body.label ? await crmCanonicalLabel(env, body.label) : '';
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   const wanted = String(body.happened_at || '').trim();
   if (wanted && !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(wanted)) {
     return jsonResp({ error: 'The date must be YYYY-MM-DD.' }, 400);
@@ -7580,7 +7580,7 @@ async function handleCrmRecordStatus(request, env) {
     return jsonResp({ error: 'That is not one of the recorded statuses.' }, 400);
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   const wanted = String(body.happened_at || '').trim();
   if (wanted && !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(wanted)) {
     return jsonResp({ error: 'The date must be YYYY-MM-DD.' }, 400);
@@ -10629,8 +10629,8 @@ ${abyAdminNav('/admin/brokers')}
    var n = selCount();
    q('bulkBar').style.display = n ? 'flex' : 'none';
    q('bulkN').textContent = n + (n === 1 ? ' firm selected' : ' firms selected');
-   if (!q('bulkDate').value) q('bulkDate').value = new Date().toISOString().slice(0, 10);
-   if (!q('importDate').value) q('importDate').value = new Date().toISOString().slice(0, 10);
+   if (!q('bulkDate').value) q('bulkDate').value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+   if (!q('importDate').value) q('importDate').value = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
  }
 
  async function applyBulk(){
@@ -10779,7 +10779,7 @@ ${abyAdminNav('/admin/brokers')}
              : 'Blank means their clients see ' + esc(a.name) + ', the same as us.')
          + '</span></div>'
          + '<div class="mfilters"><input id="fNote" placeholder="What happened?" style="flex:1;padding:6px 9px;border:1px solid #c8d2de;border-radius:5px">'
-         + '<input id="fNoteDate" type="date" value="' + new Date().toISOString().slice(0, 10) + '">'
+         + '<input id="fNoteDate" type="date" value="' + new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10) + '">'
          + '<button onclick="addNote(' + "'" + id + "'" + ')">Add note</button></div>'
          + '<div id="fMsg" class="muted" style="margin-bottom:10px"></div>'
          // ⭐ RECORD WHAT THEY LOOK LIKE TODAY, so it can be compared with what they look like
@@ -10789,7 +10789,7 @@ ${abyAdminNav('/admin/brokers')}
          + '<select id="recStatus">' + RECORDED.map(function(s){
              return '<option value="' + s + '"' + (a.derivedStatus === s ? ' selected' : '') + '>' + s + '</option>';
            }).join('') + '</select>'
-         + '<input id="recDate" type="date" value="' + new Date().toISOString().slice(0, 10) + '">'
+         + '<input id="recDate" type="date" value="' + new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10) + '">'
          + '<button onclick="recordStatus(' + "'" + id + "'" + ')">Record</button>'
          + '<span class="muted" style="font-size:12.5px">' + (a.recordedStatus
              ? 'Last recorded as ' + esc(a.recordedStatus) + ' on ' + day(a.recordedAt)
@@ -14650,7 +14650,7 @@ function rfpScreen(rec, todayIso) {
 }
 
 function rfpToday() {
-  return new Date().toISOString().slice(0, 10);
+  return todayIso();
 }
 
 /** One row, screened and ready for the page. */
@@ -15819,8 +15819,12 @@ function dayName(iso) {
   return M[Number(d.slice(5, 7)) - 1] + ' ' + Number(d.slice(8, 10));
 }
 
-/** Today as YYYY-MM-DD, in UTC, so the server and every reader agree on which day it is. */
-function todayIso() { return new Date().toISOString().slice(0, 10); }
+/**
+ * Today as YYYY-MM-DD in TEXAS (Central time), worked out on the server so every reader agrees on which day it is.
+ * 11-27-2026: this was the UTC day, which is already tomorrow from 6 PM Central (7 PM in summer), so quotes, notes,
+ * follow-ups and the dated list were stamped tomorrow in the evening and a "happened today" entry was refused as future.
+ */
+function todayIso(d) { return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d || new Date()); }
 
 /** `days` after an ISO day, as an ISO day. */
 function addDays(iso, days) {
